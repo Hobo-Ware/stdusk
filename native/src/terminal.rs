@@ -9,12 +9,30 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
+use eframe::egui::Color32;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
+use crate::colors;
 use crate::osc::{OscEvent, OscScanner};
 use crate::progress::{Progress, ProgressScanner};
+
+/// One styled cell for the renderer. `bg == None` means the terminal default (transparent).
+pub struct CellSnap {
+    pub c: char,
+    pub fg: Color32,
+    pub bg: Option<Color32>,
+}
+
+/// A frame's worth of visible grid, ready to paint.
+pub struct GridSnap {
+    pub cols: usize,
+    pub rows: usize,
+    pub cells: Vec<CellSnap>, // row-major, rows*cols
+    pub cursor: (usize, usize), // (row, col)
+}
 
 /// Per-tab observable state, written by the reader thread, read by the UI.
 #[derive(Default)]
@@ -141,18 +159,42 @@ impl PtyTerm {
         self.state.lock().unwrap().cwd.clone()
     }
 
-    /// Snapshot the visible grid as plain lines (colors come in M1.5).
-    pub fn snapshot(&self) -> Vec<String> {
+    /// Snapshot the visible grid with per-cell colors + cursor, ready to render.
+    pub fn grid_snapshot(&self) -> GridSnap {
         let term = self.term.lock();
         let grid = term.grid();
-        let mut lines = Vec::with_capacity(self.rows);
+        let mut cells = Vec::with_capacity(self.rows * self.cols);
         for line in 0..self.rows {
-            let mut s = String::with_capacity(self.cols);
             for col in 0..self.cols {
-                s.push(grid[Line(line as i32)][Column(col)].c);
+                let cell = &grid[Line(line as i32)][Column(col)];
+                let inverse = cell.flags.contains(Flags::INVERSE);
+                let (fg_c, bg_c) = if inverse {
+                    (cell.bg, cell.fg)
+                } else {
+                    (cell.fg, cell.bg)
+                };
+                let bg = if !inverse && colors::is_default_bg(&cell.bg) {
+                    None
+                } else {
+                    Some(colors::to_color32(bg_c))
+                };
+                cells.push(CellSnap {
+                    c: cell.c,
+                    fg: colors::to_color32(fg_c),
+                    bg,
+                });
             }
-            lines.push(s.trim_end().to_string());
         }
-        lines
+        let cp = grid.cursor.point;
+        let cursor = (
+            (cp.line.0.max(0) as usize).min(self.rows.saturating_sub(1)),
+            cp.column.0.min(self.cols.saturating_sub(1)),
+        );
+        GridSnap {
+            cols: self.cols,
+            rows: self.rows,
+            cells,
+            cursor,
+        }
     }
 }

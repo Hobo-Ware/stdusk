@@ -28,8 +28,8 @@ cargo test             # unit + headless integration
 |------:|------|--------|
 | M0 | Chrome: quake window + chunky tab bar | ✅ done, compiles |
 | M1 | pty + text render + input | ✅ done, human-verified |
-| M1.5 | Progress (%-regex + OSC 9;4) + OSC scanner (cwd) | 🟡 code done, 13 tests green, live bar pending human verify |
-| M2 | Colored cell renderer + cursor | todo |
+| M1.5 | Progress (%-regex + OSC 9;4) + OSC scanner (cwd) | ✅ done, human-verified (Tabby-style tabs + top progress) |
+| M2 | Colored cell renderer + cursor | 🟡 code done, builds + 13 tests green, colors pending human verify |
 | M2.5 | Clickable links | todo |
 | M3 | Quake: configurable global hotkey (default Ctrl+`) | todo |
 | M4 | Theming + config.toml (Tabby-default parity) | todo |
@@ -79,6 +79,19 @@ cargo test             # unit + headless integration
 - Known: `term.mode()` + `TermMode::ALT_SCREEN` exist in alacritty_terminal 0.26 (confirmed).
   `cwd()` + `OscEvent::Clipboard` payload are parsed but not yet consumed (warnings) - land in M5/M6.
 
+### M2 - colored cell renderer (`src/colors.rs`, renderer in `main.rs`)
+- `colors.rs`: `to_color32(alacritty Color)` - OneHalfDark ANSI 0-15, 256-cube + grayscale
+  for Indexed, truecolor for Spec. `is_default_bg()` → render transparent so window opacity
+  shows through. (Separate from main.rs's inline `mod palette` for UI chrome - name clash
+  avoided; file is `colors.rs` not `palette.rs`.)
+- `terminal.rs`: `grid_snapshot() -> GridSnap { cols, rows, cells: Vec<CellSnap{c,fg,bg:Option}>,
+  cursor:(row,col) }`. Handles INVERSE flag (swap fg/bg). Cursor from `grid.cursor.point`.
+- `main.rs` `render_grid`: per-cell bg rect + fg glyph via `painter.text`, beam cursor. Cell
+  metrics measured with `painter.layout_no_wrap("M")` (FontsView::glyph_width needs &mut and
+  `ui.fonts()` only gives &, so layout-a-galley is the way).
+- Fixed 80x24 still; bold/italic font variants + cursor styles deferred (M9). Colors + cursor
+  build + 13 tests green; live colors NOT yet human-verified.
+
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even
   when cargo failed. Use `cargo build 2>build.log; echo $?` and grep build.log for `^error`.
@@ -108,6 +121,9 @@ cargo test             # unit + headless integration
   dead end; Ghostty can't do native tabs in its quick terminal; kitty looked too plain).
 - First-party AI agent is the "better than Tabby" differentiator (§4i).
 - Electron Tabby stays on `master` untouched as the reference implementation.
+- **Functional-first**: deep UX/visual polish (spacing, animations, quake drop anim, tab
+  separators, font tuning) is deferred to a dedicated pass (~M11). Ship behavior, then beauty.
+- Tab bar look confirmed: flat tabs + per-tab colored underline + top-edge progress (Tabby-style).
 
 ## Next up
 **Finish M1.5 verification, then M2 - colored cell renderer.**

@@ -2,14 +2,16 @@
 //! M0: chrome. M1: live shell per tab.
 use eframe::egui;
 
+mod colors;
 mod osc;
 mod progress;
 mod terminal;
 use progress::Progress;
-use terminal::PtyTerm;
+use terminal::{GridSnap, PtyTerm};
 
 const COLS: usize = 80;
 const ROWS: usize = 24;
+const FONT_SIZE: f32 = 13.0;
 
 mod palette {
     use eframe::egui::Color32;
@@ -223,13 +225,45 @@ impl eframe::App for Stdusk {
                 if !input.is_empty() {
                     self.tabs[self.active].term.send(&input);
                 }
-                let text = self.tabs[self.active].term.snapshot().join("\n");
-                ui.add(
-                    egui::Label::new(egui::RichText::new(text).monospace().color(palette::FG))
-                        .selectable(false),
-                );
+                render_grid(ui, &self.tabs[self.active].term.grid_snapshot());
             });
     }
+}
+
+/// Paint the terminal grid: per-cell bg rects + fg glyphs + a beam cursor.
+fn render_grid(ui: &mut egui::Ui, snap: &GridSnap) {
+    let font = egui::FontId::monospace(FONT_SIZE);
+    // Cell metrics from a monospace glyph (advance width + line height).
+    let m = ui
+        .painter()
+        .layout_no_wrap("M".to_owned(), font.clone(), colors::FG);
+    let cw = m.size().x;
+    let ch = m.size().y;
+    let size = egui::vec2(cw * snap.cols as f32, ch * snap.rows as f32);
+    let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
+    let origin = resp.rect.min;
+
+    for r in 0..snap.rows {
+        for c in 0..snap.cols {
+            let cell = &snap.cells[r * snap.cols + c];
+            let pos = origin + egui::vec2(c as f32 * cw, r as f32 * ch);
+            if let Some(bg) = cell.bg {
+                painter.rect_filled(egui::Rect::from_min_size(pos, egui::vec2(cw, ch)), 0.0, bg);
+            }
+            if cell.c != ' ' && cell.c != '\0' {
+                painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), cell.fg);
+            }
+        }
+    }
+
+    // Beam cursor (block/underline styles land in M9).
+    let (cr, cc) = snap.cursor;
+    let cpos = origin + egui::vec2(cc as f32 * cw, cr as f32 * ch);
+    painter.rect_filled(
+        egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)),
+        0.0,
+        colors::FG,
+    );
 }
 
 fn main() -> eframe::Result<()> {
