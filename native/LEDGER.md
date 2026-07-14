@@ -29,7 +29,7 @@ cargo test             # unit + headless integration
 | M0 | Chrome: quake window + chunky tab bar | ✅ done, compiles |
 | M1 | pty + text render + input | ✅ done, human-verified |
 | M1.5 | Progress (%-regex + OSC 9;4) + OSC scanner (cwd) | ✅ done, human-verified (Tabby-style tabs + top progress) |
-| M2 | Colored cell renderer + cursor | 🟡 code done, builds + 13 tests green, colors pending human verify |
+| M2 | Colored cell renderer + cursor | ✅ done, human-verified (real colors + cursor) |
 | M2.5 | Clickable links | todo |
 | M3 | Quake: configurable global hotkey (default Ctrl+`) | todo |
 | M4 | Theming + config.toml (Tabby-default parity) | todo |
@@ -126,9 +126,11 @@ cargo test             # unit + headless integration
 - Tab bar look confirmed: flat tabs + per-tab colored underline + top-edge progress (Tabby-style).
 
 ## Next up
-**Finish M1.5 verification, then M2 - colored cell renderer.**
-- Verify M1.5 live: run the app, `for i in $(seq 1 100); do echo "$i%"; sleep 0.03; done` →
-  the active tab's bottom edge should show a green bar climbing to full. If good, mark M1.5 ✅.
-- M2: replace the plain-text `snapshot()` render with a per-cell colored grid (alacritty
-  Color → Color32 via a new `palette.rs`), draw bg rects + fg glyphs with an egui painter,
-  add the cursor. See PLAN §4a.
+**M3 - quake mode** (configurable global hotkey, default `Ctrl+\``).
+- Add `global-hotkey` crate; register the hotkey (Carbon API on macOS → no Accessibility
+  prompt). Poll `GlobalHotKeyEvent` each frame in `App::ui` / via a channel.
+- Toggle window: `ctx.send_viewport_cmd(ViewportCommand::Visible/Focus/OuterPosition/InnerSize)`.
+  Drop from top edge, full monitor width; lerp height ~120ms. Hide on focus-loss (configurable).
+- Hardcode `Ctrl+\`` for now; the config-driven parse lands in M4. See PLAN §4c.
+- **Theming note for M4**: colors are currently hardcoded in `colors.rs` + inline `palette`;
+  M4 refactors both to read a `Theme` loaded from config.toml (ship OneHalfDark + a few more).
