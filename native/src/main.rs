@@ -2,7 +2,10 @@
 //! M0: chrome. M1: live shell per tab.
 use eframe::egui;
 
+mod osc;
+mod progress;
 mod terminal;
+use progress::Progress;
 use terminal::PtyTerm;
 
 const COLS: usize = 80;
@@ -16,6 +19,9 @@ mod palette {
     pub const DIM: Color32 = Color32::from_rgb(0x5c, 0x63, 0x70);
     pub const TABBG: Color32 = Color32::from_rgb(0x3b, 0x40, 0x48);
     pub const ACCENT: Color32 = Color32::from_rgb(0x61, 0xaf, 0xef);
+    pub const GREEN: Color32 = Color32::from_rgb(0x98, 0xc3, 0x79);
+    pub const YELLOW: Color32 = Color32::from_rgb(0xe5, 0xc0, 0x7b);
+    pub const RED: Color32 = Color32::from_rgb(0xe0, 0x6c, 0x75);
 }
 
 struct Tab {
@@ -55,7 +61,14 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(v);
 }
 
-fn draw_tab(ui: &mut egui::Ui, idx: usize, title: &str, bg: egui::Color32, fg: egui::Color32) -> egui::Response {
+fn draw_tab(
+    ui: &mut egui::Ui,
+    idx: usize,
+    title: &str,
+    bg: egui::Color32,
+    fg: egui::Color32,
+    progress: Progress,
+) -> egui::Response {
     let text = format!("  {idx}  {title}  ");
     let inner = egui::Frame::new()
         .fill(bg)
@@ -67,7 +80,28 @@ fn draw_tab(ui: &mut egui::Ui, idx: usize, title: &str, bg: egui::Color32, fg: e
                     .selectable(false),
             );
         });
+    // Progress bar hugging the pill's bottom edge.
+    if let Some((frac, color)) = progress_bar(progress) {
+        let rect = inner.response.rect;
+        let h = 2.0;
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.bottom() - h),
+            egui::vec2(rect.width() * frac, h),
+        );
+        ui.painter().rect_filled(bar, 0.0, color);
+    }
     inner.response.interact(egui::Sense::click())
+}
+
+/// (fill fraction 0..1, color) for the tab progress bar, or None to hide it.
+fn progress_bar(p: Progress) -> Option<(f32, egui::Color32)> {
+    match p {
+        Progress::None => None,
+        Progress::Normal(v) => Some((v as f32 / 100.0, palette::GREEN)),
+        Progress::Paused(v) => Some((v as f32 / 100.0, palette::YELLOW)),
+        Progress::Error(_) => Some((1.0, palette::RED)),
+        Progress::Indeterminate => Some((1.0, palette::ACCENT)),
+    }
 }
 
 /// Translate this frame's key/text events into bytes for the pty.
@@ -137,7 +171,7 @@ impl eframe::App for Stdusk {
                         } else {
                             (palette::TABBG, palette::FG)
                         };
-                        if draw_tab(ui, i + 1, &tab.title, bg, fg).clicked() {
+                        if draw_tab(ui, i + 1, &tab.title, bg, fg, tab.term.progress()).clicked() {
                             clicked = Some(i);
                         }
                     }

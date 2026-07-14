@@ -27,8 +27,8 @@ cargo test             # unit + headless integration
 | Phase | What | Status |
 |------:|------|--------|
 | M0 | Chrome: quake window + chunky tab bar | ✅ done, compiles |
-| M1 | pty + text render + input | ✅ done, compiles |
-| M1.5 | Progress (%-regex + OSC 9;4) + OSC scanner (cwd) | ⏳ NEXT |
+| M1 | pty + text render + input | ✅ done, human-verified |
+| M1.5 | Progress (%-regex + OSC 9;4) + OSC scanner (cwd) | 🟡 code done, 13 tests green, live bar pending human verify |
 | M2 | Colored cell renderer + cursor | todo |
 | M2.5 | Clickable links | todo |
 | M3 | Quake: configurable global hotkey (default Ctrl+`) | todo |
@@ -58,6 +58,23 @@ cargo test             # unit + headless integration
   monospace; `collect_input` maps key/text events → pty bytes (Enter/Backspace/Tab/Esc/arrows/
   Ctrl+letter). Fixed 80x24, no color, no cursor, no resize, no scrollback yet.
 - Verified: compiles clean + **live shell + tabs confirmed working (human run 2026-07-15)**.
+
+### M1.5 - progress + OSC scanners (`src/progress.rs`, `src/osc.rs`)
+- `progress.rs`: Tabby's exact `%`-regex `(^|[^\d])(\d+(\.\d+)?)%([^\d]|$)`, 0<pct<=100,
+  alt-screen guarded, per-chunk decision (Tabby semantics) + a trailing-digit carry so a
+  `%` split across reads still matches. `Progress { None|Normal|Error|Indeterminate|Paused }`.
+- `osc.rs`: `OscScanner` frames `ESC ] ... (BEL|ST)` across chunks (Tabby oscProcessing algo);
+  emits `Cwd` (OSC 7 file-url + OSC 1337 CurrentDir=, `~` expanded), `Clipboard` (OSC 52 raw
+  b64, decode deferred to M6), `Progress` (OSC 9;4 states 0-4).
+- `terminal.rs`: reader thread runs both scanners per chunk; reads `term.mode()` for the
+  alt-screen flag AFTER `parser.advance`; OSC 9;4 wins over %-scrape; writes `TabState{progress,cwd}`
+  (`Arc<Mutex>`). `PtyTerm::progress()` / `cwd()` accessors.
+- `main.rs`: `draw_tab` paints a 2px bar on the pill's bottom edge - green=normal(pct),
+  yellow=paused(pct), red=error(full), accent=indeterminate(full).
+- Tests: 13 green (progress golden table incl. split-read/alt-screen/out-of-range; OSC
+  framing incl. partial-chunk buffering + 7/1337/9;4). Live bar NOT yet human-verified.
+- Known: `term.mode()` + `TermMode::ALT_SCREEN` exist in alacritty_terminal 0.26 (confirmed).
+  `cwd()` + `OscEvent::Clipboard` payload are parsed but not yet consumed (warnings) - land in M5/M6.
 
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even
@@ -90,8 +107,9 @@ cargo test             # unit + headless integration
 - Electron Tabby stays on `master` untouched as the reference implementation.
 
 ## Next up
-**M1.5 - progress reporting.** Create `src/progress.rs` (%-regex + OSC 9;4 state machine,
-alt-screen guard) and `src/osc.rs` (OSC framing: 7/1337 cwd, 52 clipboard, 133). Wire into
-the reader thread → `TabState.progress` / `.cwd`. Render the progress bar in `ui/tabbar`.
-Unit tests per PLAN §5 (the golden %-regex table incl. split-read + alt-screen). Exit
-criteria: `cargo test` green + live bar shows on `echo 'building 42%'`.
+**Finish M1.5 verification, then M2 - colored cell renderer.**
+- Verify M1.5 live: run the app, `for i in $(seq 1 100); do echo "$i%"; sleep 0.03; done` →
+  the active tab's bottom edge should show a green bar climbing to full. If good, mark M1.5 ✅.
+- M2: replace the plain-text `snapshot()` render with a per-cell colored grid (alacritty
+  Color → Color32 via a new `palette.rs`), draw bg rects + fg glyphs with an egui painter,
+  add the cursor. See PLAN §4a.
