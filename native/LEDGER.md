@@ -46,7 +46,8 @@ cargo test             # unit + headless integration
 - eframe/egui 0.35 app. Borderless (`with_decorations(false)`), transparent, top-left,
   1200x500. OneHalfDark `palette` module. Chunky tab bar via `egui::Panel::top`, clickable
   `draw_tab` pills (rounded corners), active tab in accent, `+` adds tabs.
-- Verified: compiles clean (`cargo build` exit 0). GUI not visually verified in this env.
+- Verified: compiles clean + **window renders (human-confirmed 2026-07-15)**. Note: GUI needs
+  the user's aqua session - a detached background launch exits immediately; run foreground.
 
 ### M1 - pty + shell (`src/terminal.rs`, wired into `main.rs`)
 - `PtyTerm::spawn(cols, rows, ctx)`: `portable-pty` spawns `$SHELL`; a reader thread feeds
@@ -56,7 +57,7 @@ cargo test             # unit + headless integration
 - `main.rs`: each `Tab` owns a `PtyTerm`; central panel renders the active tab's snapshot as
   monospace; `collect_input` maps key/text events → pty bytes (Enter/Backspace/Tab/Esc/arrows/
   Ctrl+letter). Fixed 80x24, no color, no cursor, no resize, no scrollback yet.
-- Verified: compiles clean. Live shell behavior NOT yet confirmed by a human run.
+- Verified: compiles clean + **live shell + tabs confirmed working (human run 2026-07-15)**.
 
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even
