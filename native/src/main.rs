@@ -17,11 +17,19 @@ mod palette {
     pub const PANEL: Color32 = Color32::from_rgb(0x21, 0x25, 0x2b);
     pub const FG: Color32 = Color32::from_rgb(0xdc, 0xdf, 0xe4);
     pub const DIM: Color32 = Color32::from_rgb(0x5c, 0x63, 0x70);
-    pub const TABBG: Color32 = Color32::from_rgb(0x3b, 0x40, 0x48);
+    pub const ELEVATED: Color32 = Color32::from_rgb(0x2c, 0x31, 0x3a); // active-tab bg
     pub const ACCENT: Color32 = Color32::from_rgb(0x61, 0xaf, 0xef);
     pub const GREEN: Color32 = Color32::from_rgb(0x98, 0xc3, 0x79);
     pub const YELLOW: Color32 = Color32::from_rgb(0xe5, 0xc0, 0x7b);
     pub const RED: Color32 = Color32::from_rgb(0xe0, 0x6c, 0x75);
+    pub const PURPLE: Color32 = Color32::from_rgb(0xc6, 0x78, 0xdd);
+    pub const CYAN: Color32 = Color32::from_rgb(0x56, 0xb6, 0xc2);
+
+    /// Default per-tab underline colors, cycled by tab index (Tabby-style rainbow).
+    pub const TAB_COLORS: [Color32; 6] = [RED, ACCENT, YELLOW, PURPLE, GREEN, CYAN];
+    pub fn tab_color(i: usize) -> Color32 {
+        TAB_COLORS[i % TAB_COLORS.len()]
+    }
 }
 
 struct Tab {
@@ -30,10 +38,10 @@ struct Tab {
     term: PtyTerm,
 }
 
-fn spawn_tab(ctx: &egui::Context) -> Tab {
+fn spawn_tab(ctx: &egui::Context, color: egui::Color32) -> Tab {
     Tab {
         title: "zsh".into(),
-        color: palette::ACCENT,
+        color,
         term: PtyTerm::spawn(COLS, ROWS, ctx.clone()),
     }
 }
@@ -47,7 +55,7 @@ impl Stdusk {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         apply_theme(&cc.egui_ctx);
         Self {
-            tabs: vec![spawn_tab(&cc.egui_ctx)],
+            tabs: vec![spawn_tab(&cc.egui_ctx, palette::tab_color(0))],
             active: 0,
         }
     }
@@ -61,34 +69,53 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(v);
 }
 
+/// Flat Tabby-style tab: dark bg (elevated when active), a thin per-tab colored underline,
+/// and progress rendered as a thin bar on the TOP edge.
 fn draw_tab(
     ui: &mut egui::Ui,
     idx: usize,
     title: &str,
-    bg: egui::Color32,
-    fg: egui::Color32,
+    active: bool,
+    color: egui::Color32,
     progress: Progress,
 ) -> egui::Response {
-    let text = format!("  {idx}  {title}  ");
+    let fg = if active { palette::FG } else { palette::DIM };
+    let mut rt = egui::RichText::new(format!("{idx}  {title}")).color(fg).monospace();
+    if active {
+        rt = rt.strong();
+    }
+    let fill = if active {
+        palette::ELEVATED
+    } else {
+        egui::Color32::TRANSPARENT
+    };
     let inner = egui::Frame::new()
-        .fill(bg)
-        .corner_radius(egui::CornerRadius::same(6))
-        .inner_margin(egui::Margin::symmetric(4, 4))
+        .fill(fill)
+        .inner_margin(egui::Margin::symmetric(12, 7))
         .show(ui, |ui| {
-            ui.add(
-                egui::Label::new(egui::RichText::new(text).color(fg).monospace().strong())
-                    .selectable(false),
-            );
+            ui.add(egui::Label::new(rt).selectable(false));
         });
-    // Progress bar hugging the pill's bottom edge.
-    if let Some((frac, color)) = progress_bar(progress) {
-        let rect = inner.response.rect;
-        let h = 2.0;
-        let bar = egui::Rect::from_min_size(
-            egui::pos2(rect.left(), rect.bottom() - h),
-            egui::vec2(rect.width() * frac, h),
+    let rect = inner.response.rect;
+    let p = ui.painter();
+    // Per-tab color underline (bottom edge) - the color-coding affordance.
+    p.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.bottom() - 2.0),
+            egui::vec2(rect.width(), 2.0),
+        ),
+        0.0,
+        color,
+    );
+    // Progress bar (top edge), width = fraction, colored by state.
+    if let Some((frac, pcolor)) = progress_bar(progress) {
+        p.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.top()),
+                egui::vec2(rect.width() * frac, 2.0),
+            ),
+            0.0,
+            pcolor,
         );
-        ui.painter().rect_filled(bar, 0.0, color);
     }
     inner.response.interact(egui::Sense::click())
 }
@@ -166,12 +193,10 @@ impl eframe::App for Stdusk {
                 ui.horizontal(|ui| {
                     let mut clicked: Option<usize> = None;
                     for (i, tab) in self.tabs.iter().enumerate() {
-                        let (bg, fg) = if i == self.active {
-                            (tab.color, palette::BG)
-                        } else {
-                            (palette::TABBG, palette::FG)
-                        };
-                        if draw_tab(ui, i + 1, &tab.title, bg, fg, tab.term.progress()).clicked() {
+                        let active = i == self.active;
+                        if draw_tab(ui, i + 1, &tab.title, active, tab.color, tab.term.progress())
+                            .clicked()
+                        {
                             clicked = Some(i);
                         }
                     }
@@ -180,7 +205,8 @@ impl eframe::App for Stdusk {
                     }
                     if ui.button("  +  ").clicked() {
                         let ctx = ui.ctx().clone();
-                        self.tabs.push(spawn_tab(&ctx));
+                        let color = palette::tab_color(self.tabs.len());
+                        self.tabs.push(spawn_tab(&ctx, color));
                         self.active = self.tabs.len() - 1;
                     }
                 });

@@ -69,8 +69,11 @@ cargo test             # unit + headless integration
 - `terminal.rs`: reader thread runs both scanners per chunk; reads `term.mode()` for the
   alt-screen flag AFTER `parser.advance`; OSC 9;4 wins over %-scrape; writes `TabState{progress,cwd}`
   (`Arc<Mutex>`). `PtyTerm::progress()` / `cwd()` accessors.
-- `main.rs`: `draw_tab` paints a 2px bar on the pill's bottom edge - green=normal(pct),
-  yellow=paused(pct), red=error(full), accent=indeterminate(full).
+- `main.rs`: **Tabby-style flat tabs** (user feedback - filled pills were too heavy). Each
+  tab = dark flat bg (ELEVATED when active + bold white text), a 2px per-tab colored
+  underline (rainbow cycled via `palette::tab_color(i)`, overridable in M5), and the progress
+  bar as a 2px line on the TOP edge: green=normal(pct), yellow=paused(pct), red=error(full),
+  accent=indeterminate(full).
 - Tests: 13 green (progress golden table incl. split-read/alt-screen/out-of-range; OSC
   framing incl. partial-chunk buffering + 7/1337/9;4). Live bar NOT yet human-verified.
 - Known: `term.mode()` + `TermMode::ALT_SCREEN` exist in alacritty_terminal 0.26 (confirmed).
