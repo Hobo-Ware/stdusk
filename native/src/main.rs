@@ -7,6 +7,14 @@ use eframe::egui;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
+/// Phosphor icon codepoints (font vendored in assets/Phosphor.ttf, MIT).
+mod ph {
+    pub const PLUS: &str = "\u{E3D4}";
+    pub const X: &str = "\u{E4F6}";
+    pub const GEAR: &str = "\u{E270}";
+    pub const APP_WINDOW: &str = "\u{E5DA}";
+}
+
 mod colors;
 mod config;
 mod osc;
@@ -53,6 +61,16 @@ fn basename(p: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
+/// A frameless Phosphor-icon button; returns true if clicked.
+fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> bool {
+    ui.add(
+        egui::Button::new(egui::RichText::new(icon).size(18.0).color(colors::dim()))
+            .frame(false),
+    )
+    .on_hover_text(tip)
+    .clicked()
+}
+
 /// Truncate to `max` chars with an ellipsis; returns (shown, was_truncated).
 fn ellipsize(s: &str, max: usize) -> (String, bool) {
     if s.chars().count() <= max {
@@ -76,6 +94,18 @@ struct Stdusk {
 
 impl Stdusk {
     fn new(cc: &eframe::CreationContext<'_>, cfg: Config) -> Self {
+        // Load the Phosphor icon font (used for tab-bar controls + close x) as a fallback
+        // in the proportional family, so icon codepoints render in buttons/labels.
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "phosphor".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/Phosphor.ttf")).into(),
+        );
+        if let Some(keys) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            keys.insert(1, "phosphor".to_owned());
+        }
+        cc.egui_ctx.set_fonts(fonts);
+
         apply_theme(&cc.egui_ctx);
 
         // Global quake hotkey from config (default Ctrl+`). Carbon API on macOS - no
@@ -290,7 +320,8 @@ fn draw_tab(
         );
         let x = ui.put(
             x_rect,
-            egui::Button::new(egui::RichText::new("✕").size(11.0).color(colors::dim())).frame(false),
+            egui::Button::new(egui::RichText::new(ph::X).size(13.0).color(colors::dim()))
+                .frame(false),
         );
         if x.clicked() {
             close = true;
@@ -483,36 +514,16 @@ impl eframe::App for Stdusk {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    // Right cluster (added right-to-left): gear, tab manager, new tab.
+                    // Gear pinned to the far right; everything else flows from the left.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(egui::Button::new(egui::RichText::new("⚙").size(15.0)).frame(false))
-                            .on_hover_text("Settings (config.toml)")
-                            .clicked()
-                        {
+                        if icon_button(ui, ph::GEAR, "Settings (config.toml)") {
                             if let Some(p) = config::ensure_and_path() {
                                 let _ = std::process::Command::new("open").arg(p).spawn();
                             }
                         }
-                        ui.menu_button(egui::RichText::new("☰").size(15.0), |ui| {
-                            ui.label(egui::RichText::new("Tabs").small().color(colors::dim()));
-                            for (i, tab) in self.tabs.iter().enumerate() {
-                                if ui.button(format!("{}  {}", i + 1, tab.title)).clicked() {
-                                    clicked = Some(i);
-                                }
-                            }
-                        });
-                        if ui
-                            .add(egui::Button::new(egui::RichText::new("+").size(17.0)).frame(false))
-                            .on_hover_text("New tab")
-                            .clicked()
-                        {
-                            action = Some(TabAction::New);
-                        }
-
-                        // Left content: the tabs, filling the remaining width.
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
+                            // Tabs.
                             for (i, tab) in self.tabs.iter().enumerate() {
                                 let active = i == self.active;
                                 let (resp, close) = draw_tab(
@@ -530,6 +541,24 @@ impl eframe::App for Stdusk {
                                 }
                                 resp.context_menu(|ui| tab_menu(ui, i, &mut action));
                             }
+                            // New tab + tab manager, right after the tabs.
+                            ui.add_space(4.0);
+                            if icon_button(ui, ph::PLUS, "New tab") {
+                                action = Some(TabAction::New);
+                            }
+                            ui.menu_button(
+                                egui::RichText::new(ph::APP_WINDOW).size(18.0).color(colors::dim()),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new("Tabs").small().color(colors::dim()),
+                                    );
+                                    for (i, tab) in self.tabs.iter().enumerate() {
+                                        if ui.button(format!("{}  {}", i + 1, tab.title)).clicked() {
+                                            clicked = Some(i);
+                                        }
+                                    }
+                                },
+                            );
                         });
                     });
                 });

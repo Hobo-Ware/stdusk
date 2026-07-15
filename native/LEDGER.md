@@ -171,6 +171,16 @@ cargo test             # unit + headless integration
   panels made TRANSPARENT so it shows through; the transparent OS window rounds the corners.
   Tab bar no longer has its own panel tint (uses the bg) - `colors::panel()` removed.
 
+### Tab-bar sexify (user ask)
+- **Icons: vendored Phosphor font**, NOT the `egui-phosphor` crate. That crate (0.12, latest)
+  only supports egui 0.34 - adding it pulls a 2nd egui and `add_to_fonts` type-mismatches. So:
+  copied `Phosphor.ttf` into `assets/` (MIT), embed via `include_bytes!`, insert into the
+  proportional font family, and hand-define the 4 codepoints in `mod ph` (PLUS/X/GEAR/APP_WINDOW).
+  If egui-phosphor ever ships an egui-0.35 build, can switch back.
+- Tab bar layout: gear pinned far right (`right_to_left`), tabs + `+` + tab-manager (`APP_WINDOW`)
+  flow from the left (nested `left_to_right`). Close `X` on active/hovered tab via `ui.put`.
+  `icon_button()` helper = frameless Phosphor button.
+
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even
   when cargo failed. Use `cargo build 2>build.log; echo $?` and grep build.log for `^error`.
