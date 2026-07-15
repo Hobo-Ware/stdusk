@@ -80,6 +80,32 @@ fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
     resp.on_hover_text(tip)
 }
 
+/// Paint a small pill-shaped status toast centered near the bottom edge. `fade` in 0..1
+/// scales opacity so the message dissolves as it expires.
+fn draw_toast(ui: &egui::Ui, msg: &str, fade: f32) {
+    let a = |c: egui::Color32, base: u8| {
+        egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (base as f32 * fade) as u8)
+    };
+    let area = ui.max_rect();
+    let font = egui::FontId::proportional(13.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(msg.to_owned(), font.clone(), colors::fg());
+    let pad = egui::vec2(14.0, 8.0);
+    let size = galley.size() + pad * 2.0;
+    let center = egui::pos2(area.center().x, area.bottom() - 34.0);
+    let rect = egui::Rect::from_center_size(center, size);
+    let p = ui.painter();
+    p.rect_filled(rect, 8.0, a(colors::elevated(), 235));
+    p.rect_stroke(
+        rect,
+        8.0,
+        egui::Stroke::new(1.0, a(colors::border(), 255)),
+        egui::StrokeKind::Inside,
+    );
+    p.text(center, egui::Align2::CENTER_CENTER, msg, font, a(colors::fg(), 255));
+}
+
 /// Truncate to `max` chars with an ellipsis; returns (shown, was_truncated).
 fn ellipsize(s: &str, max: usize) -> (String, bool) {
     if s.chars().count() <= max {
@@ -99,6 +125,7 @@ struct Stdusk {
     was_focused: bool, // gained focus since last show (so blur can hide)
     sized: bool,       // applied quake sizing once the monitor size was known
     renaming: Option<(usize, String)>, // tab index + edit buffer while renaming
+    toast: Option<(String, f64)>,      // transient status message + expiry (egui time)
     screenshot: Option<String>,        // --screenshot PATH: demo tabs, capture, exit
 }
 
@@ -174,6 +201,7 @@ impl Stdusk {
             was_focused: false, // arm hide-on-blur only after the first focus gain
             sized,
             renaming: None,
+            toast: None,
             screenshot,
         }
     }
@@ -440,15 +468,41 @@ fn collect_input(ui: &egui::Ui) -> Vec<u8> {
                         }
                         return;
                     }
+                    // macOS "natural editing": Option+←/→ move by word, Cmd+←/→ to line
+                    // start/end, Option/Cmd+Backspace delete word / to line start.
                     match key {
                         Key::Enter => out.push(b'\r'),
-                        Key::Backspace => out.push(0x7f),
+                        Key::Backspace => {
+                            if modifiers.alt {
+                                out.extend_from_slice(b"\x1b\x7f"); // delete previous word
+                            } else if modifiers.command {
+                                out.push(0x15); // Ctrl-U: delete to line start
+                            } else {
+                                out.push(0x7f);
+                            }
+                        }
                         Key::Tab => out.push(b'\t'),
                         Key::Escape => out.push(0x1b),
                         Key::ArrowUp => out.extend_from_slice(b"\x1b[A"),
                         Key::ArrowDown => out.extend_from_slice(b"\x1b[B"),
-                        Key::ArrowRight => out.extend_from_slice(b"\x1b[C"),
-                        Key::ArrowLeft => out.extend_from_slice(b"\x1b[D"),
+                        Key::ArrowRight => {
+                            if modifiers.alt {
+                                out.extend_from_slice(b"\x1bf"); // forward word (readline)
+                            } else if modifiers.command {
+                                out.push(0x05); // Ctrl-E: end of line
+                            } else {
+                                out.extend_from_slice(b"\x1b[C");
+                            }
+                        }
+                        Key::ArrowLeft => {
+                            if modifiers.alt {
+                                out.extend_from_slice(b"\x1bb"); // backward word (readline)
+                            } else if modifiers.command {
+                                out.push(0x01); // Ctrl-A: start of line
+                            } else {
+                                out.extend_from_slice(b"\x1b[D");
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -669,6 +723,8 @@ impl eframe::App for Stdusk {
             ctx.copy_text(text);
         }
 
+        let now = ctx.input(|i| i.time);
+        let mut copied = false; // set inside the central panel when Cmd+C copies a selection
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
@@ -679,10 +735,13 @@ impl eframe::App for Stdusk {
                 let area = ui.max_rect();
                 let term = &mut self.tabs[self.active].term;
 
-                // Cmd+C copies the current selection (Ctrl+C stays SIGINT via collect_input).
-                if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) {
+                // Cmd+C arrives as egui's Copy event (not a raw key). Copy the selection;
+                // Ctrl+C stays SIGINT (collect_input handles that). `copied` -> toast below.
+                let want_copy = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+                if want_copy {
                     if let Some(txt) = term.selection_text() {
                         ctx.copy_text(txt);
+                        copied = true;
                     }
                 }
 
@@ -774,6 +833,19 @@ impl eframe::App for Stdusk {
                     );
                 }
             });
+
+        // Transient "Copied" toast at the bottom-center, fading out.
+        if copied {
+            self.toast = Some(("Copied".into(), now + 1.4));
+        }
+        if let Some((msg, until)) = self.toast.clone() {
+            if now >= until {
+                self.toast = None;
+            } else {
+                draw_toast(ui, &msg, ((until - now) / 0.35).min(1.0) as f32);
+                ctx.request_repaint();
+            }
+        }
     }
 }
 
@@ -800,7 +872,17 @@ fn render_grid(
         let right = relx.fract() > 0.5;
         (snap.top_line + row as i32, col, right)
     };
-    if resp.drag_started() {
+    if resp.triple_clicked() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let (line, col, _) = hit(p);
+            term.select_line(line, col);
+        }
+    } else if resp.double_clicked() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let (line, col, _) = hit(p);
+            term.select_word(line, col);
+        }
+    } else if resp.drag_started() {
         if let Some(p) = resp.interact_pointer_pos() {
             let (line, col, right) = hit(p);
             term.start_selection(line, col, right);

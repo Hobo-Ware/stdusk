@@ -192,11 +192,23 @@ cargo test             # unit + headless integration
 - `render_grid` senses `click_and_drag`: `drag_started` -> start, `dragged` -> update, `clicked`
   -> clear. `hit(pos)` maps pointer -> (line, col, right-half) using `top_line` + cell metrics.
   Selected cells get a translucent `colors::selection()` (accent @ alpha 90) overlay under the glyph.
-- **Cmd+C copies** the selection (`ctx.copy_text`); Ctrl+C stays SIGINT (collect_input only maps
-  `modifiers.ctrl`, and Cmd+C emits no Text). Selection is cleared on keystroke + paste (not on
-  wheel scroll - buffer-point highlighting stays correct while scrolled).
-- Builds + 17 tests green (no new unit tests - drag/highlight is UI, verified by human run).
-  Screenshot harness can't simulate a drag, so live selection/copy is **pending human verify**.
+- **Double-click = word (`SelectionType::Semantic`), triple-click = line (`Lines`)** via
+  `select_word`/`select_line`; single drag = `Simple`. egui `Response::{double,triple}_clicked()`
+  checked before `drag_started`/`clicked` (else-if chain, they're mutually exclusive per frame).
+- **GOTCHA - Cmd+C is NOT a key event**: egui folds Cmd+C/X/V into `Event::{Copy,Cut,Paste}`
+  (same as Cmd+V paste). Checking `key_pressed(Key::C)` never fired (first-cut bug). Fix: watch
+  for `egui::Event::Copy` in the frame's events, then `ctx.copy_text(selection_text())`. Ctrl+C
+  stays SIGINT (collect_input maps `modifiers.ctrl` only). Selection cleared on keystroke + paste,
+  kept while wheel-scrolling (buffer-point highlighting stays correct).
+- **"Copied" toast**: `Stdusk.toast: Option<(String, f64-expiry)>` using egui's `input().time`
+  clock (no `std::time` needed). `draw_toast()` paints a bottom-center pill that fades over the
+  last 0.35s; `request_repaint` while active so it self-dismisses. A copy sets it to now+1.4s.
+- **macOS natural-editing keys** (`collect_input`): Option+←/→ -> `ESC b`/`ESC f` (readline word
+  back/fwd), Cmd+←/→ -> `Ctrl-A`/`Ctrl-E` (line start/end), Option+Backspace -> `ESC DEL` (word
+  delete), Cmd+Backspace -> `Ctrl-U` (delete to line start). (First cut sent plain `ESC[C/D`
+  regardless of modifiers - the "moves one-by-one" bug.)
+- Builds + 17 tests green. Toast verified via a forced screenshot; drag/word/line select + Cmd+C
+  + word-nav keys are live-interaction, **pending human verify**.
 
 ### Tab-bar sexify (user ask)
 - **Icons: vendored Phosphor font**, NOT the `egui-phosphor` crate. That crate (0.12, latest)

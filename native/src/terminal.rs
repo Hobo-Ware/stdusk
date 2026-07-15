@@ -310,6 +310,18 @@ impl PtyTerm {
         }
     }
 
+    /// Select the word under a point (double-click), using alacritty's semantic rules.
+    pub fn select_word(&self, line: i32, col: usize) {
+        let point = Point::new(Line(line), Column(col));
+        self.term.lock().selection = Some(Selection::new(SelectionType::Semantic, point, Side::Left));
+    }
+
+    /// Select the whole line under a point (triple-click).
+    pub fn select_line(&self, line: i32, col: usize) {
+        let point = Point::new(Line(line), Column(col));
+        self.term.lock().selection = Some(Selection::new(SelectionType::Lines, point, Side::Left));
+    }
+
     pub fn clear_selection(&self) {
         self.term.lock().selection = None;
     }
