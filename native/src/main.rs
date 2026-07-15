@@ -1,6 +1,11 @@
 //! stdusk - a quake terminal with a real GUI tab bar.
 //! M0: chrome. M1: live shell per tab.
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use eframe::egui;
+use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 mod colors;
 mod osc;
@@ -51,15 +56,60 @@ fn spawn_tab(ctx: &egui::Context, color: egui::Color32) -> Tab {
 struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
+    _hotkey: GlobalHotKeyManager, // kept alive so the registration persists
+    toggle: Arc<AtomicBool>,      // set by the hotkey thread, consumed in ui()
+    visible: bool,
+    was_focused: bool, // gained focus since last show (so blur can hide)
 }
 
 impl Stdusk {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         apply_theme(&cc.egui_ctx);
+
+        // Global quake hotkey (default Ctrl+`; config-driven in M4). Carbon API on
+        // macOS - no Accessibility grant needed.
+        let mgr = GlobalHotKeyManager::new().expect("hotkey manager");
+        let _ = mgr.register(HotKey::new(Some(Modifiers::CONTROL), Code::Backquote));
+
+        // A thread wakes the UI (even while hidden) when the hotkey fires.
+        let toggle = Arc::new(AtomicBool::new(false));
+        let toggle_thread = toggle.clone();
+        let ctx = cc.egui_ctx.clone();
+        std::thread::spawn(move || {
+            let rx = GlobalHotKeyEvent::receiver();
+            while let Ok(ev) = rx.recv() {
+                if ev.state == HotKeyState::Pressed {
+                    toggle_thread.store(true, Ordering::SeqCst);
+                    ctx.request_repaint();
+                }
+            }
+        });
+
         Self {
             tabs: vec![spawn_tab(&cc.egui_ctx, palette::tab_color(0))],
             active: 0,
+            _hotkey: mgr,
+            toggle,
+            visible: true,
+            was_focused: false, // arm hide-on-blur only after the first focus gain
         }
+    }
+}
+
+/// Show (positioned + focused) or hide the quake window.
+fn apply_visibility(ctx: &egui::Context, visible: bool) {
+    if visible {
+        if let Some(mon) = ctx.input(|i| i.viewport().monitor_size) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                mon.x,
+                (mon.y * 0.5).round(),
+            )));
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    } else {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 }
 
@@ -185,6 +235,27 @@ impl eframe::App for Stdusk {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+
+        // Quake toggle (from the global-hotkey thread).
+        if self.toggle.swap(false, Ordering::SeqCst) {
+            self.visible = !self.visible;
+            apply_visibility(&ctx, self.visible);
+            if self.visible {
+                self.was_focused = false; // wait to regain focus before blur can hide us
+            }
+        }
+        // Hide when focus is lost (after we've actually gained it since showing).
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        if self.visible {
+            if focused {
+                self.was_focused = true;
+            } else if self.was_focused {
+                self.visible = false;
+                apply_visibility(&ctx, false);
+            }
+        }
+
         egui::Panel::top("tabbar")
             .frame(
                 egui::Frame::new()

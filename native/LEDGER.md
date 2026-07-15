@@ -31,7 +31,7 @@ cargo test             # unit + headless integration
 | M1.5 | Progress (%-regex + OSC 9;4) + OSC scanner (cwd) | ✅ done, human-verified (Tabby-style tabs + top progress) |
 | M2 | Colored cell renderer + cursor | ✅ done, human-verified (real colors + cursor) |
 | M2.5 | Clickable links | todo |
-| M3 | Quake: configurable global hotkey (default Ctrl+`) | todo |
+| M3 | Quake: configurable global hotkey (default Ctrl+`) | 🟡 code done, builds, pending human verify |
 | M4 | Theming + config.toml (Tabby-default parity) | todo |
 | M5 | Tab mgmt: context menu, color, rename, reorder | todo |
 | M6 | Resize + scrollback + copy/paste | todo |
@@ -91,6 +91,21 @@ cargo test             # unit + headless integration
   `ui.fonts()` only gives &, so layout-a-galley is the way).
 - Fixed 80x24 still; bold/italic font variants + cursor styles deferred (M9). Colors + cursor
   build + 13 tests green; live colors NOT yet human-verified.
+
+### M3 - quake (`main.rs`)
+- `global-hotkey` 0.8: `GlobalHotKeyManager::new()` + `.register(HotKey::new(Some(Modifiers::
+  CONTROL), Code::Backquote))`. Manager stored in `Stdusk._hotkey` (drop = unregister).
+- Events: a thread blocks on `GlobalHotKeyEvent::receiver().recv()`; on `HotKeyState::Pressed`
+  it sets an `Arc<AtomicBool>` toggle + `ctx.request_repaint()` (this wakes eframe **even while
+  the window is hidden** - the key to show-from-hidden working).
+- `ui()` consumes the toggle → flips `visible` → `apply_visibility()` sends `ViewportCommand::
+  {OuterPosition(0,0), InnerSize(monitor_w, monitor_h*0.5), Visible, Focus}`.
+- Hide-on-focus-loss: armed only after the window first gains focus (`was_focused` starts
+  false) so a window that launches unfocused doesn't vanish instantly.
+- Deferred to polish: drop animation (instant show/hide for now), config-driven hotkey (M4).
+- **RISK to verify**: on macOS, `ViewportCommand::Visible(false)` may not fully hide the
+  window, and update() might not run while hidden. If Ctrl+` doesn't bring it back, that's the
+  fallback territory (off-screen move / min-size trick). Pending human verify.
 
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even
