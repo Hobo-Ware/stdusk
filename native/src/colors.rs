@@ -104,9 +104,6 @@ pub fn green() -> Color32 {
 pub fn yellow() -> Color32 {
     theme().ansi[3]
 }
-pub fn panel() -> Color32 {
-    shade(theme().bg, 0.78) // slightly darker than bg
-}
 pub fn elevated() -> Color32 {
     shade(theme().bg, 1.22) // slightly lighter than bg (active tab)
 }

@@ -437,13 +437,19 @@ impl eframe::App for Stdusk {
             }
         });
 
+        // Rounded window background - the OS window is transparent, so painting a rounded
+        // rect leaves the corner triangles clear and the window reads as rounded. Panels
+        // below are transparent so this shows through.
+        ui.painter()
+            .rect_filled(ui.max_rect(), 10.0, tint(colors::bg(), opacity));
+
         // Tab bar. Collect clicks + menu actions; apply after the panel to avoid borrow clashes.
         let mut clicked: Option<usize> = None;
         let mut action: Option<TabAction> = None;
         egui::Panel::top("tabbar")
             .frame(
                 egui::Frame::new()
-                    .fill(tint(colors::panel(), opacity))
+                    .fill(egui::Color32::TRANSPARENT)
                     .inner_margin(egui::Margin::symmetric(6, 4)),
             )
             .show(ui, |ui| {
@@ -506,10 +512,11 @@ impl eframe::App for Stdusk {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(tint(colors::bg(), opacity))
+                    .fill(egui::Color32::TRANSPARENT)
                     .inner_margin(egui::Margin::same(12)),
             )
             .show(ui, |ui| {
+                let area = ui.max_rect();
                 let term = &mut self.tabs[self.active].term;
 
                 // Keystrokes -> pty; typing jumps back to the live bottom.
@@ -558,6 +565,45 @@ impl eframe::App for Stdusk {
 
                 let snap = term.grid_snapshot();
                 render_grid(ui, &snap, cw, ch, &font);
+
+                // Scrollbar on the right edge when there's scrollback history.
+                let (offset, history) = term.scroll_state();
+                if history > 0 {
+                    let track = area.height();
+                    let total = (history + snap.rows) as f32;
+                    let thumb_h = (snap.rows as f32 / total * track).max(24.0);
+                    let top_frac = (history - offset) as f32 / total;
+                    let thumb_y = area.top() + top_frac * track;
+                    let bar_x = area.right() - 6.0;
+
+                    let track_rect = egui::Rect::from_min_max(
+                        egui::pos2(bar_x - 2.0, area.top()),
+                        egui::pos2(area.right(), area.bottom()),
+                    );
+                    let resp = ui.interact(
+                        track_rect,
+                        ui.id().with("scrollbar"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    if resp.dragged() || resp.clicked() {
+                        if let Some(p) = resp.interact_pointer_pos() {
+                            let frac = ((p.y - area.top()) / track).clamp(0.0, 1.0);
+                            let tgt = ((1.0 - frac) * history as f32).round() as usize;
+                            term.scroll_to_offset(tgt.min(history));
+                        }
+                    }
+                    let alpha = if resp.hovered() || resp.dragged() { 180 } else { 90 };
+                    let d = colors::dim();
+                    let col = egui::Color32::from_rgba_unmultiplied(d.r(), d.g(), d.b(), alpha);
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(bar_x, thumb_y),
+                            egui::vec2(4.0, thumb_h),
+                        ),
+                        2.0,
+                        col,
+                    );
+                }
             });
     }
 }

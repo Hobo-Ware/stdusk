@@ -165,6 +165,11 @@ cargo test             # unit + headless integration
   `ctx.copy_text()`. Copy-FROM-selection (Cmd+C) is M6.5.
 - **Selection + Cmd+C copy deferred to M6.5** - needs mouse drag tracking + alacritty `Selection`
   + highlight rendering + cell hit-testing. Real work, kept out of M6 to stay shippable.
+- **Scrollbar** (user ask): right-edge draggable thumb, shown when `history_size>0`; position
+  from `scroll_state()`, drag maps pointer y → `scroll_to_offset`. Dim, alpha 90/180 on hover.
+- **Rounded window corners** (user ask): paint one rounded bg rect (radius 10) at `ui.max_rect()`,
+  panels made TRANSPARENT so it shows through; the transparent OS window rounds the corners.
+  Tab bar no longer has its own panel tint (uses the bg) - `colors::panel()` removed.
 
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even

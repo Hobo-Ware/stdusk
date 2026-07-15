@@ -210,6 +210,22 @@ impl PtyTerm {
         self.term.lock().scroll_display(Scroll::Bottom);
     }
 
+    /// (display_offset, history_size) - for drawing the scrollbar.
+    pub fn scroll_state(&self) -> (usize, usize) {
+        let t = self.term.lock();
+        let g = t.grid();
+        (g.display_offset(), g.history_size())
+    }
+
+    /// Jump the viewport to an absolute history offset (0 = bottom/live).
+    pub fn scroll_to_offset(&self, target: usize) {
+        let cur = self.term.lock().grid().display_offset();
+        let delta = target as i32 - cur as i32;
+        if delta != 0 {
+            self.scroll(delta);
+        }
+    }
+
     pub fn progress(&self) -> Progress {
         self.state.lock().unwrap().progress
     }
