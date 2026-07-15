@@ -32,23 +32,21 @@ mod palette {
     pub const PURPLE: Color32 = Color32::from_rgb(0xc6, 0x78, 0xdd);
     pub const CYAN: Color32 = Color32::from_rgb(0x56, 0xb6, 0xc2);
 
-    /// Default per-tab underline colors, cycled by tab index (Tabby-style rainbow).
+    /// Palette offered by the M5 right-click Color menu (tabs are colorless by default).
+    #[allow(dead_code)] // consumed by the M5 color picker
     pub const TAB_COLORS: [Color32; 6] = [RED, ACCENT, YELLOW, PURPLE, GREEN, CYAN];
-    pub fn tab_color(i: usize) -> Color32 {
-        TAB_COLORS[i % TAB_COLORS.len()]
-    }
 }
 
 struct Tab {
     title: String,
-    color: egui::Color32,
+    color: Option<egui::Color32>, // None = no underline (Tabby default); set via M5 menu
     term: PtyTerm,
 }
 
-fn spawn_tab(ctx: &egui::Context, color: egui::Color32) -> Tab {
+fn spawn_tab(ctx: &egui::Context) -> Tab {
     Tab {
         title: "zsh".into(),
-        color,
+        color: None,
         term: PtyTerm::spawn(COLS, ROWS, ctx.clone()),
     }
 }
@@ -87,7 +85,7 @@ impl Stdusk {
         });
 
         Self {
-            tabs: vec![spawn_tab(&cc.egui_ctx, palette::tab_color(0))],
+            tabs: vec![spawn_tab(&cc.egui_ctx)],
             active: 0,
             _hotkey: mgr,
             toggle,
@@ -137,7 +135,7 @@ fn draw_tab(
     idx: usize,
     title: &str,
     active: bool,
-    color: egui::Color32,
+    color: Option<egui::Color32>,
     progress: Progress,
 ) -> egui::Response {
     let fg = if active { palette::FG } else { palette::DIM };
@@ -158,15 +156,17 @@ fn draw_tab(
         });
     let rect = inner.response.rect;
     let p = ui.painter();
-    // Per-tab color underline (bottom edge) - the color-coding affordance.
-    p.rect_filled(
-        egui::Rect::from_min_size(
-            egui::pos2(rect.left(), rect.bottom() - 2.0),
-            egui::vec2(rect.width(), 2.0),
-        ),
-        0.0,
-        color,
-    );
+    // Per-tab color underline (bottom edge) - only when the user has set a color (M5 menu).
+    if let Some(color) = color {
+        p.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.bottom() - 2.0),
+                egui::vec2(rect.width(), 2.0),
+            ),
+            0.0,
+            color,
+        );
+    }
     // Progress bar (top edge), width = fraction, colored by state.
     if let Some((frac, pcolor)) = progress_bar(progress) {
         p.rect_filled(
@@ -301,8 +301,7 @@ impl eframe::App for Stdusk {
                     }
                     if ui.button("  +  ").clicked() {
                         let ctx = ui.ctx().clone();
-                        let color = palette::tab_color(self.tabs.len());
-                        self.tabs.push(spawn_tab(&ctx, color));
+                        self.tabs.push(spawn_tab(&ctx));
                         self.active = self.tabs.len() - 1;
                     }
                 });

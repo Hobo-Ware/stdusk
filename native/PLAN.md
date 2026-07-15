@@ -159,8 +159,11 @@ yellow=paused, marquee=indeterminate. For split tabs, the tab shows the worst ch
   `Arc<Mutex>` (reader writes, UI reads).
 - Ops: new (Cmd+T), close (Cmd+W), switch (Cmd+1..9, click), reorder (Cmd+Shift+←/→, drag),
   rename. **Context menu** = egui `response.context_menu(..)` (native popup, the thing that
-  was hell in tmux): Color ▶, Rename, Close, Move, New.
-- Per-tab color fills the pill; state dot (running/done/fail) from OSC 133 exit codes.
+  was hell in tmux): Rename, Color ▶, Close, Move, New.
+- **Tabs are colorless by default** (like Tabby) - `Tab.color: Option<Color32>` starts `None`,
+  no underline. The Color ▶ submenu offers `No color` + the `palette::TAB_COLORS` swatches;
+  picking one sets the underline, `No color` clears it. Never auto-assigned.
+- State dot (running/done/fail) from OSC 133 exit codes is separate from the manual color.
 
 ### 4e. Theming & config (M4)
 `~/.config/stdusk/config.toml`: replicate Tabby's exact defaults as the golden baseline
