@@ -31,7 +31,7 @@ cargo test             # unit + headless integration
 | M1.5 | Progress (%-regex + OSC 9;4) + OSC scanner (cwd) | ✅ done, human-verified (Tabby-style tabs + top progress) |
 | M2 | Colored cell renderer + cursor | ✅ done, human-verified (real colors + cursor) |
 | M2.5 | Clickable links | todo |
-| M3 | Quake: configurable global hotkey (default Ctrl+`) | 🟡 code done, builds, pending human verify |
+| M3 | Quake: configurable global hotkey (default Ctrl+`) | ✅ done, human-verified (toggle + hide/show + first-run sizing) |
 | M4 | Theming + config.toml (Tabby-default parity) | todo |
 | M5 | Tab mgmt: context menu, color, rename, reorder | todo |
 | M6 | Resize + scrollback + copy/paste | todo |
@@ -102,10 +102,15 @@ cargo test             # unit + headless integration
   {OuterPosition(0,0), InnerSize(monitor_w, monitor_h*0.5), Visible, Focus}`.
 - Hide-on-focus-loss: armed only after the window first gains focus (`was_focused` starts
   false) so a window that launches unfocused doesn't vanish instantly.
-- Deferred to polish: drop animation (instant show/hide for now), config-driven hotkey (M4).
-- **RISK to verify**: on macOS, `ViewportCommand::Visible(false)` may not fully hide the
-  window, and update() might not run while hidden. If Ctrl+` doesn't bring it back, that's the
-  fallback territory (off-screen move / min-size trick). Pending human verify.
+- **macOS gotcha (SOLVED, human-verified)**: `Visible(false)` OR moving fully off-screen lets
+  the OS occlude + App-Nap the process → run loop throttles → the global hotkey stops firing,
+  so it can't be brought back. Fix: hide by parking the window mostly below the screen with a
+  **2px sliver still on-screen** (stays un-occluded) + `request_repaint_after(120ms)` while
+  hidden. Do NOT use `Visible(false)` for quake hide.
+- First-run sizing: `monitor_size` is None on frame 0, so apply full quake sizing on the first
+  frame where it's known (guarded by a `sized` flag, retry via request_repaint until then).
+- Deferred to polish: drop animation, proper native hide (NSPanel orderOut via objc2 - replaces
+  the sliver hack), config-driven hotkey (M4).
 
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even

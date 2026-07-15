@@ -60,6 +60,7 @@ struct Stdusk {
     toggle: Arc<AtomicBool>,      // set by the hotkey thread, consumed in ui()
     visible: bool,
     was_focused: bool, // gained focus since last show (so blur can hide)
+    sized: bool,       // applied quake sizing once the monitor size was known
 }
 
 impl Stdusk {
@@ -92,24 +93,32 @@ impl Stdusk {
             toggle,
             visible: true,
             was_focused: false, // arm hide-on-blur only after the first focus gain
+            sized: false,
         }
     }
 }
 
-/// Show (positioned + focused) or hide the quake window.
+/// Show (drop to the top edge, focused) or "hide" the quake window.
+///
+/// We do NOT use `Visible(false)` or move fully off-screen: on macOS that lets the OS
+/// occlude the window and App-Nap the process, which throttles the run loop so the global
+/// hotkey handler never fires again (it can't be brought back). Instead we park the window
+/// mostly below the screen, leaving a ~2px sliver on-screen so it stays un-occluded and the
+/// run loop keeps delivering the hotkey. Combined with a repaint tick while hidden. A proper
+/// native hide (NSPanel orderOut) is a polish item.
 fn apply_visibility(ctx: &egui::Context, visible: bool) {
+    let mon = ctx.input(|i| i.viewport().monitor_size);
+    let height = mon.map(|m| (m.y * 0.5).round()).unwrap_or(500.0);
     if visible {
-        if let Some(mon) = ctx.input(|i| i.viewport().monitor_size) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                mon.x,
-                (mon.y * 0.5).round(),
-            )));
+        if let Some(m) = mon {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(m.x, height)));
         }
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        // Park just off the bottom edge, leaving a 2px sliver on-screen.
+        let y = mon.map(|m| m.y - 2.0).unwrap_or(2000.0);
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
     }
 }
 
@@ -237,6 +246,17 @@ impl eframe::App for Stdusk {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
+        // First run: apply full quake sizing once the monitor size is known (it's not
+        // populated on frame 0, so retry until it is).
+        if !self.sized {
+            if ctx.input(|i| i.viewport().monitor_size).is_some() {
+                apply_visibility(&ctx, true);
+                self.sized = true;
+            } else {
+                ctx.request_repaint();
+            }
+        }
+
         // Quake toggle (from the global-hotkey thread).
         if self.toggle.swap(false, Ordering::SeqCst) {
             self.visible = !self.visible;
@@ -254,6 +274,9 @@ impl eframe::App for Stdusk {
                 self.visible = false;
                 apply_visibility(&ctx, false);
             }
+        } else {
+            // Keep the loop alive while hidden so the hotkey toggle is polled.
+            ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }
 
         egui::Panel::top("tabbar")
