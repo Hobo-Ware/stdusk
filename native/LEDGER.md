@@ -32,7 +32,7 @@ cargo test             # unit + headless integration
 | M2 | Colored cell renderer + cursor | ✅ done, human-verified (real colors + cursor) |
 | M2.5 | Clickable links | todo |
 | M3 | Quake: configurable global hotkey (default Ctrl+`) | ✅ done, human-verified (toggle + hide/show + first-run sizing) |
-| M4 | Theming + config.toml (Tabby-default parity) | todo |
+| M4 | Theming + config.toml (Tabby-default parity) | 🟡 code done, builds + 17 tests green, theme-switch pending human verify |
 | M5 | Tab mgmt: context menu, color, rename, reorder | todo |
 | M6 | Resize + scrollback + copy/paste | todo |
 | M7 | Scrollback search | todo |
@@ -113,6 +113,25 @@ cargo test             # unit + headless integration
   frame where it's known (guarded by a `sized` flag, retry via request_repaint until then).
 - Deferred to polish: drop animation, proper native hide (NSPanel orderOut via objc2 - replaces
   the sliver hack), config-driven hotkey (M4).
+
+### M4 - theming + config (`src/config.rs`, `src/colors.rs` rewrite)
+- `colors.rs` is now the SINGLE color module: a `Theme { bg, fg, cursor, ansi[16] }` set once
+  at startup via `colors::init()` (global `OnceLock`). All color reads go through fns
+  (`bg()/fg()/dim()/accent()/red()/green()/yellow()/panel()/elevated()/cursor()/to_color32()`).
+  Chrome colors are DERIVED from the theme (panel=darker bg, elevated=lighter bg, dim=ansi[8],
+  accent=ansi[4], etc.). **The inline `mod palette` in main.rs is gone** - use `colors::*`.
+- Built-in themes: `one_half_dark` (default), `dracula`, `tokyo_night`; `by_name(&str)`.
+- `config.rs`: `Config { appearance{theme,opacity,font_size}, quake{hotkey,height_pct,
+  hide_on_focus_loss}, terminal{detect_progress} }`, serde + `#[serde(default)]`, loaded from
+  `~/.config/stdusk/config.toml` (missing file/fields → defaults). `parse_hotkey()` →
+  (Option<Modifiers>, Code) via keyboard_types `Code::from_str` on a normalized W3C name.
+- Wired: theme → all colors; opacity → `clear_color`; font_size → `render_grid`; hotkey →
+  registration; quake height_pct + hide_on_focus_loss; detect_progress → ProgressScanner.
+- `config.example.toml` shipped in the repo for reference.
+- 17 tests green (added config defaults, partial-TOML merge, hotkey parse table, garbage
+  fallback). Theme switch NOT yet human-verified.
+- Deferred: blur (needs window vibrancy, not just opacity), custom font family (needs font
+  file loading), keybind config (M5), live hot-reload (M4.5, `notify`).
 
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even

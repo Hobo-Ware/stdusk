@@ -1,41 +1,23 @@
 //! stdusk - a quake terminal with a real GUI tab bar.
-//! M0: chrome. M1: live shell per tab.
+//! M0 chrome · M1 shell · M1.5 progress · M2 colors · M3 quake · M4 theming+config.
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use eframe::egui;
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 mod colors;
+mod config;
 mod osc;
 mod progress;
 mod terminal;
+use config::Config;
 use progress::Progress;
 use terminal::{GridSnap, PtyTerm};
 
 const COLS: usize = 80;
 const ROWS: usize = 24;
-const FONT_SIZE: f32 = 13.0;
-
-mod palette {
-    use eframe::egui::Color32;
-    pub const BG: Color32 = Color32::from_rgb(0x28, 0x2c, 0x34);
-    pub const PANEL: Color32 = Color32::from_rgb(0x21, 0x25, 0x2b);
-    pub const FG: Color32 = Color32::from_rgb(0xdc, 0xdf, 0xe4);
-    pub const DIM: Color32 = Color32::from_rgb(0x5c, 0x63, 0x70);
-    pub const ELEVATED: Color32 = Color32::from_rgb(0x2c, 0x31, 0x3a); // active-tab bg
-    pub const ACCENT: Color32 = Color32::from_rgb(0x61, 0xaf, 0xef);
-    pub const GREEN: Color32 = Color32::from_rgb(0x98, 0xc3, 0x79);
-    pub const YELLOW: Color32 = Color32::from_rgb(0xe5, 0xc0, 0x7b);
-    pub const RED: Color32 = Color32::from_rgb(0xe0, 0x6c, 0x75);
-    pub const PURPLE: Color32 = Color32::from_rgb(0xc6, 0x78, 0xdd);
-    pub const CYAN: Color32 = Color32::from_rgb(0x56, 0xb6, 0xc2);
-
-    /// Palette offered by the M5 right-click Color menu (tabs are colorless by default).
-    #[allow(dead_code)] // consumed by the M5 color picker
-    pub const TAB_COLORS: [Color32; 6] = [RED, ACCENT, YELLOW, PURPLE, GREEN, CYAN];
-}
 
 struct Tab {
     title: String,
@@ -43,17 +25,18 @@ struct Tab {
     term: PtyTerm,
 }
 
-fn spawn_tab(ctx: &egui::Context) -> Tab {
+fn spawn_tab(ctx: &egui::Context, detect_progress: bool) -> Tab {
     Tab {
         title: "zsh".into(),
         color: None,
-        term: PtyTerm::spawn(COLS, ROWS, ctx.clone()),
+        term: PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect_progress),
     }
 }
 
 struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
+    cfg: Config,
     _hotkey: GlobalHotKeyManager, // kept alive so the registration persists
     toggle: Arc<AtomicBool>,      // set by the hotkey thread, consumed in ui()
     visible: bool,
@@ -62,13 +45,14 @@ struct Stdusk {
 }
 
 impl Stdusk {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, cfg: Config) -> Self {
         apply_theme(&cc.egui_ctx);
 
-        // Global quake hotkey (default Ctrl+`; config-driven in M4). Carbon API on
-        // macOS - no Accessibility grant needed.
+        // Global quake hotkey from config (default Ctrl+`). Carbon API on macOS - no
+        // Accessibility grant needed.
         let mgr = GlobalHotKeyManager::new().expect("hotkey manager");
-        let _ = mgr.register(HotKey::new(Some(Modifiers::CONTROL), Code::Backquote));
+        let (mods, code) = config::parse_hotkey(&cfg.quake.hotkey);
+        let _ = mgr.register(HotKey::new(mods, code));
 
         // A thread wakes the UI (even while hidden) when the hotkey fires.
         let toggle = Arc::new(AtomicBool::new(false));
@@ -84,9 +68,11 @@ impl Stdusk {
             }
         });
 
+        let detect = cfg.terminal.detect_progress;
         Self {
-            tabs: vec![spawn_tab(&cc.egui_ctx)],
+            tabs: vec![spawn_tab(&cc.egui_ctx, detect)],
             active: 0,
+            cfg,
             _hotkey: mgr,
             toggle,
             visible: true,
@@ -100,21 +86,19 @@ impl Stdusk {
 ///
 /// We do NOT use `Visible(false)` or move fully off-screen: on macOS that lets the OS
 /// occlude the window and App-Nap the process, which throttles the run loop so the global
-/// hotkey handler never fires again (it can't be brought back). Instead we park the window
-/// mostly below the screen, leaving a ~2px sliver on-screen so it stays un-occluded and the
-/// run loop keeps delivering the hotkey. Combined with a repaint tick while hidden. A proper
-/// native hide (NSPanel orderOut) is a polish item.
-fn apply_visibility(ctx: &egui::Context, visible: bool) {
+/// hotkey handler never fires again. Instead we park the window mostly below the screen,
+/// leaving a ~2px sliver on-screen so it stays un-occluded and the run loop keeps delivering
+/// the hotkey. A proper native hide (NSPanel orderOut) is a polish item.
+fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
-    let height = mon.map(|m| (m.y * 0.5).round()).unwrap_or(500.0);
     if visible {
         if let Some(m) = mon {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(m.x, height)));
+            let h = (m.y * height_pct).round();
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(m.x, h)));
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
-        // Park just off the bottom edge, leaving a 2px sliver on-screen.
         let y = mon.map(|m| m.y - 2.0).unwrap_or(2000.0);
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
     }
@@ -122,13 +106,13 @@ fn apply_visibility(ctx: &egui::Context, visible: bool) {
 
 fn apply_theme(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
-    v.panel_fill = palette::BG;
-    v.window_fill = palette::BG;
-    v.override_text_color = Some(palette::FG);
+    v.panel_fill = colors::bg();
+    v.window_fill = colors::bg();
+    v.override_text_color = Some(colors::fg());
     ctx.set_visuals(v);
 }
 
-/// Flat Tabby-style tab: dark bg (elevated when active), a thin per-tab colored underline,
+/// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline,
 /// and progress rendered as a thin bar on the TOP edge.
 fn draw_tab(
     ui: &mut egui::Ui,
@@ -138,13 +122,13 @@ fn draw_tab(
     color: Option<egui::Color32>,
     progress: Progress,
 ) -> egui::Response {
-    let fg = if active { palette::FG } else { palette::DIM };
+    let fg = if active { colors::fg() } else { colors::dim() };
     let mut rt = egui::RichText::new(format!("{idx}  {title}")).color(fg).monospace();
     if active {
         rt = rt.strong();
     }
     let fill = if active {
-        palette::ELEVATED
+        colors::elevated()
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -185,10 +169,10 @@ fn draw_tab(
 fn progress_bar(p: Progress) -> Option<(f32, egui::Color32)> {
     match p {
         Progress::None => None,
-        Progress::Normal(v) => Some((v as f32 / 100.0, palette::GREEN)),
-        Progress::Paused(v) => Some((v as f32 / 100.0, palette::YELLOW)),
-        Progress::Error(_) => Some((1.0, palette::RED)),
-        Progress::Indeterminate => Some((1.0, palette::ACCENT)),
+        Progress::Normal(v) => Some((v as f32 / 100.0, colors::green())),
+        Progress::Paused(v) => Some((v as f32 / 100.0, colors::yellow())),
+        Progress::Error(_) => Some((1.0, colors::red())),
+        Progress::Indeterminate => Some((1.0, colors::accent())),
     }
 }
 
@@ -202,7 +186,6 @@ fn collect_input(ui: &egui::Ui) -> Vec<u8> {
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
                     use egui::Key;
                     if modifiers.ctrl {
-                        // Ctrl+A..Z -> control bytes 0x01..0x1a
                         if let Some(off) = ctrl_letter(*key) {
                             out.push(off);
                         }
@@ -240,17 +223,23 @@ fn ctrl_letter(key: egui::Key) -> Option<u8> {
 
 impl eframe::App for Stdusk {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        [0.157, 0.173, 0.204, 0.85] // translucent OneHalfDark bg
+        let bg = colors::bg();
+        [
+            bg.r() as f32 / 255.0,
+            bg.g() as f32 / 255.0,
+            bg.b() as f32 / 255.0,
+            self.cfg.appearance.opacity,
+        ]
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let height_pct = self.cfg.quake.height_pct;
 
-        // First run: apply full quake sizing once the monitor size is known (it's not
-        // populated on frame 0, so retry until it is).
+        // First run: apply full quake sizing once the monitor size is known.
         if !self.sized {
             if ctx.input(|i| i.viewport().monitor_size).is_some() {
-                apply_visibility(&ctx, true);
+                apply_visibility(&ctx, true, height_pct);
                 self.sized = true;
             } else {
                 ctx.request_repaint();
@@ -260,29 +249,28 @@ impl eframe::App for Stdusk {
         // Quake toggle (from the global-hotkey thread).
         if self.toggle.swap(false, Ordering::SeqCst) {
             self.visible = !self.visible;
-            apply_visibility(&ctx, self.visible);
+            apply_visibility(&ctx, self.visible, height_pct);
             if self.visible {
-                self.was_focused = false; // wait to regain focus before blur can hide us
+                self.was_focused = false;
             }
         }
-        // Hide when focus is lost (after we've actually gained it since showing).
+        // Hide on focus loss (after we've gained focus since showing), if enabled.
         let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
         if self.visible {
             if focused {
                 self.was_focused = true;
-            } else if self.was_focused {
+            } else if self.was_focused && self.cfg.quake.hide_on_focus_loss {
                 self.visible = false;
-                apply_visibility(&ctx, false);
+                apply_visibility(&ctx, false, height_pct);
             }
         } else {
-            // Keep the loop alive while hidden so the hotkey toggle is polled.
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }
 
         egui::Panel::top("tabbar")
             .frame(
                 egui::Frame::new()
-                    .fill(palette::PANEL)
+                    .fill(colors::panel())
                     .inner_margin(egui::Margin::symmetric(6, 4)),
             )
             .show(ui, |ui| {
@@ -301,7 +289,8 @@ impl eframe::App for Stdusk {
                     }
                     if ui.button("  +  ").clicked() {
                         let ctx = ui.ctx().clone();
-                        self.tabs.push(spawn_tab(&ctx));
+                        let detect = self.cfg.terminal.detect_progress;
+                        self.tabs.push(spawn_tab(&ctx, detect));
                         self.active = self.tabs.len() - 1;
                     }
                 });
@@ -310,7 +299,7 @@ impl eframe::App for Stdusk {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(palette::BG)
+                    .fill(colors::bg())
                     .inner_margin(egui::Margin::same(12)),
             )
             .show(ui, |ui| {
@@ -318,18 +307,19 @@ impl eframe::App for Stdusk {
                 if !input.is_empty() {
                     self.tabs[self.active].term.send(&input);
                 }
-                render_grid(ui, &self.tabs[self.active].term.grid_snapshot());
+                let snap = self.tabs[self.active].term.grid_snapshot();
+                render_grid(ui, &snap, self.cfg.appearance.font_size);
             });
     }
 }
 
 /// Paint the terminal grid: per-cell bg rects + fg glyphs + a beam cursor.
-fn render_grid(ui: &mut egui::Ui, snap: &GridSnap) {
-    let font = egui::FontId::monospace(FONT_SIZE);
+fn render_grid(ui: &mut egui::Ui, snap: &GridSnap, font_size: f32) {
+    let font = egui::FontId::monospace(font_size);
     // Cell metrics from a monospace glyph (advance width + line height).
     let m = ui
         .painter()
-        .layout_no_wrap("M".to_owned(), font.clone(), colors::FG);
+        .layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
     let cw = m.size().x;
     let ch = m.size().y;
     let size = egui::vec2(cw * snap.cols as f32, ch * snap.rows as f32);
@@ -355,11 +345,14 @@ fn render_grid(ui: &mut egui::Ui, snap: &GridSnap) {
     painter.rect_filled(
         egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)),
         0.0,
-        colors::FG,
+        colors::cursor(),
     );
 }
 
 fn main() -> eframe::Result<()> {
+    let cfg = Config::load();
+    colors::init(colors::by_name(&cfg.appearance.theme));
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_decorations(false)
@@ -371,6 +364,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "stdusk",
         options,
-        Box::new(|cc| Ok(Box::new(Stdusk::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(Stdusk::new(cc, cfg)))),
     )
 }

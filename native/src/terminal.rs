@@ -74,7 +74,7 @@ pub struct PtyTerm {
 }
 
 impl PtyTerm {
-    pub fn spawn(cols: usize, rows: usize, ctx: egui::Context) -> Self {
+    pub fn spawn(cols: usize, rows: usize, ctx: egui::Context, detect_progress: bool) -> Self {
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -105,7 +105,7 @@ impl PtyTerm {
         let state_reader = state.clone();
         thread::spawn(move || {
             let mut parser: Processor = Processor::new();
-            let mut prog = ProgressScanner::new(true);
+            let mut prog = ProgressScanner::new(detect_progress);
             let mut osc = OscScanner::new();
             let mut buf = [0u8; 8192];
             loop {
@@ -155,6 +155,7 @@ impl PtyTerm {
         self.state.lock().unwrap().progress
     }
 
+    #[allow(dead_code)] // surfaced in the tab bar / new-tab-in-cwd (M5)
     pub fn cwd(&self) -> Option<String> {
         self.state.lock().unwrap().cwd.clone()
     }

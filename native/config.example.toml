@@ -1,0 +1,15 @@
+# stdusk config - copy to ~/.config/stdusk/config.toml and edit.
+# Every field is optional; omitted fields use these defaults.
+
+[appearance]
+theme = "one-half-dark"   # built-ins: one-half-dark | dracula | tokyo-night
+opacity = 0.85            # window background opacity, 0.0-1.0
+font_size = 13.0
+
+[quake]
+hotkey = "Ctrl+Grave"     # e.g. "F13", "Cmd+Grave", "F12", "Ctrl+Shift+T"
+height_pct = 0.5          # fraction of screen height when dropped down
+hide_on_focus_loss = true
+
+[terminal]
+detect_progress = true    # scrape N% from output into the tab progress bar (Tabby-style)
