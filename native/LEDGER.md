@@ -189,6 +189,21 @@ cargo test             # unit + headless integration
   flow from the left (nested `left_to_right`). Close `X` on active/hovered tab via `ui.put`.
   `icon_button()` helper = frameless Phosphor button.
 
+### Tab-bar polish round 2 (user: "not aligned, no hover feedback, no separation")
+- **Distinct tab-bar strip**: the Panel frame fills `colors::titlebar()` (darker than body) with
+  top-rounded corners; a `border()` hairline is drawn under it. Body stays `bg`. Clear separation.
+- **Hover feedback**: `icon_button` is now a fixed 32x30 box drawn manually (allocate_exact_size)
+  - paints a `hover()` highlight rect + brightens the glyph on hover, returns the Response.
+  Close `X` on tabs got the same treatment.
+- **Tab manager**: `egui::Popup::menu(&icon_button_response).show(...)` (0.35 API) - styled popup,
+  not the faint `menu_button`.
+- **GOTCHA - edge strokes clipped by row layout**: the nested `left_to_right` layout's clip cut
+  off each tab's top/bottom 2-3px, so the colored underline + progress bar were invisible.
+  `ui.painter()` AND `ui.painter_at(rect)` both intersect that clip -> still clipped. Fix: draw
+  edge strokes on a foreground layer painter `ctx.layer_painter(LayerId::new(Order::Foreground,
+  Id::new("tab_deco")))`. Coords stay in the tab-bar region so it doesn't overlap the body.
+- Icon glyphs optically centered with a +1px y nudge (Phosphor ink sits high in the line box).
+
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even
   when cargo failed. Use `cargo build 2>build.log; echo $?` and grep build.log for `^error`.

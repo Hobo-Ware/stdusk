@@ -61,14 +61,23 @@ fn basename(p: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
-/// A frameless Phosphor-icon button; returns true if clicked.
-fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> bool {
-    ui.add(
-        egui::Button::new(egui::RichText::new(icon).size(18.0).color(colors::dim()))
-            .frame(false),
-    )
-    .on_hover_text(tip)
-    .clicked()
+/// A fixed-size Phosphor-icon button with hover feedback. Returns the Response
+/// (so callers can anchor a popup or read `.clicked()`).
+fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(32.0, 30.0), egui::Sense::click());
+    let hovered = resp.hovered();
+    if hovered {
+        ui.painter().rect_filled(rect, 6.0, colors::hover());
+    }
+    let color = if hovered { colors::fg() } else { colors::dim() };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(17.0),
+        color,
+    );
+    resp.on_hover_text(tip)
 }
 
 /// Truncate to `max` chars with an ellipsis; returns (shown, was_truncated).
@@ -149,8 +158,8 @@ impl Stdusk {
                 t.title = name.into();
                 t.renamed = true;
             }
-            tabs[0].color = Some(colors::tab_colors()[0]);
-            tabs[3].color = Some(colors::tab_colors()[4]);
+            tabs[0].color = Some(colors::tab_colors()[0]); // red
+            tabs[3].color = Some(colors::tab_colors()[4]); // green
             active = 1;
             sized = true;
         }
@@ -316,12 +325,17 @@ fn draw_tab(
             }
         });
     let rect = inner.response.rect;
+    // A foreground-layer painter: the row layout's clip cuts off the tab's top/bottom edges,
+    // so edge strokes (underline, progress) must be drawn on an unclipped layer.
+    let dp = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tab_deco")));
     // Per-tab color underline (bottom edge) - only when the user set a color.
     if let Some(color) = color {
-        ui.painter().rect_filled(
+        dp.rect_filled(
             egui::Rect::from_min_size(
-                egui::pos2(rect.left(), rect.bottom() - 2.0),
-                egui::vec2(rect.width(), 2.0),
+                egui::pos2(rect.left(), rect.bottom() - 3.0),
+                egui::vec2(rect.width(), 3.0),
             ),
             0.0,
             color,
@@ -329,7 +343,7 @@ fn draw_tab(
     }
     // Progress bar (top edge).
     if let Some((frac, pcolor)) = progress_bar(progress) {
-        ui.painter().rect_filled(
+        dp.rect_filled(
             egui::Rect::from_min_size(
                 egui::pos2(rect.left(), rect.top()),
                 egui::vec2(rect.width() * frac, 2.0),
@@ -338,19 +352,26 @@ fn draw_tab(
             pcolor,
         );
     }
-    // Close x, revealed on the active or hovered tab.
+    // Close x, revealed on the active or hovered tab, with its own hover feedback.
     let mut close = false;
     if active || inner.response.hovered() {
         let x_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - 20.0, rect.center().y - 8.0),
-            egui::vec2(16.0, 16.0),
+            egui::pos2(rect.right() - 22.0, rect.center().y - 9.0),
+            egui::vec2(18.0, 18.0),
         );
-        let x = ui.put(
-            x_rect,
-            egui::Button::new(egui::RichText::new(ph::X).size(13.0).color(colors::dim()))
-                .frame(false),
+        let xr = ui.interact(x_rect, ui.id().with(("close", idx)), egui::Sense::click());
+        let xh = xr.hovered();
+        if xh {
+            ui.painter().rect_filled(x_rect, 5.0, colors::hover());
+        }
+        ui.painter().text(
+            x_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            ph::X,
+            egui::FontId::proportional(13.0),
+            if xh { colors::fg() } else { colors::dim() },
         );
-        if x.clicked() {
+        if xr.clicked() {
             close = true;
         }
     }
@@ -542,10 +563,13 @@ impl eframe::App for Stdusk {
         // Tab bar. Collect clicks + menu actions; apply after the panel to avoid borrow clashes.
         let mut clicked: Option<usize> = None;
         let mut action: Option<TabAction> = None;
-        egui::Panel::top("tabbar")
+        let bar = egui::Panel::top("tabbar")
             .frame(
                 egui::Frame::new()
-                    .fill(egui::Color32::TRANSPARENT)
+                    // Distinct darker strip with rounded top corners, so the bar reads
+                    // separately from the terminal body.
+                    .fill(tint(colors::titlebar(), opacity))
+                    .corner_radius(egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
                     .inner_margin(egui::Margin::symmetric(8, 6)),
             )
             .show(ui, |ui| {
@@ -553,7 +577,7 @@ impl eframe::App for Stdusk {
                     // Gear pinned to the far right; everything else flows from the left.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(4.0);
-                        if icon_button(ui, ph::GEAR, "Settings (config.toml)") {
+                        if icon_button(ui, ph::GEAR, "Settings (config.toml)").clicked() {
                             if let Some(p) = config::ensure_and_path() {
                                 let _ = std::process::Command::new("open").arg(p).spawn();
                             }
@@ -579,28 +603,31 @@ impl eframe::App for Stdusk {
                                 resp.context_menu(|ui| tab_menu(ui, i, &mut action));
                             }
                             // New tab + tab manager, right after the tabs.
-                            ui.add_space(8.0);
-                            if icon_button(ui, ph::PLUS, "New tab") {
+                            ui.add_space(6.0);
+                            if icon_button(ui, ph::PLUS, "New tab").clicked() {
                                 action = Some(TabAction::New);
                             }
-                            ui.add_space(2.0);
-                            ui.menu_button(
-                                egui::RichText::new(ph::APP_WINDOW).size(18.0).color(colors::dim()),
-                                |ui| {
-                                    ui.label(
-                                        egui::RichText::new("Tabs").small().color(colors::dim()),
-                                    );
-                                    for (i, tab) in self.tabs.iter().enumerate() {
-                                        if ui.button(format!("{}  {}", i + 1, tab.title)).clicked() {
-                                            clicked = Some(i);
-                                        }
+                            let mgr = icon_button(ui, ph::APP_WINDOW, "Tabs");
+                            egui::Popup::menu(&mgr).show(|ui| {
+                                ui.set_min_width(200.0);
+                                for (i, tab) in self.tabs.iter().enumerate() {
+                                    if ui.button(format!("{}   {}", i + 1, tab.title)).clicked() {
+                                        clicked = Some(i);
                                     }
-                                },
-                            );
+                                }
+                            });
                         });
                     });
                 });
             });
+
+        // Hairline under the tab bar to delineate it from the terminal body.
+        let br = bar.response.rect;
+        ui.painter().hline(
+            br.x_range(),
+            br.bottom() - 0.5,
+            egui::Stroke::new(1.0, colors::border()),
+        );
 
         // Apply tab-bar clicks + keybinds + menu action (all structural mutations here).
         if let Some(i) = clicked {

@@ -105,7 +105,18 @@ pub fn yellow() -> Color32 {
     theme().ansi[3]
 }
 pub fn elevated() -> Color32 {
-    shade(theme().bg, 1.22) // slightly lighter than bg (active tab)
+    shade(theme().bg, 1.28) // active-tab bg, lighter than the bar
+}
+pub fn titlebar() -> Color32 {
+    shade(theme().bg, 0.72) // tab-bar strip, darker than the body for separation
+}
+pub fn border() -> Color32 {
+    shade(theme().bg, 1.6) // hairline divider
+}
+/// Subtle hover-highlight fill for icon buttons.
+pub fn hover() -> Color32 {
+    let e = elevated();
+    Color32::from_rgba_unmultiplied(e.r(), e.g(), e.b(), 160)
 }
 /// Swatches offered by the right-click Color menu.
 pub fn tab_colors() -> [Color32; 6] {
