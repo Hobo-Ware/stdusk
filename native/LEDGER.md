@@ -34,7 +34,8 @@ cargo test             # unit + headless integration
 | M3 | Quake: configurable global hotkey (default Ctrl+`) | ✅ done, human-verified (toggle + hide/show + first-run sizing) |
 | M4 | Theming + config.toml (Tabby-default parity) | ✅ done, human-verified (themes + opacity + hotkey + font/height/progress) |
 | M5 | Tab mgmt: context menu, color, rename, reorder, keybinds, cwd | 🟡 code done, builds + 17 tests green, pending human verify |
-| M6 | Resize + scrollback + copy/paste | todo |
+| M6 | Resize + scrollback + paste + OSC52 + bracketed-paste | 🟡 code done, builds + 17 tests green, pending human verify |
+| M6.5 | Mouse text selection + Cmd+C copy | todo (split from M6 - real work: drag + alacritty Selection + highlight) |
 | M7 | Scrollback search | todo |
 | M8 | Split panes | todo |
 | M9 | Shell integration (OSC 133) + exit state dot | todo |
@@ -148,6 +149,22 @@ cargo test             # unit + headless integration
   that doesn't emit it leaves the title as "zsh" and new tabs inherit the process cwd.
 - close_tab never leaves zero tabs (spawns a fresh one); active index clamped.
 - 17 tests green (no new unit tests - this is UI-heavy; verified by human run).
+
+### M6 - resize + scrollback + paste + clipboard (`terminal.rs`, `main.rs`)
+- **Resize**: `PtyTerm` now stores the pty `master: Box<dyn MasterPty + Send>` (was dropped!).
+  `resize(cols,rows)` → `master.resize(PtySize)` + `term.resize(Dims)` (Term::resize<S:Dimensions>).
+  main computes cols/rows each frame from `ui.available_size() / cell metrics`; no longer fixed 80x24.
+- **Scrollback**: comes free from `Config::default().scrolling_history` (10k) - no Dims history
+  needed. `grid_snapshot` renders via `grid.display_iter()` (row-major over the visible viewport,
+  honors scroll offset). Wheel → `term.scroll(Scroll::Delta(lines))` from `smooth_scroll_delta.y`
+  (NOT `raw_scroll_delta` - doesn't exist in egui 0.35). Typing/paste → `scroll_to_bottom`.
+  Cursor is `Option` now - `None` while scrolled into history (hidden).
+- **Paste**: egui emits `Event::Paste(String)` on Cmd+V; `term.paste()` wraps in `\x1b[200~..\x1b[201~`
+  when `TermMode::BRACKETED_PASTE` is set.
+- **OSC 52**: reader decodes base64 (`base64` crate) → `TabState.clipboard`; UI takes it →
+  `ctx.copy_text()`. Copy-FROM-selection (Cmd+C) is M6.5.
+- **Selection + Cmd+C copy deferred to M6.5** - needs mouse drag tracking + alacritty `Selection`
+  + highlight rendering + cell hit-testing. Real work, kept out of M6 to stay shippable.
 
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even

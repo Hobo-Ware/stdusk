@@ -498,6 +498,11 @@ impl eframe::App for Stdusk {
 
         self.rename_window(&ctx);
 
+        // OSC 52: a shell "copy" request -> the system clipboard.
+        if let Some(text) = self.tabs.get(self.active).and_then(|t| t.term.take_clipboard()) {
+            ctx.copy_text(text);
+        }
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
@@ -505,25 +510,60 @@ impl eframe::App for Stdusk {
                     .inner_margin(egui::Margin::same(12)),
             )
             .show(ui, |ui| {
+                let term = &mut self.tabs[self.active].term;
+
+                // Keystrokes -> pty; typing jumps back to the live bottom.
                 let input = collect_input(ui);
                 if !input.is_empty() {
-                    self.tabs[self.active].term.send(&input);
+                    term.send(&input);
+                    term.scroll_to_bottom();
                 }
-                let snap = self.tabs[self.active].term.grid_snapshot();
-                render_grid(ui, &snap, self.cfg.appearance.font_size);
+
+                // Paste (Cmd+V -> egui Paste event); bracketed if the app requested it.
+                let pastes: Vec<String> = ui.input(|i| {
+                    i.events
+                        .iter()
+                        .filter_map(|e| match e {
+                            egui::Event::Paste(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                });
+                for p in pastes {
+                    term.paste(&p);
+                    term.scroll_to_bottom();
+                }
+
+                // Cell metrics + wheel scrollback.
+                let font = egui::FontId::monospace(self.cfg.appearance.font_size);
+                let m = ui
+                    .painter()
+                    .layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
+                let (cw, ch) = (m.size().x, m.size().y);
+
+                let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll_y != 0.0 {
+                    let mut lines = (scroll_y / ch).round() as i32;
+                    if lines == 0 {
+                        lines = scroll_y.signum() as i32; // ensure small deltas still move
+                    }
+                    term.scroll(lines);
+                }
+
+                // Resize pty + grid to fit the available area.
+                let avail = ui.available_size();
+                let cols = (avail.x / cw).floor().max(1.0) as usize;
+                let rows = (avail.y / ch).floor().max(1.0) as usize;
+                term.resize(cols, rows);
+
+                let snap = term.grid_snapshot();
+                render_grid(ui, &snap, cw, ch, &font);
             });
     }
 }
 
 /// Paint the terminal grid: per-cell bg rects + fg glyphs + a beam cursor.
-fn render_grid(ui: &mut egui::Ui, snap: &GridSnap, font_size: f32) {
-    let font = egui::FontId::monospace(font_size);
-    // Cell metrics from a monospace glyph (advance width + line height).
-    let m = ui
-        .painter()
-        .layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
-    let cw = m.size().x;
-    let ch = m.size().y;
+fn render_grid(ui: &mut egui::Ui, snap: &GridSnap, cw: f32, ch: f32, font: &egui::FontId) {
     let size = egui::vec2(cw * snap.cols as f32, ch * snap.rows as f32);
     let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
     let origin = resp.rect.min;
@@ -541,14 +581,15 @@ fn render_grid(ui: &mut egui::Ui, snap: &GridSnap, font_size: f32) {
         }
     }
 
-    // Beam cursor (block/underline styles land in M9).
-    let (cr, cc) = snap.cursor;
-    let cpos = origin + egui::vec2(cc as f32 * cw, cr as f32 * ch);
-    painter.rect_filled(
-        egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)),
-        0.0,
-        colors::cursor(),
-    );
+    // Beam cursor (block/underline styles land in M9); hidden while scrolled into history.
+    if let Some((cr, cc)) = snap.cursor {
+        let cpos = origin + egui::vec2(cc as f32 * cw, cr as f32 * ch);
+        painter.rect_filled(
+            egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)),
+            0.0,
+            colors::cursor(),
+        );
+    }
 }
 
 fn main() -> eframe::Result<()> {

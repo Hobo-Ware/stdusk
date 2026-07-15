@@ -306,7 +306,8 @@ get for free because we build on well-tested crates + the wider ecosystem:
 | **M3** | Quake: configurable global hotkey (default Ctrl+\`), drop anim, hide-on-blur, monitor width | toggle works, hotkey parsed from config, no Accessibility prompt | |
 | **M4** | Theming + config.toml (Tabby-default parity) | config tests green; palette/opacity/blur/font | |
 | **M5** | Tab mgmt: context menu, color coding, rename, reorder, keybinds | menu ops + colors verified | |
-| **M6** | Resize + scrollback + copy/paste + bracketed-paste + OSC 52 | `tput cols` matches; wheel scrolls; copy works | |
+| **M6** | Resize + scrollback + paste + bracketed-paste + OSC 52 | `tput cols` matches; wheel scrolls; paste works | |
+| **M6.5** | Mouse text selection + Cmd+C copy | drag selects, highlight renders, copy works | |
 | **M7** | Scrollback search (Cmd+F) | find/highlight/cycle | |
 | **M8** | Split panes (pane tree, focus, drag-resize, per-pane pty) | split/close/navigate; each pane sizes | |
 | **M9** | Shell integration (OSC 133) → exit-code state dot; bell; cursor styles | dot flips on exit; checklist green | |
