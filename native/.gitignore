@@ -3,3 +3,6 @@
 
 # scratch build logs
 /build.log
+
+# scratch logs
+*.log
