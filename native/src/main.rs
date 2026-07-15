@@ -104,6 +104,16 @@ fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     }
 }
 
+/// Apply window opacity to a fill color (straight alpha).
+fn tint(c: egui::Color32, opacity: f32) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(
+        c.r(),
+        c.g(),
+        c.b(),
+        (opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
 fn apply_theme(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = colors::bg();
@@ -223,18 +233,14 @@ fn ctrl_letter(key: egui::Key) -> Option<u8> {
 
 impl eframe::App for Stdusk {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        let bg = colors::bg();
-        [
-            bg.r() as f32 / 255.0,
-            bg.g() as f32 / 255.0,
-            bg.b() as f32 / 255.0,
-            self.cfg.appearance.opacity,
-        ]
+        // Transparent framebuffer; the panel fills below carry the tint at `opacity`.
+        [0.0, 0.0, 0.0, 0.0]
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let height_pct = self.cfg.quake.height_pct;
+        let opacity = self.cfg.appearance.opacity;
 
         // First run: apply full quake sizing once the monitor size is known.
         if !self.sized {
@@ -270,7 +276,7 @@ impl eframe::App for Stdusk {
         egui::Panel::top("tabbar")
             .frame(
                 egui::Frame::new()
-                    .fill(colors::panel())
+                    .fill(tint(colors::panel(), opacity))
                     .inner_margin(egui::Margin::symmetric(6, 4)),
             )
             .show(ui, |ui| {
@@ -299,7 +305,7 @@ impl eframe::App for Stdusk {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(colors::bg())
+                    .fill(tint(colors::bg(), opacity))
                     .inner_margin(egui::Margin::same(12)),
             )
             .show(ui, |ui| {
