@@ -74,7 +74,13 @@ pub struct PtyTerm {
 }
 
 impl PtyTerm {
-    pub fn spawn(cols: usize, rows: usize, ctx: egui::Context, detect_progress: bool) -> Self {
+    pub fn spawn(
+        cols: usize,
+        rows: usize,
+        ctx: egui::Context,
+        detect_progress: bool,
+        cwd: Option<String>,
+    ) -> Self {
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -86,7 +92,10 @@ impl PtyTerm {
             .expect("openpty");
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let cmd = CommandBuilder::new(shell);
+        let mut cmd = CommandBuilder::new(shell);
+        if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
+            cmd.cwd(dir);
+        }
         let _child = pair.slave.spawn_command(cmd).expect("spawn shell");
         drop(pair.slave);
 
@@ -155,7 +164,6 @@ impl PtyTerm {
         self.state.lock().unwrap().progress
     }
 
-    #[allow(dead_code)] // surfaced in the tab bar / new-tab-in-cwd (M5)
     pub fn cwd(&self) -> Option<String> {
         self.state.lock().unwrap().cwd.clone()
     }

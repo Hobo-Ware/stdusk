@@ -32,8 +32,8 @@ cargo test             # unit + headless integration
 | M2 | Colored cell renderer + cursor | ✅ done, human-verified (real colors + cursor) |
 | M2.5 | Clickable links | todo |
 | M3 | Quake: configurable global hotkey (default Ctrl+`) | ✅ done, human-verified (toggle + hide/show + first-run sizing) |
-| M4 | Theming + config.toml (Tabby-default parity) | 🟡 code done, builds + 17 tests green, theme-switch pending human verify |
-| M5 | Tab mgmt: context menu, color, rename, reorder | todo |
+| M4 | Theming + config.toml (Tabby-default parity) | ✅ done, human-verified (themes + opacity + hotkey + font/height/progress) |
+| M5 | Tab mgmt: context menu, color, rename, reorder, keybinds, cwd | 🟡 code done, builds + 17 tests green, pending human verify |
 | M6 | Resize + scrollback + copy/paste | todo |
 | M7 | Scrollback search | todo |
 | M8 | Split panes | todo |
@@ -132,6 +132,22 @@ cargo test             # unit + headless integration
   fallback). Theme switch NOT yet human-verified.
 - Deferred: blur (needs window vibrancy, not just opacity), custom font family (needs font
   file loading), keybind config (M5), live hot-reload (M4.5, `notify`).
+
+### M5 - tab management (`main.rs`, `terminal.rs`)
+- Right-click tab → egui `response.context_menu` (native popup): New tab, Rename…, Color ▶
+  (No color + `colors::tab_colors()` swatches), Move left/right, Close. Menu sets a deferred
+  `TabAction`; all structural mutations applied AFTER the panel `.show()` (avoids borrowing
+  self mutably mid-iteration). egui auto-closes the menu on button click.
+- Keybinds (`i.modifiers.command`): Cmd+T new-in-cwd, Cmd+W close active, Cmd+1..9 switch.
+- Rename: `self.renaming: Option<(usize,String)>` → centered `egui::Window` with a focused
+  text field (Enter/OK commit, Esc/Cancel abort). Sets `Tab.renamed=true` so cwd auto-title stops.
+- **cwd auto-title + new-tab-in-cwd** (low-hanging, uses the OSC 7/1337 cwd from M1.5): unrenamed
+  tabs show `basename(cwd)`; `PtyTerm::spawn` takes an optional starting cwd and sets
+  `CommandBuilder.cwd`. NOTE: only works if the shell emits OSC 7/1337 - macOS default
+  `/etc/zshrc` adds an `update_terminal_cwd` precmd hook that does, so it usually works; a shell
+  that doesn't emit it leaves the title as "zsh" and new tabs inherit the process cwd.
+- close_tab never leaves zero tabs (spawns a fresh one); active index clamped.
+- 17 tests green (no new unit tests - this is UI-heavy; verified by human run).
 
 ## Gotchas / facts learned (don't rediscover these)
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even

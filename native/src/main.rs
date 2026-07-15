@@ -21,16 +21,36 @@ const ROWS: usize = 24;
 
 struct Tab {
     title: String,
-    color: Option<egui::Color32>, // None = no underline (Tabby default); set via M5 menu
+    color: Option<egui::Color32>, // None = no underline (Tabby default); set via the menu
+    renamed: bool,                // once renamed, stop auto-titling from cwd
     term: PtyTerm,
 }
 
-fn spawn_tab(ctx: &egui::Context, detect_progress: bool) -> Tab {
+fn spawn_tab(ctx: &egui::Context, detect_progress: bool, cwd: Option<String>) -> Tab {
     Tab {
         title: "zsh".into(),
         color: None,
-        term: PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect_progress),
+        renamed: false,
+        term: PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect_progress, cwd),
     }
+}
+
+/// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
+enum TabAction {
+    New,
+    Rename(usize),
+    SetColor(usize, Option<egui::Color32>),
+    MoveLeft(usize),
+    MoveRight(usize),
+    Close(usize),
+}
+
+fn basename(p: &str) -> String {
+    let t = p.trim_end_matches('/');
+    if t.is_empty() {
+        return "/".into();
+    }
+    t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
 struct Stdusk {
@@ -42,6 +62,7 @@ struct Stdusk {
     visible: bool,
     was_focused: bool, // gained focus since last show (so blur can hide)
     sized: bool,       // applied quake sizing once the monitor size was known
+    renaming: Option<(usize, String)>, // tab index + edit buffer while renaming
 }
 
 impl Stdusk {
@@ -70,7 +91,7 @@ impl Stdusk {
 
         let detect = cfg.terminal.detect_progress;
         Self {
-            tabs: vec![spawn_tab(&cc.egui_ctx, detect)],
+            tabs: vec![spawn_tab(&cc.egui_ctx, detect, None)],
             active: 0,
             cfg,
             _hotkey: mgr,
@@ -78,6 +99,80 @@ impl Stdusk {
             visible: true,
             was_focused: false, // arm hide-on-blur only after the first focus gain
             sized: false,
+            renaming: None,
+        }
+    }
+
+    fn new_tab(&mut self, ctx: &egui::Context) {
+        let cwd = self.tabs.get(self.active).and_then(|t| t.term.cwd());
+        let detect = self.cfg.terminal.detect_progress;
+        self.tabs.push(spawn_tab(ctx, detect, cwd));
+        self.active = self.tabs.len() - 1;
+    }
+
+    fn close_tab(&mut self, i: usize, ctx: &egui::Context) {
+        if i < self.tabs.len() {
+            self.tabs.remove(i);
+        }
+        if self.tabs.is_empty() {
+            let detect = self.cfg.terminal.detect_progress;
+            self.tabs.push(spawn_tab(ctx, detect, None));
+        }
+        self.active = self.active.min(self.tabs.len() - 1);
+    }
+
+    fn move_tab(&mut self, i: usize, dir: i32) {
+        let j = i as i32 + dir;
+        if j < 0 || j as usize >= self.tabs.len() {
+            return;
+        }
+        let j = j as usize;
+        self.tabs.swap(i, j);
+        if self.active == i {
+            self.active = j;
+        } else if self.active == j {
+            self.active = i;
+        }
+    }
+
+    /// Modal rename field, shown while `self.renaming` is set.
+    fn rename_window(&mut self, ctx: &egui::Context) {
+        let Some((idx, mut buf)) = self.renaming.take() else {
+            return;
+        };
+        let mut commit = false;
+        let mut cancel = false;
+        egui::Window::new("Rename tab")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                let r = ui.text_edit_singleline(&mut buf);
+                r.request_focus();
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    commit = true;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        commit = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        }
+        if commit {
+            if let Some(t) = self.tabs.get_mut(idx) {
+                if !buf.trim().is_empty() {
+                    t.title = buf;
+                }
+                t.renamed = true;
+            }
+        } else if !cancel {
+            self.renaming = Some((idx, buf)); // keep editing next frame
         }
     }
 }
@@ -173,6 +268,42 @@ fn draw_tab(
         );
     }
     inner.response.interact(egui::Sense::click())
+}
+
+/// Right-click tab context menu. Sets `action`; egui auto-closes the menu on any button click.
+fn tab_menu(ui: &mut egui::Ui, i: usize, action: &mut Option<TabAction>) {
+    if ui.button("New tab").clicked() {
+        *action = Some(TabAction::New);
+    }
+    if ui.button("Rename…").clicked() {
+        *action = Some(TabAction::Rename(i));
+    }
+    ui.menu_button("Color", |ui| {
+        if ui.button("No color").clicked() {
+            *action = Some(TabAction::SetColor(i, None));
+        }
+        ui.horizontal(|ui| {
+            for col in colors::tab_colors() {
+                if ui
+                    .button(egui::RichText::new("⬤").color(col))
+                    .clicked()
+                {
+                    *action = Some(TabAction::SetColor(i, Some(col)));
+                }
+            }
+        });
+    });
+    ui.separator();
+    if ui.button("Move left").clicked() {
+        *action = Some(TabAction::MoveLeft(i));
+    }
+    if ui.button("Move right").clicked() {
+        *action = Some(TabAction::MoveRight(i));
+    }
+    ui.separator();
+    if ui.button("Close").clicked() {
+        *action = Some(TabAction::Close(i));
+    }
 }
 
 /// (fill fraction 0..1, color) for the tab progress bar, or None to hide it.
@@ -273,6 +404,42 @@ impl eframe::App for Stdusk {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }
 
+        // Auto-title unrenamed tabs from their cwd (basename).
+        for tab in &mut self.tabs {
+            if !tab.renamed {
+                if let Some(c) = tab.term.cwd() {
+                    tab.title = basename(&c);
+                }
+            }
+        }
+
+        // Browser-style keybinds: Cmd+T new, Cmd+W close, Cmd+1..9 switch.
+        let mut kb_new = false;
+        let mut kb_close = false;
+        let mut kb_switch: Option<usize> = None;
+        ctx.input(|i| {
+            if i.modifiers.command {
+                use egui::Key::*;
+                if i.key_pressed(T) {
+                    kb_new = true;
+                }
+                if i.key_pressed(W) {
+                    kb_close = true;
+                }
+                for (n, k) in [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if i.key_pressed(k) {
+                        kb_switch = Some(n);
+                    }
+                }
+            }
+        });
+
+        // Tab bar. Collect clicks + menu actions; apply after the panel to avoid borrow clashes.
+        let mut clicked: Option<usize> = None;
+        let mut action: Option<TabAction> = None;
         egui::Panel::top("tabbar")
             .frame(
                 egui::Frame::new()
@@ -281,26 +448,55 @@ impl eframe::App for Stdusk {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let mut clicked: Option<usize> = None;
                     for (i, tab) in self.tabs.iter().enumerate() {
                         let active = i == self.active;
-                        if draw_tab(ui, i + 1, &tab.title, active, tab.color, tab.term.progress())
-                            .clicked()
-                        {
+                        let resp =
+                            draw_tab(ui, i + 1, &tab.title, active, tab.color, tab.term.progress());
+                        if resp.clicked() {
                             clicked = Some(i);
                         }
-                    }
-                    if let Some(i) = clicked {
-                        self.active = i;
+                        resp.context_menu(|ui| tab_menu(ui, i, &mut action));
                     }
                     if ui.button("  +  ").clicked() {
-                        let ctx = ui.ctx().clone();
-                        let detect = self.cfg.terminal.detect_progress;
-                        self.tabs.push(spawn_tab(&ctx, detect));
-                        self.active = self.tabs.len() - 1;
+                        action = Some(TabAction::New);
                     }
                 });
             });
+
+        // Apply tab-bar clicks + keybinds + menu action (all structural mutations here).
+        if let Some(i) = clicked {
+            self.active = i;
+        }
+        if let Some(n) = kb_switch {
+            if n < self.tabs.len() {
+                self.active = n;
+            }
+        }
+        if kb_new {
+            action = Some(TabAction::New);
+        }
+        if kb_close {
+            action = Some(TabAction::Close(self.active));
+        }
+        match action {
+            Some(TabAction::New) => self.new_tab(&ctx),
+            Some(TabAction::Rename(i)) => {
+                if let Some(t) = self.tabs.get(i) {
+                    self.renaming = Some((i, t.title.clone()));
+                }
+            }
+            Some(TabAction::SetColor(i, c)) => {
+                if let Some(t) = self.tabs.get_mut(i) {
+                    t.color = c;
+                }
+            }
+            Some(TabAction::MoveLeft(i)) => self.move_tab(i, -1),
+            Some(TabAction::MoveRight(i)) => self.move_tab(i, 1),
+            Some(TabAction::Close(i)) => self.close_tab(i, &ctx),
+            None => {}
+        }
+
+        self.rename_window(&ctx);
 
         egui::CentralPanel::default()
             .frame(

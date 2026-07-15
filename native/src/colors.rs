@@ -110,8 +110,7 @@ pub fn panel() -> Color32 {
 pub fn elevated() -> Color32 {
     shade(theme().bg, 1.22) // slightly lighter than bg (active tab)
 }
-/// Swatches offered by the M5 right-click Color menu.
-#[allow(dead_code)] // consumed by the M5 color picker
+/// Swatches offered by the right-click Color menu.
 pub fn tab_colors() -> [Color32; 6] {
     let a = &theme().ansi;
     [a[1], a[4], a[3], a[5], a[2], a[6]]
