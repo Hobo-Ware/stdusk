@@ -9,6 +9,14 @@ or milestone.** Keep it truthful - if a test is red or a step was skipped, say s
   as reference; the Rust rewrite lives on branch `rust`, crate in `native/`).
 - Full design: [PLAN.md](./PLAN.md). This ledger is the *state*; the plan is the *intent*.
 
+## Visual testing (use this before asking the user about UI!)
+`cargo build && timeout 25 ./target/debug/stdusk --screenshot /tmp/shot.png` renders a frame
+with representative demo tabs (colored, active, long/ellipsized titles) and saves a PNG, then
+exits. Then Read /tmp/shot.png to SEE the result. Iterate UI changes against the screenshot
+instead of round-tripping with the user. Mechanics: eframe's built-in `__screenshot` feature
+(glow backend only - `renderer: Renderer::Glow` + features `["glow","__screenshot"]`), triggered
+by the `EFRAME_SCREENSHOT_TO` env var which `--screenshot` sets. Captures at cumulative pass 2.
+
 ## Resume protocol
 1. Read PLAN.md (intent) + this ledger (state).
 2. Build/test to confirm the ledger matches reality (commands below).

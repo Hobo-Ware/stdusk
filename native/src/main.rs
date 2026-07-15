@@ -90,10 +90,11 @@ struct Stdusk {
     was_focused: bool, // gained focus since last show (so blur can hide)
     sized: bool,       // applied quake sizing once the monitor size was known
     renaming: Option<(usize, String)>, // tab index + edit buffer while renaming
+    screenshot: Option<String>,        // --screenshot PATH: demo tabs, capture, exit
 }
 
 impl Stdusk {
-    fn new(cc: &eframe::CreationContext<'_>, cfg: Config) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, cfg: Config, screenshot: Option<String>) -> Self {
         // Load the Phosphor icon font (used for tab-bar controls + close x) as a fallback
         // in the proportional family, so icon codepoints render in buttons/labels.
         let mut fonts = egui::FontDefinitions::default();
@@ -129,16 +130,42 @@ impl Stdusk {
         });
 
         let detect = cfg.terminal.detect_progress;
+        let mut tabs = vec![spawn_tab(&cc.egui_ctx, detect, None)];
+        let mut active = 0;
+        let mut sized = false;
+
+        // Visual-test harness: populate representative tabs and skip monitor sizing.
+        if screenshot.is_some() {
+            for _ in 0..3 {
+                tabs.push(spawn_tab(&cc.egui_ctx, detect, None));
+            }
+            let titles = [
+                "auth-session",
+                "smart-lists-really-long-name",
+                "cocaine",
+                "deconversion-monitor",
+            ];
+            for (t, name) in tabs.iter_mut().zip(titles) {
+                t.title = name.into();
+                t.renamed = true;
+            }
+            tabs[0].color = Some(colors::tab_colors()[0]);
+            tabs[3].color = Some(colors::tab_colors()[4]);
+            active = 1;
+            sized = true;
+        }
+
         Self {
-            tabs: vec![spawn_tab(&cc.egui_ctx, detect, None)],
-            active: 0,
+            tabs,
+            active,
             cfg,
             _hotkey: mgr,
             toggle,
             visible: true,
             was_focused: false, // arm hide-on-blur only after the first focus gain
-            sized: false,
+            sized,
             renaming: None,
+            screenshot,
         }
     }
 
@@ -281,7 +308,7 @@ fn draw_tab(
     let inner = egui::Frame::new()
         .fill(fill)
         .corner_radius(egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }) // top-rounded tab shape
-        .inner_margin(egui::Margin::symmetric(10, 7))
+        .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             let lbl = ui.add(egui::Label::new(rt).selectable(false));
             if truncated {
@@ -433,35 +460,44 @@ impl eframe::App for Stdusk {
         let height_pct = self.cfg.quake.height_pct;
         let opacity = self.cfg.appearance.opacity;
 
-        // First run: apply full quake sizing once the monitor size is known.
-        if !self.sized {
-            if ctx.input(|i| i.viewport().monitor_size).is_some() {
-                apply_visibility(&ctx, true, height_pct);
-                self.sized = true;
+        // Quake window management is skipped in the screenshot harness.
+        if self.screenshot.is_none() {
+            // First run: apply full quake sizing once the monitor size is known.
+            if !self.sized {
+                if ctx.input(|i| i.viewport().monitor_size).is_some() {
+                    apply_visibility(&ctx, true, height_pct);
+                    self.sized = true;
+                } else {
+                    ctx.request_repaint();
+                }
+            }
+
+            // Quake toggle (from the global-hotkey thread).
+            if self.toggle.swap(false, Ordering::SeqCst) {
+                self.visible = !self.visible;
+                apply_visibility(&ctx, self.visible, height_pct);
+                if self.visible {
+                    self.was_focused = false;
+                }
+            }
+            // Hide on focus loss (after we've gained focus since showing), if enabled.
+            let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+            if self.visible {
+                if focused {
+                    self.was_focused = true;
+                } else if self.was_focused && self.cfg.quake.hide_on_focus_loss {
+                    self.visible = false;
+                    apply_visibility(&ctx, false, height_pct);
+                }
             } else {
-                ctx.request_repaint();
+                ctx.request_repaint_after(std::time::Duration::from_millis(120));
             }
         }
 
-        // Quake toggle (from the global-hotkey thread).
-        if self.toggle.swap(false, Ordering::SeqCst) {
-            self.visible = !self.visible;
-            apply_visibility(&ctx, self.visible, height_pct);
-            if self.visible {
-                self.was_focused = false;
-            }
-        }
-        // Hide on focus loss (after we've gained focus since showing), if enabled.
-        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
-        if self.visible {
-            if focused {
-                self.was_focused = true;
-            } else if self.was_focused && self.cfg.quake.hide_on_focus_loss {
-                self.visible = false;
-                apply_visibility(&ctx, false, height_pct);
-            }
-        } else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(120));
+        // Screenshot harness: keep repainting so eframe's built-in capture (triggered by
+        // EFRAME_SCREENSHOT_TO at pass 2) fires, then it saves the PNG and exits.
+        if self.screenshot.is_some() {
+            ctx.request_repaint();
         }
 
         // Auto-title unrenamed tabs from their cwd (basename).
@@ -510,19 +546,20 @@ impl eframe::App for Stdusk {
             .frame(
                 egui::Frame::new()
                     .fill(egui::Color32::TRANSPARENT)
-                    .inner_margin(egui::Margin::symmetric(6, 4)),
+                    .inner_margin(egui::Margin::symmetric(8, 6)),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Gear pinned to the far right; everything else flows from the left.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(4.0);
                         if icon_button(ui, ph::GEAR, "Settings (config.toml)") {
                             if let Some(p) = config::ensure_and_path() {
                                 let _ = std::process::Command::new("open").arg(p).spawn();
                             }
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 2.0;
+                            ui.spacing_mut().item_spacing.x = 4.0;
                             // Tabs.
                             for (i, tab) in self.tabs.iter().enumerate() {
                                 let active = i == self.active;
@@ -542,10 +579,11 @@ impl eframe::App for Stdusk {
                                 resp.context_menu(|ui| tab_menu(ui, i, &mut action));
                             }
                             // New tab + tab manager, right after the tabs.
-                            ui.add_space(4.0);
+                            ui.add_space(8.0);
                             if icon_button(ui, ph::PLUS, "New tab") {
                                 action = Some(TabAction::New);
                             }
+                            ui.add_space(2.0);
                             ui.menu_button(
                                 egui::RichText::new(ph::APP_WINDOW).size(18.0).color(colors::dim()),
                                 |ui| {
@@ -737,17 +775,35 @@ fn main() -> eframe::Result<()> {
     let cfg = Config::load();
     colors::init(colors::by_name(&cfg.appearance.theme));
 
+    // `--screenshot PATH`: populate demo tabs, render, save the PNG, and exit. Uses eframe's
+    // built-in glow-backend capture via EFRAME_SCREENSHOT_TO.
+    let args: Vec<String> = std::env::args().collect();
+    let screenshot = args
+        .iter()
+        .position(|a| a == "--screenshot")
+        .and_then(|i| args.get(i + 1).cloned());
+    if let Some(path) = &screenshot {
+        // SAFE: single-threaded, set before any threads spawn.
+        unsafe { std::env::set_var("EFRAME_SCREENSHOT_TO", path) };
+    }
+    let size = if screenshot.is_some() {
+        [1400.0, 420.0]
+    } else {
+        [1200.0, 500.0]
+    };
+
     let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Glow, // __screenshot capture requires the glow backend
         viewport: egui::ViewportBuilder::default()
             .with_decorations(false)
             .with_transparent(true)
-            .with_inner_size([1200.0, 500.0])
+            .with_inner_size(size)
             .with_position([0.0, 0.0]),
         ..Default::default()
     };
     eframe::run_native(
         "stdusk",
         options,
-        Box::new(move |cc| Ok(Box::new(Stdusk::new(cc, cfg)))),
+        Box::new(move |cc| Ok(Box::new(Stdusk::new(cc, cfg, screenshot)))),
     )
 }
