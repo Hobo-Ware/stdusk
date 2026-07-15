@@ -7,6 +7,8 @@ use std::thread;
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
@@ -24,6 +26,7 @@ pub struct CellSnap {
     pub c: char,
     pub fg: Color32,
     pub bg: Option<Color32>,
+    pub selected: bool,
 }
 
 /// A frame's worth of visible grid, ready to paint.
@@ -32,6 +35,7 @@ pub struct GridSnap {
     pub rows: usize,
     pub cells: Vec<CellSnap>,   // row-major, rows*cols
     pub cursor: Option<(usize, usize)>, // (row, col); None while scrolled into history
+    pub top_line: i32,          // buffer line of viewport row 0 (for mouse->grid mapping)
 }
 
 /// Per-tab observable state, written by the reader thread, read by the UI.
@@ -242,10 +246,15 @@ impl PtyTerm {
     /// Snapshot the visible viewport (honoring scrollback offset) with colors + cursor.
     pub fn grid_snapshot(&self) -> GridSnap {
         let term = self.term.lock();
+        let selection = term.selection.as_ref().and_then(|s| s.to_range(&term));
         let grid = term.grid();
         let mut cells = Vec::with_capacity(self.rows * self.cols);
+        let mut top_line = -(grid.display_offset() as i32); // fallback; overwritten by first cell
         // display_iter walks the visible region row-major, accounting for scroll offset.
-        for indexed in grid.display_iter() {
+        for (i, indexed) in grid.display_iter().enumerate() {
+            if i == 0 {
+                top_line = indexed.point.line.0;
+            }
             let cell = indexed.cell;
             let inverse = cell.flags.contains(Flags::INVERSE);
             let (fg_c, bg_c) = if inverse {
@@ -258,10 +267,12 @@ impl PtyTerm {
             } else {
                 Some(colors::to_color32(bg_c))
             };
+            let selected = selection.as_ref().is_some_and(|r| r.contains(indexed.point));
             cells.push(CellSnap {
                 c: cell.c,
                 fg: colors::to_color32(fg_c),
                 bg,
+                selected,
             });
         }
         // Cursor only shown when the viewport is at the bottom (not scrolled into history).
@@ -279,6 +290,32 @@ impl PtyTerm {
             rows: self.rows,
             cells,
             cursor,
+            top_line,
         }
+    }
+
+    /// Begin a text selection anchored at a grid point (mapped from mouse coords).
+    pub fn start_selection(&self, line: i32, col: usize, right: bool) {
+        let point = Point::new(Line(line), Column(col));
+        let side = if right { Side::Right } else { Side::Left };
+        self.term.lock().selection = Some(Selection::new(SelectionType::Simple, point, side));
+    }
+
+    /// Extend the in-progress selection to a new grid point (drag).
+    pub fn update_selection(&self, line: i32, col: usize, right: bool) {
+        let point = Point::new(Line(line), Column(col));
+        let side = if right { Side::Right } else { Side::Left };
+        if let Some(sel) = self.term.lock().selection.as_mut() {
+            sel.update(point, side);
+        }
+    }
+
+    pub fn clear_selection(&self) {
+        self.term.lock().selection = None;
+    }
+
+    /// Selected text (for Cmd+C), or None when there's no non-empty selection.
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.lock().selection_to_string().filter(|s| !s.is_empty())
     }
 }

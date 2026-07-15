@@ -43,7 +43,7 @@ cargo test             # unit + headless integration
 | M4 | Theming + config.toml (Tabby-default parity) | ✅ done, human-verified (themes + opacity + hotkey + font/height/progress) |
 | M5 | Tab mgmt: context menu, color, rename, reorder, keybinds, cwd | 🟡 code done, builds + 17 tests green, pending human verify |
 | M6 | Resize + scrollback + paste + OSC52 + bracketed-paste | 🟡 code done, builds + 17 tests green, pending human verify |
-| M6.5 | Mouse text selection + Cmd+C copy | todo (split from M6 - real work: drag + alacritty Selection + highlight) |
+| M6.5 | Mouse text selection + Cmd+C copy | 🟡 code done, builds + 17 tests green, pending human verify |
 | M7 | Scrollback search | todo |
 | M8 | Split panes | todo |
 | M9 | Shell integration (OSC 133) + exit state dot | todo |
@@ -179,6 +179,25 @@ cargo test             # unit + headless integration
   panels made TRANSPARENT so it shows through; the transparent OS window rounds the corners.
   Tab bar no longer has its own panel tint (uses the bg) - `colors::panel()` removed.
 
+### M6.5 - mouse selection + Cmd+C copy (`terminal.rs`, `main.rs`, `colors.rs`)
+- **Selection lives in `Term`**: `Term.selection: Option<Selection>` (public field). `Selection::new(
+  SelectionType::Simple, Point, Side)` on press, `.update(Point, Side)` on drag; `to_range(&term)
+  -> Option<SelectionRange>`; `SelectionRange::contains(Point) -> bool`; `term.selection_to_string()`
+  for the copied text. All in `alacritty_terminal::{index, selection}`.
+- `PtyTerm` methods (all `&self`, lock internally): `start_selection/update_selection(line:i32,
+  col:usize,right:bool)`, `clear_selection()`, `selection_text() -> Option<String>` (filters empty).
+- `grid_snapshot` now computes the selection range once, tags each `CellSnap { selected: bool }`,
+  and returns `top_line: i32` (buffer line of viewport row 0, taken from the first `display_iter`
+  point) so the UI can map mouse coords -> grid `Point`.
+- `render_grid` senses `click_and_drag`: `drag_started` -> start, `dragged` -> update, `clicked`
+  -> clear. `hit(pos)` maps pointer -> (line, col, right-half) using `top_line` + cell metrics.
+  Selected cells get a translucent `colors::selection()` (accent @ alpha 90) overlay under the glyph.
+- **Cmd+C copies** the selection (`ctx.copy_text`); Ctrl+C stays SIGINT (collect_input only maps
+  `modifiers.ctrl`, and Cmd+C emits no Text). Selection is cleared on keystroke + paste (not on
+  wheel scroll - buffer-point highlighting stays correct while scrolled).
+- Builds + 17 tests green (no new unit tests - drag/highlight is UI, verified by human run).
+  Screenshot harness can't simulate a drag, so live selection/copy is **pending human verify**.
+
 ### Tab-bar sexify (user ask)
 - **Icons: vendored Phosphor font**, NOT the `egui-phosphor` crate. That crate (0.12, latest)
   only supports egui 0.34 - adding it pulls a 2nd egui and `add_to_fonts` type-mismatches. So:
@@ -238,11 +257,8 @@ cargo test             # unit + headless integration
 - Tab bar look confirmed: flat tabs + per-tab colored underline + top-edge progress (Tabby-style).
 
 ## Next up
-**M3 - quake mode** (configurable global hotkey, default `Ctrl+\``).
-- Add `global-hotkey` crate; register the hotkey (Carbon API on macOS → no Accessibility
-  prompt). Poll `GlobalHotKeyEvent` each frame in `App::ui` / via a channel.
-- Toggle window: `ctx.send_viewport_cmd(ViewportCommand::Visible/Focus/OuterPosition/InnerSize)`.
-  Drop from top edge, full monitor width; lerp height ~120ms. Hide on focus-loss (configurable).
-- Hardcode `Ctrl+\`` for now; the config-driven parse lands in M4. See PLAN §4c.
-- **Theming note for M4**: colors are currently hardcoded in `colors.rs` + inline `palette`;
-  M4 refactors both to read a `Theme` loaded from config.toml (ship OneHalfDark + a few more).
+**M7 - scrollback search (Cmd+F)** - depends on scrollback (M6, done). Overlay: query field +
+match count; scan grid + history; highlight matched cells (reuse the M6.5 per-cell overlay
+mechanism); Enter/Shift+Enter cycle matches + scroll offset to the hit; case-insensitive, regex
+toggle. See PLAN §4h. (First: human-verify M5/M6/M6.5 in a real run - all three are code-done
+but unverified.)

@@ -118,6 +118,11 @@ pub fn hover() -> Color32 {
     let e = elevated();
     Color32::from_rgba_unmultiplied(e.r(), e.g(), e.b(), 160)
 }
+/// Translucent fill painted over selected cells.
+pub fn selection() -> Color32 {
+    let a = accent();
+    Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 90)
+}
 /// Swatches offered by the right-click Color menu.
 pub fn tab_colors() -> [Color32; 6] {
     let a = &theme().ansi;

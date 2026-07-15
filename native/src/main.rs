@@ -679,10 +679,18 @@ impl eframe::App for Stdusk {
                 let area = ui.max_rect();
                 let term = &mut self.tabs[self.active].term;
 
-                // Keystrokes -> pty; typing jumps back to the live bottom.
+                // Cmd+C copies the current selection (Ctrl+C stays SIGINT via collect_input).
+                if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) {
+                    if let Some(txt) = term.selection_text() {
+                        ctx.copy_text(txt);
+                    }
+                }
+
+                // Keystrokes -> pty; typing clears any selection and jumps back to the bottom.
                 let input = collect_input(ui);
                 if !input.is_empty() {
                     term.send(&input);
+                    term.clear_selection();
                     term.scroll_to_bottom();
                 }
 
@@ -698,6 +706,7 @@ impl eframe::App for Stdusk {
                 });
                 for p in pastes {
                     term.paste(&p);
+                    term.clear_selection();
                     term.scroll_to_bottom();
                 }
 
@@ -724,7 +733,7 @@ impl eframe::App for Stdusk {
                 term.resize(cols, rows);
 
                 let snap = term.grid_snapshot();
-                render_grid(ui, &snap, cw, ch, &font);
+                render_grid(ui, term, &snap, cw, ch, &font);
 
                 // Scrollbar on the right edge when there's scrollback history.
                 let (offset, history) = term.scroll_state();
@@ -768,18 +777,53 @@ impl eframe::App for Stdusk {
     }
 }
 
-/// Paint the terminal grid: per-cell bg rects + fg glyphs + a beam cursor.
-fn render_grid(ui: &mut egui::Ui, snap: &GridSnap, cw: f32, ch: f32, font: &egui::FontId) {
+/// Paint the terminal grid (per-cell bg + selection overlay + fg glyph + beam cursor) and
+/// drive mouse text selection: drag to select, click to clear.
+fn render_grid(
+    ui: &mut egui::Ui,
+    term: &PtyTerm,
+    snap: &GridSnap,
+    cw: f32,
+    ch: f32,
+    font: &egui::FontId,
+) {
     let size = egui::vec2(cw * snap.cols as f32, ch * snap.rows as f32);
-    let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
+    let (resp, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
     let origin = resp.rect.min;
+
+    // Map a pointer position to a grid point (buffer line, column, and which cell half).
+    let hit = |pos: egui::Pos2| -> (i32, usize, bool) {
+        let relx = ((pos.x - origin.x) / cw).max(0.0);
+        let rely = ((pos.y - origin.y) / ch).max(0.0);
+        let col = (relx.floor() as usize).min(snap.cols.saturating_sub(1));
+        let row = (rely.floor() as usize).min(snap.rows.saturating_sub(1));
+        let right = relx.fract() > 0.5;
+        (snap.top_line + row as i32, col, right)
+    };
+    if resp.drag_started() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let (line, col, right) = hit(p);
+            term.start_selection(line, col, right);
+        }
+    } else if resp.dragged() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let (line, col, right) = hit(p);
+            term.update_selection(line, col, right);
+        }
+    } else if resp.clicked() {
+        term.clear_selection();
+    }
 
     for r in 0..snap.rows {
         for c in 0..snap.cols {
             let cell = &snap.cells[r * snap.cols + c];
             let pos = origin + egui::vec2(c as f32 * cw, r as f32 * ch);
+            let rect = egui::Rect::from_min_size(pos, egui::vec2(cw, ch));
             if let Some(bg) = cell.bg {
-                painter.rect_filled(egui::Rect::from_min_size(pos, egui::vec2(cw, ch)), 0.0, bg);
+                painter.rect_filled(rect, 0.0, bg);
+            }
+            if cell.selected {
+                painter.rect_filled(rect, 0.0, colors::selection());
             }
             if cell.c != ' ' && cell.c != '\0' {
                 painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), cell.fg);
