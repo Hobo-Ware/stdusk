@@ -315,4 +315,38 @@ impl PtyTerm {
     pub(crate) fn selection_text(&self) -> Option<String> {
         self.term.lock().selection_to_string().filter(|s| !s.is_empty())
     }
+
+    /// Whole buffer (scrollback + screen) as `(alacritty Line, trailing-trimmed text)` pairs,
+    /// top-to-bottom - the input to scrollback search.
+    pub(crate) fn buffer_lines(&self) -> Vec<(i32, String)> {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let (top, bot) = (grid.topmost_line().0, grid.bottommost_line().0);
+        let mut out = Vec::with_capacity((bot - top + 1).max(0) as usize);
+        for l in top..=bot {
+            let row = &grid[Line(l)];
+            let mut s = String::with_capacity(self.cols);
+            for c in 0..self.cols {
+                s.push(row[Column(c)].c);
+            }
+            out.push((l, s.trim_end().to_string()));
+        }
+        out
+    }
+
+    /// Highlight a search match by reusing the selection range (so `grid_snapshot` paints it).
+    pub(crate) fn highlight_match(&self, m: crate::search::Match) {
+        let start = Point::new(Line(m.line), Column(m.col));
+        let end = Point::new(Line(m.line), Column(m.col + m.len.saturating_sub(1)));
+        let mut sel = Selection::new(SelectionType::Simple, start, Side::Left);
+        sel.update(end, Side::Right);
+        self.term.lock().selection = Some(sel);
+    }
+
+    /// Scroll the viewport so buffer `line` sits at the top (clamped to available history).
+    pub(crate) fn scroll_to_line(&self, line: i32) {
+        let (_, history) = self.scroll_state();
+        let target = (-line).clamp(0, history as i32) as usize;
+        self.scroll_to_offset(target);
+    }
 }

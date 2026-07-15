@@ -12,6 +12,7 @@ mod colors;
 mod config;
 mod osc;
 mod progress;
+mod search;
 mod terminal;
 mod ui;
 use config::Config;
@@ -40,6 +41,15 @@ fn spawn_tab(ctx: &egui::Context, detect_progress: bool, cwd: Option<String>) ->
     }
 }
 
+/// Scrollback-search overlay state (Cmd+F). Matches are found over the buffer; the "current"
+/// one is highlighted via the terminal selection and scrolled into view.
+struct Search {
+    query: String,
+    matches: Vec<search::Match>,
+    current: usize,
+    focus: bool, // request text-field focus on the next frame (set on open / after Enter)
+}
+
 /// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
 enum TabAction {
     New,
@@ -60,6 +70,7 @@ struct Stdusk {
     was_focused: bool, // gained focus since last show (so blur can hide)
     sized: bool,       // applied quake sizing once the monitor size was known
     renaming: Option<(usize, String)>, // tab index + edit buffer while renaming
+    search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
     screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
 }
@@ -132,6 +143,7 @@ impl Stdusk {
             was_focused: false, // arm hide-on-blur only after the first focus gain
             sized,
             renaming: None,
+            search: None,
             toast: None,
             screenshot,
         }
@@ -207,6 +219,84 @@ impl Stdusk {
             }
         } else if !cancel {
             self.renaming = Some((idx, buf)); // keep editing next frame
+        }
+    }
+
+    /// Docked scrollback-search bar (Cmd+F): a top panel under the tab bar. Enter/Shift+Enter
+    /// (or the buttons) cycle matches, Esc/Done closes. Current match highlighted via selection.
+    fn find_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(mut st) = self.search.take() else {
+            return;
+        };
+        let mut close = false;
+        let mut recompute = false;
+        let mut step: i32 = 0;
+        egui::Panel::top("findbar")
+            .frame(
+                egui::Frame::new()
+                    .fill(colors::titlebar())
+                    .inner_margin(egui::Margin::symmetric(10, 5)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} ", icons::MAGNIFYING_GLASS))
+                            .color(colors::dim()),
+                    );
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut st.query)
+                            .desired_width(240.0)
+                            .hint_text("Find in scrollback"),
+                    );
+                    if st.focus {
+                        r.request_focus();
+                        st.focus = false;
+                    }
+                    if r.changed() {
+                        recompute = true;
+                    }
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        step = if ui.input(|i| i.modifiers.shift) { -1 } else { 1 };
+                        st.focus = true; // keep focus for repeated Enter
+                    }
+                    let count = if st.matches.is_empty() { 0 } else { st.current + 1 };
+                    ui.label(
+                        egui::RichText::new(format!("{count}/{}", st.matches.len()))
+                            .color(colors::dim()),
+                    );
+                    if icon_button(ui, icons::CARET_UP, "Previous (Shift+Enter)").clicked() {
+                        step = -1;
+                    }
+                    if icon_button(ui, icons::CARET_DOWN, "Next (Enter)").clicked() {
+                        step = 1;
+                    }
+                    if icon_button(ui, icons::X, "Close (Esc)").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            close = true;
+        }
+
+        let term = &self.tabs[self.active].term;
+        if recompute {
+            st.matches = search::find_matches(&term.buffer_lines(), &st.query);
+            st.current = 0;
+        } else if step != 0 && !st.matches.is_empty() {
+            let len = st.matches.len() as i32;
+            st.current = (st.current as i32 + step).rem_euclid(len) as usize;
+        }
+        if let Some(m) = st.matches.get(st.current).copied() {
+            term.highlight_match(m);
+            term.scroll_to_line(m.line);
+        } else {
+            term.clear_selection();
+        }
+        if close {
+            term.clear_selection();
+        } else {
+            self.search = Some(st);
         }
     }
 }
@@ -329,15 +419,19 @@ impl eframe::App for Stdusk {
         // Browser-style keybinds: Cmd+T new, Cmd+W close, Cmd+1..9 switch.
         let mut kb_new = false;
         let mut kb_close = false;
+        let mut kb_find = false;
         let mut kb_switch: Option<usize> = None;
         ctx.input(|i| {
             if i.modifiers.command {
-                use egui::Key::{Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, T, W};
+                use egui::Key::{F, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, T, W};
                 if i.key_pressed(T) {
                     kb_new = true;
                 }
                 if i.key_pressed(W) {
                     kb_close = true;
+                }
+                if i.key_pressed(F) {
+                    kb_find = true;
                 }
                 for (n, k) in
                     [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9].into_iter().enumerate()
@@ -438,6 +532,19 @@ impl eframe::App for Stdusk {
         if kb_close {
             action = Some(TabAction::Close(self.active));
         }
+        if kb_find {
+            match self.search.take() {
+                Some(_) => self.tabs[self.active].term.clear_selection(),
+                None => {
+                    self.search = Some(Search {
+                        query: String::new(),
+                        matches: Vec::new(),
+                        current: 0,
+                        focus: true,
+                    });
+                }
+            }
+        }
         match action {
             Some(TabAction::New) => self.new_tab(&ctx),
             Some(TabAction::Rename(i)) => {
@@ -463,6 +570,9 @@ impl eframe::App for Stdusk {
             ctx.copy_text(text);
         }
 
+        let search_open = self.search.is_some(); // gate pty input while the find bar is open
+        self.find_panel(ui);
+
         let now = ctx.input(|i| i.time);
         let mut copied = false; // set inside the central panel when Cmd+C copies a selection
         egui::CentralPanel::default()
@@ -485,27 +595,30 @@ impl eframe::App for Stdusk {
                 }
 
                 // Keystrokes -> pty; typing clears any selection and jumps back to the bottom.
-                let input = collect_input(ui);
-                if !input.is_empty() {
-                    term.send(&input);
-                    term.clear_selection();
-                    term.scroll_to_bottom();
-                }
+                // Suppressed while the find bar is open (it owns the keyboard).
+                if !search_open {
+                    let input = collect_input(ui);
+                    if !input.is_empty() {
+                        term.send(&input);
+                        term.clear_selection();
+                        term.scroll_to_bottom();
+                    }
 
-                // Paste (Cmd+V -> egui Paste event); bracketed if the app requested it.
-                let pastes: Vec<String> = ui.input(|i| {
-                    i.events
-                        .iter()
-                        .filter_map(|e| match e {
-                            egui::Event::Paste(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect()
-                });
-                for p in pastes {
-                    term.paste(&p);
-                    term.clear_selection();
-                    term.scroll_to_bottom();
+                    // Paste (Cmd+V -> egui Paste event); bracketed if the app requested it.
+                    let pastes: Vec<String> = ui.input(|i| {
+                        i.events
+                            .iter()
+                            .filter_map(|e| match e {
+                                egui::Event::Paste(s) => Some(s.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    });
+                    for p in pastes {
+                        term.paste(&p);
+                        term.clear_selection();
+                        term.scroll_to_bottom();
+                    }
                 }
 
                 // Cell metrics + wheel scrollback.

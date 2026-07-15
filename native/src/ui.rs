@@ -14,6 +14,9 @@ pub(crate) mod icons {
     pub(crate) const X: &str = "\u{E4F6}";
     pub(crate) const GEAR: &str = "\u{E270}";
     pub(crate) const APP_WINDOW: &str = "\u{E5DA}";
+    pub(crate) const MAGNIFYING_GLASS: &str = "\u{E30C}";
+    pub(crate) const CARET_UP: &str = "\u{E13C}";
+    pub(crate) const CARET_DOWN: &str = "\u{E136}";
 }
 
 // ---- pure helpers (no egui state; unit-tested below) ----

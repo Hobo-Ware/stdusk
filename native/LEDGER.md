@@ -44,7 +44,7 @@ cargo test             # unit + headless integration
 | M5 | Tab mgmt: context menu, color, rename, reorder, keybinds, cwd | 🟡 code done, builds + 17 tests green, pending human verify |
 | M6 | Resize + scrollback + paste + OSC52 + bracketed-paste | 🟡 code done, builds + 17 tests green, pending human verify |
 | M6.5 | Mouse text selection + Cmd+C copy | 🟡 code done, builds + 17 tests green, pending human verify |
-| M7 | Scrollback search | todo |
+| M7 | Scrollback search (Cmd+F) | 🟡 code done, builds + 34 tests green, pending human verify |
 | M8 | Split panes | todo |
 | M9 | Shell integration (OSC 133) + exit state dot | todo |
 | M10 | First-party AI agent | todo |
@@ -210,6 +210,28 @@ cargo test             # unit + headless integration
 - Builds + 17 tests green. Toast verified via a forced screenshot; drag/word/line select + Cmd+C
   + word-nav keys are live-interaction, **pending human verify**.
 
+### M7 - scrollback search (`search.rs`, `main.rs`, `terminal.rs`)
+- **Pure `search.rs`**: `find_matches(lines: &[(i32, String)], query) -> Vec<Match{line,col,len}>`,
+  ASCII-case-insensitive substring, non-overlapping, top-to-bottom. 5 unit tests. `line` is the
+  alacritty `Line` coord; `col` == char index (one char per cell).
+- **`PtyTerm` glue**: `buffer_lines()` walks `topmost_line()..=bottommost_line()` indexing
+  `grid[Line][Column].c` (trailing-trimmed); `highlight_match(m)` sets the selection range so the
+  existing `grid_snapshot` selection-overlay paints it (no new render path); `scroll_to_line(l)`
+  sets display offset `-l` (clamped to history) to bring the match to the top.
+- **UI (`find_panel`)**: Cmd+F toggles a docked find bar (`Panel::top("findbar")` under the tab
+  bar) - magnifier icon + text field + `cur/total` + caret-up/down + close-x (all Phosphor).
+  Enter / Shift+Enter (and the buttons) cycle; Esc/x closes. Pty input is gated while open. The
+  current match is highlighted (via selection) + scrolled into view.
+- **GOTCHA - egui `Window`/`Area` does NOT render in the 2-frame screenshot harness** (needs
+  extra frames to lay out). That's why rename (a `Window`) was only ever human-verified. Docked
+  UI that must be screenshot-verifiable uses `Panel::top` instead - which is why the find bar is
+  a panel, not a floating window. Verified via screenshot (glyphs + layout correct).
+- **New Phosphor codepoints** pulled from the official `@phosphor-icons/web` CSS and confirmed
+  present in the vendored subset via `fontTools` cmap: magnifying-glass E30C, caret-up E13C,
+  caret-down E136. Don't guess codepoints - the font's glyph names are stripped to `uniXXXX`.
+- Limitation: only the CURRENT match is highlighted (all-match highlight + regex toggle deferred).
+- 34 tests green; clippy -D warnings clean.
+
 ### Repo guidelines + supreme-ify refactor (user ask: `.agents` + Rust best practices)
 - **Instruction files** mirror trakt-web's two-hop convention: `CLAUDE.md` (area router) →
   `@AGENTS.md` (imports 4 always-on core rules) → domain rules loaded on demand. Core:
@@ -297,8 +319,8 @@ cargo test             # unit + headless integration
 - Tab bar look confirmed: flat tabs + per-tab colored underline + top-edge progress (Tabby-style).
 
 ## Next up
-**M7 - scrollback search (Cmd+F)** - depends on scrollback (M6, done). Overlay: query field +
-match count; scan grid + history; highlight matched cells (reuse the M6.5 per-cell overlay
-mechanism); Enter/Shift+Enter cycle matches + scroll offset to the hit; case-insensitive, regex
-toggle. See PLAN §4h. (First: human-verify M5/M6/M6.5 in a real run - all three are code-done
-but unverified.)
+**M8 - split panes** (v1 must-have). Tab owns a pane tree `enum Pane { Leaf(PtyTerm) |
+Split{dir, ratio, a, b} }`; recursively split the tab rect; draggable splitters; focused pane
+routes input; Cmd+D vertical / Cmd+Shift+D horizontal / Cmd+W closes focused. Hard-depends on M6
+resize (per-pane pty sizing) - done. See PLAN §4g. (Backlog: human-verify M5/M6/M6.5/M7 live -
+all code-done but unverified; M7 all-match highlight + regex toggle deferred.)
