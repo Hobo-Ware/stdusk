@@ -1,28 +1,25 @@
 //! stdusk - a quake terminal with a real GUI tab bar.
-//! M0 chrome · M1 shell · M1.5 progress · M2 colors · M3 quake · M4 theming+config.
-use std::sync::atomic::{AtomicBool, Ordering};
+//! M0 chrome · M1 shell · M1.5 progress · M2 colors · M3 quake · M4 config · M5 tabs · M6 io · M6.5 selection.
+//! The `eframe::App` loop here stays thin; drawing widgets + pure helpers live in `ui.rs`.
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-
-/// Phosphor icon codepoints (font vendored in assets/Phosphor.ttf, MIT).
-mod ph {
-    pub const PLUS: &str = "\u{E3D4}";
-    pub const X: &str = "\u{E4F6}";
-    pub const GEAR: &str = "\u{E270}";
-    pub const APP_WINDOW: &str = "\u{E5DA}";
-}
 
 mod colors;
 mod config;
 mod osc;
 mod progress;
 mod terminal;
+mod ui;
 use config::Config;
-use progress::Progress;
-use terminal::{GridSnap, PtyTerm};
+use terminal::PtyTerm;
+use ui::{
+    apply_theme, basename, collect_input, draw_tab, draw_toast, icon_button, icons, render_grid,
+    tint, toast_alpha,
+};
 
 const COLS: usize = 80;
 const ROWS: usize = 24;
@@ -53,68 +50,6 @@ enum TabAction {
     Close(usize),
 }
 
-fn basename(p: &str) -> String {
-    let t = p.trim_end_matches('/');
-    if t.is_empty() {
-        return "/".into();
-    }
-    t.rsplit('/').next().unwrap_or(t).to_string()
-}
-
-/// A fixed-size Phosphor-icon button with hover feedback. Returns the Response
-/// (so callers can anchor a popup or read `.clicked()`).
-fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(32.0, 30.0), egui::Sense::click());
-    let hovered = resp.hovered();
-    if hovered {
-        ui.painter().rect_filled(rect, 6.0, colors::hover());
-    }
-    let color = if hovered { colors::fg() } else { colors::dim() };
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        icon,
-        egui::FontId::proportional(17.0),
-        color,
-    );
-    resp.on_hover_text(tip)
-}
-
-/// Paint a small pill-shaped status toast centered near the bottom edge. `fade` in 0..1
-/// scales opacity so the message dissolves as it expires.
-fn draw_toast(ui: &egui::Ui, msg: &str, fade: f32) {
-    let a = |c: egui::Color32, base: u8| {
-        egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (base as f32 * fade) as u8)
-    };
-    let area = ui.max_rect();
-    let font = egui::FontId::proportional(13.0);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(msg.to_owned(), font.clone(), colors::fg());
-    let pad = egui::vec2(14.0, 8.0);
-    let size = galley.size() + pad * 2.0;
-    let center = egui::pos2(area.center().x, area.bottom() - 34.0);
-    let rect = egui::Rect::from_center_size(center, size);
-    let p = ui.painter();
-    p.rect_filled(rect, 8.0, a(colors::elevated(), 235));
-    p.rect_stroke(
-        rect,
-        8.0,
-        egui::Stroke::new(1.0, a(colors::border(), 255)),
-        egui::StrokeKind::Inside,
-    );
-    p.text(center, egui::Align2::CENTER_CENTER, msg, font, a(colors::fg(), 255));
-}
-
-/// Truncate to `max` chars with an ellipsis; returns (shown, was_truncated).
-fn ellipsize(s: &str, max: usize) -> (String, bool) {
-    if s.chars().count() <= max {
-        return (s.to_string(), false);
-    }
-    let head: String = s.chars().take(max.saturating_sub(1)).collect();
-    (format!("{head}…"), true)
-}
-
 struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
@@ -125,8 +60,8 @@ struct Stdusk {
     was_focused: bool, // gained focus since last show (so blur can hide)
     sized: bool,       // applied quake sizing once the monitor size was known
     renaming: Option<(usize, String)>, // tab index + edit buffer while renaming
-    toast: Option<(String, f64)>,      // transient status message + expiry (egui time)
-    screenshot: Option<String>,        // --screenshot PATH: demo tabs, capture, exit
+    toast: Option<(String, f64)>, // transient status message + expiry (egui time)
+    screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
 }
 
 impl Stdusk {
@@ -175,12 +110,8 @@ impl Stdusk {
             for _ in 0..3 {
                 tabs.push(spawn_tab(&cc.egui_ctx, detect, None));
             }
-            let titles = [
-                "auth-session",
-                "smart-lists-really-long-name",
-                "cocaine",
-                "deconversion-monitor",
-            ];
+            let titles =
+                ["auth-session", "smart-lists-really-long-name", "cocaine", "deconversion-monitor"];
             for (t, name) in tabs.iter_mut().zip(titles) {
                 t.title = name.into();
                 t.renamed = true;
@@ -297,113 +228,9 @@ fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
-        let y = mon.map(|m| m.y - 2.0).unwrap_or(2000.0);
+        let y = mon.map_or(2000.0, |m| m.y - 2.0);
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
     }
-}
-
-/// Apply window opacity to a fill color (straight alpha).
-fn tint(c: egui::Color32, opacity: f32) -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(
-        c.r(),
-        c.g(),
-        c.b(),
-        (opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
-    )
-}
-
-fn apply_theme(ctx: &egui::Context) {
-    let mut v = egui::Visuals::dark();
-    v.panel_fill = colors::bg();
-    v.window_fill = colors::bg();
-    v.override_text_color = Some(colors::fg());
-    ctx.set_visuals(v);
-}
-
-/// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline,
-/// and progress rendered as a thin bar on the TOP edge.
-fn draw_tab(
-    ui: &mut egui::Ui,
-    idx: usize,
-    title: &str,
-    active: bool,
-    color: Option<egui::Color32>,
-    progress: Progress,
-) -> (egui::Response, bool) {
-    let (shown, truncated) = ellipsize(title, 14);
-    let fg = if active { colors::fg() } else { colors::dim() };
-    // trailing spaces reserve room for the close x
-    let mut rt = egui::RichText::new(format!("{idx}  {shown}   ")).color(fg).monospace();
-    if active {
-        rt = rt.strong();
-    }
-    let fill = if active {
-        colors::elevated()
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    let inner = egui::Frame::new()
-        .fill(fill)
-        .corner_radius(egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }) // top-rounded tab shape
-        .inner_margin(egui::Margin::symmetric(12, 8))
-        .show(ui, |ui| {
-            let lbl = ui.add(egui::Label::new(rt).selectable(false));
-            if truncated {
-                lbl.on_hover_text(title);
-            }
-        });
-    let rect = inner.response.rect;
-    // A foreground-layer painter: the row layout's clip cuts off the tab's top/bottom edges,
-    // so edge strokes (underline, progress) must be drawn on an unclipped layer.
-    let dp = ui
-        .ctx()
-        .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tab_deco")));
-    // Per-tab color underline (bottom edge) - only when the user set a color.
-    if let Some(color) = color {
-        dp.rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(rect.left(), rect.bottom() - 3.0),
-                egui::vec2(rect.width(), 3.0),
-            ),
-            0.0,
-            color,
-        );
-    }
-    // Progress bar (top edge).
-    if let Some((frac, pcolor)) = progress_bar(progress) {
-        dp.rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(rect.left(), rect.top()),
-                egui::vec2(rect.width() * frac, 2.0),
-            ),
-            0.0,
-            pcolor,
-        );
-    }
-    // Close x, revealed on the active or hovered tab, with its own hover feedback.
-    let mut close = false;
-    if active || inner.response.hovered() {
-        let x_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - 22.0, rect.center().y - 9.0),
-            egui::vec2(18.0, 18.0),
-        );
-        let xr = ui.interact(x_rect, ui.id().with(("close", idx)), egui::Sense::click());
-        let xh = xr.hovered();
-        if xh {
-            ui.painter().rect_filled(x_rect, 5.0, colors::hover());
-        }
-        ui.painter().text(
-            x_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            ph::X,
-            egui::FontId::proportional(13.0),
-            if xh { colors::fg() } else { colors::dim() },
-        );
-        if xr.clicked() {
-            close = true;
-        }
-    }
-    (inner.response.interact(egui::Sense::click()), close)
 }
 
 /// Right-click tab context menu. Sets `action`; egui auto-closes the menu on any button click.
@@ -420,10 +247,7 @@ fn tab_menu(ui: &mut egui::Ui, i: usize, action: &mut Option<TabAction>) {
         }
         ui.horizontal(|ui| {
             for col in colors::tab_colors() {
-                if ui
-                    .button(egui::RichText::new("⬤").color(col))
-                    .clicked()
-                {
+                if ui.button(egui::RichText::new("⬤").color(col)).clicked() {
                     *action = Some(TabAction::SetColor(i, Some(col)));
                 }
             }
@@ -440,88 +264,6 @@ fn tab_menu(ui: &mut egui::Ui, i: usize, action: &mut Option<TabAction>) {
     if ui.button("Close").clicked() {
         *action = Some(TabAction::Close(i));
     }
-}
-
-/// (fill fraction 0..1, color) for the tab progress bar, or None to hide it.
-fn progress_bar(p: Progress) -> Option<(f32, egui::Color32)> {
-    match p {
-        Progress::None => None,
-        Progress::Normal(v) => Some((v as f32 / 100.0, colors::green())),
-        Progress::Paused(v) => Some((v as f32 / 100.0, colors::yellow())),
-        Progress::Error(_) => Some((1.0, colors::red())),
-        Progress::Indeterminate => Some((1.0, colors::accent())),
-    }
-}
-
-/// Translate this frame's key/text events into bytes for the pty.
-fn collect_input(ui: &egui::Ui) -> Vec<u8> {
-    let mut out = Vec::new();
-    ui.input(|i| {
-        for event in &i.events {
-            match event {
-                egui::Event::Text(t) => out.extend_from_slice(t.as_bytes()),
-                egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                    use egui::Key;
-                    if modifiers.ctrl {
-                        if let Some(off) = ctrl_letter(*key) {
-                            out.push(off);
-                        }
-                        return;
-                    }
-                    // macOS "natural editing": Option+←/→ move by word, Cmd+←/→ to line
-                    // start/end, Option/Cmd+Backspace delete word / to line start.
-                    match key {
-                        Key::Enter => out.push(b'\r'),
-                        Key::Backspace => {
-                            if modifiers.alt {
-                                out.extend_from_slice(b"\x1b\x7f"); // delete previous word
-                            } else if modifiers.command {
-                                out.push(0x15); // Ctrl-U: delete to line start
-                            } else {
-                                out.push(0x7f);
-                            }
-                        }
-                        Key::Tab => out.push(b'\t'),
-                        Key::Escape => out.push(0x1b),
-                        Key::ArrowUp => out.extend_from_slice(b"\x1b[A"),
-                        Key::ArrowDown => out.extend_from_slice(b"\x1b[B"),
-                        Key::ArrowRight => {
-                            if modifiers.alt {
-                                out.extend_from_slice(b"\x1bf"); // forward word (readline)
-                            } else if modifiers.command {
-                                out.push(0x05); // Ctrl-E: end of line
-                            } else {
-                                out.extend_from_slice(b"\x1b[C");
-                            }
-                        }
-                        Key::ArrowLeft => {
-                            if modifiers.alt {
-                                out.extend_from_slice(b"\x1bb"); // backward word (readline)
-                            } else if modifiers.command {
-                                out.push(0x01); // Ctrl-A: start of line
-                            } else {
-                                out.extend_from_slice(b"\x1b[D");
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
-    });
-    out
-}
-
-fn ctrl_letter(key: egui::Key) -> Option<u8> {
-    use egui::Key::*;
-    let n = match key {
-        A => 1, B => 2, C => 3, D => 4, E => 5, F => 6, G => 7, H => 8, I => 9,
-        J => 10, K => 11, L => 12, M => 13, N => 14, O => 15, P => 16, Q => 17,
-        R => 18, S => 19, T => 20, U => 21, V => 22, W => 23, X => 24, Y => 25, Z => 26,
-        _ => return None,
-    };
-    Some(n)
 }
 
 impl eframe::App for Stdusk {
@@ -577,10 +319,10 @@ impl eframe::App for Stdusk {
 
         // Auto-title unrenamed tabs from their cwd (basename).
         for tab in &mut self.tabs {
-            if !tab.renamed {
-                if let Some(c) = tab.term.cwd() {
-                    tab.title = basename(&c);
-                }
+            if !tab.renamed
+                && let Some(c) = tab.term.cwd()
+            {
+                tab.title = basename(&c);
             }
         }
 
@@ -590,16 +332,15 @@ impl eframe::App for Stdusk {
         let mut kb_switch: Option<usize> = None;
         ctx.input(|i| {
             if i.modifiers.command {
-                use egui::Key::*;
+                use egui::Key::{Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, T, W};
                 if i.key_pressed(T) {
                     kb_new = true;
                 }
                 if i.key_pressed(W) {
                     kb_close = true;
                 }
-                for (n, k) in [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9]
-                    .into_iter()
-                    .enumerate()
+                for (n, k) in
+                    [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9].into_iter().enumerate()
                 {
                     if i.key_pressed(k) {
                         kb_switch = Some(n);
@@ -611,8 +352,7 @@ impl eframe::App for Stdusk {
         // Rounded window background - the OS window is transparent, so painting a rounded
         // rect leaves the corner triangles clear and the window reads as rounded. Panels
         // below are transparent so this shows through.
-        ui.painter()
-            .rect_filled(ui.max_rect(), 10.0, tint(colors::bg(), opacity));
+        ui.painter().rect_filled(ui.max_rect(), 10.0, tint(colors::bg(), opacity));
 
         // Tab bar. Collect clicks + menu actions; apply after the panel to avoid borrow clashes.
         let mut clicked: Option<usize> = None;
@@ -631,10 +371,10 @@ impl eframe::App for Stdusk {
                     // Gear pinned to the far right; everything else flows from the left.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(4.0);
-                        if icon_button(ui, ph::GEAR, "Settings (config.toml)").clicked() {
-                            if let Some(p) = config::ensure_and_path() {
-                                let _ = std::process::Command::new("open").arg(p).spawn();
-                            }
+                        if icon_button(ui, icons::GEAR, "Settings (config.toml)").clicked()
+                            && let Some(p) = config::ensure_and_path()
+                        {
+                            let _ = std::process::Command::new("open").arg(p).spawn();
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
@@ -658,10 +398,10 @@ impl eframe::App for Stdusk {
                             }
                             // New tab + tab manager, right after the tabs.
                             ui.add_space(6.0);
-                            if icon_button(ui, ph::PLUS, "New tab").clicked() {
+                            if icon_button(ui, icons::PLUS, "New tab").clicked() {
                                 action = Some(TabAction::New);
                             }
-                            let mgr = icon_button(ui, ph::APP_WINDOW, "Tabs");
+                            let mgr = icon_button(ui, icons::APP_WINDOW, "Tabs");
                             egui::Popup::menu(&mgr).show(|ui| {
                                 ui.set_min_width(200.0);
                                 for (i, tab) in self.tabs.iter().enumerate() {
@@ -687,10 +427,10 @@ impl eframe::App for Stdusk {
         if let Some(i) = clicked {
             self.active = i;
         }
-        if let Some(n) = kb_switch {
-            if n < self.tabs.len() {
-                self.active = n;
-            }
+        if let Some(n) = kb_switch
+            && n < self.tabs.len()
+        {
+            self.active = n;
         }
         if kb_new {
             action = Some(TabAction::New);
@@ -737,12 +477,11 @@ impl eframe::App for Stdusk {
 
                 // Cmd+C arrives as egui's Copy event (not a raw key). Copy the selection;
                 // Ctrl+C stays SIGINT (collect_input handles that). `copied` -> toast below.
-                let want_copy = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-                if want_copy {
-                    if let Some(txt) = term.selection_text() {
-                        ctx.copy_text(txt);
-                        copied = true;
-                    }
+                let want_copy =
+                    ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+                if want_copy && let Some(txt) = term.selection_text() {
+                    ctx.copy_text(txt);
+                    copied = true;
                 }
 
                 // Keystrokes -> pty; typing clears any selection and jumps back to the bottom.
@@ -771,9 +510,7 @@ impl eframe::App for Stdusk {
 
                 // Cell metrics + wheel scrollback.
                 let font = egui::FontId::monospace(self.cfg.appearance.font_size);
-                let m = ui
-                    .painter()
-                    .layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
+                let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
                 let (cw, ch) = (m.size().x, m.size().y);
 
                 let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
@@ -813,12 +550,12 @@ impl eframe::App for Stdusk {
                         ui.id().with("scrollbar"),
                         egui::Sense::click_and_drag(),
                     );
-                    if resp.dragged() || resp.clicked() {
-                        if let Some(p) = resp.interact_pointer_pos() {
-                            let frac = ((p.y - area.top()) / track).clamp(0.0, 1.0);
-                            let tgt = ((1.0 - frac) * history as f32).round() as usize;
-                            term.scroll_to_offset(tgt.min(history));
-                        }
+                    if (resp.dragged() || resp.clicked())
+                        && let Some(p) = resp.interact_pointer_pos()
+                    {
+                        let frac = ((p.y - area.top()) / track).clamp(0.0, 1.0);
+                        let tgt = ((1.0 - frac) * history as f32).round() as usize;
+                        term.scroll_to_offset(tgt.min(history));
                     }
                     let alpha = if resp.hovered() || resp.dragged() { 180 } else { 90 };
                     let d = colors::dim();
@@ -842,85 +579,10 @@ impl eframe::App for Stdusk {
             if now >= until {
                 self.toast = None;
             } else {
-                draw_toast(ui, &msg, ((until - now) / 0.35).min(1.0) as f32);
+                draw_toast(ui, &msg, toast_alpha(until - now, 0.35));
                 ctx.request_repaint();
             }
         }
-    }
-}
-
-/// Paint the terminal grid (per-cell bg + selection overlay + fg glyph + beam cursor) and
-/// drive mouse text selection: drag to select, click to clear.
-fn render_grid(
-    ui: &mut egui::Ui,
-    term: &PtyTerm,
-    snap: &GridSnap,
-    cw: f32,
-    ch: f32,
-    font: &egui::FontId,
-) {
-    let size = egui::vec2(cw * snap.cols as f32, ch * snap.rows as f32);
-    let (resp, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
-    let origin = resp.rect.min;
-
-    // Map a pointer position to a grid point (buffer line, column, and which cell half).
-    let hit = |pos: egui::Pos2| -> (i32, usize, bool) {
-        let relx = ((pos.x - origin.x) / cw).max(0.0);
-        let rely = ((pos.y - origin.y) / ch).max(0.0);
-        let col = (relx.floor() as usize).min(snap.cols.saturating_sub(1));
-        let row = (rely.floor() as usize).min(snap.rows.saturating_sub(1));
-        let right = relx.fract() > 0.5;
-        (snap.top_line + row as i32, col, right)
-    };
-    if resp.triple_clicked() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let (line, col, _) = hit(p);
-            term.select_line(line, col);
-        }
-    } else if resp.double_clicked() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let (line, col, _) = hit(p);
-            term.select_word(line, col);
-        }
-    } else if resp.drag_started() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let (line, col, right) = hit(p);
-            term.start_selection(line, col, right);
-        }
-    } else if resp.dragged() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let (line, col, right) = hit(p);
-            term.update_selection(line, col, right);
-        }
-    } else if resp.clicked() {
-        term.clear_selection();
-    }
-
-    for r in 0..snap.rows {
-        for c in 0..snap.cols {
-            let cell = &snap.cells[r * snap.cols + c];
-            let pos = origin + egui::vec2(c as f32 * cw, r as f32 * ch);
-            let rect = egui::Rect::from_min_size(pos, egui::vec2(cw, ch));
-            if let Some(bg) = cell.bg {
-                painter.rect_filled(rect, 0.0, bg);
-            }
-            if cell.selected {
-                painter.rect_filled(rect, 0.0, colors::selection());
-            }
-            if cell.c != ' ' && cell.c != '\0' {
-                painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), cell.fg);
-            }
-        }
-    }
-
-    // Beam cursor (block/underline styles land in M9); hidden while scrolled into history.
-    if let Some((cr, cc)) = snap.cursor {
-        let cpos = origin + egui::vec2(cc as f32 * cw, cr as f32 * ch);
-        painter.rect_filled(
-            egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)),
-            0.0,
-            colors::cursor(),
-        );
     }
 }
 
@@ -931,19 +593,16 @@ fn main() -> eframe::Result<()> {
     // `--screenshot PATH`: populate demo tabs, render, save the PNG, and exit. Uses eframe's
     // built-in glow-backend capture via EFRAME_SCREENSHOT_TO.
     let args: Vec<String> = std::env::args().collect();
-    let screenshot = args
-        .iter()
-        .position(|a| a == "--screenshot")
-        .and_then(|i| args.get(i + 1).cloned());
+    let screenshot =
+        args.iter().position(|a| a == "--screenshot").and_then(|i| args.get(i + 1).cloned());
     if let Some(path) = &screenshot {
-        // SAFE: single-threaded, set before any threads spawn.
-        unsafe { std::env::set_var("EFRAME_SCREENSHOT_TO", path) };
+        // SAFE: single-threaded, set before any threads spawn (edition-2024 set_var is unsafe).
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("EFRAME_SCREENSHOT_TO", path);
+        }
     }
-    let size = if screenshot.is_some() {
-        [1400.0, 420.0]
-    } else {
-        [1200.0, 500.0]
-    };
+    let size = if screenshot.is_some() { [1400.0, 420.0] } else { [1200.0, 500.0] };
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow, // __screenshot capture requires the glow backend

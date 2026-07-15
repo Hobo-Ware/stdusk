@@ -7,16 +7,16 @@ use std::sync::OnceLock;
 
 /// A full theme: default bg/fg/cursor + the 16 ANSI colors. UI-chrome colors are derived.
 #[derive(Clone)]
-pub struct Theme {
-    pub bg: Color32,
-    pub fg: Color32,
-    pub cursor: Color32,
-    pub ansi: [Color32; 16],
+pub(crate) struct Theme {
+    pub(crate) bg: Color32,
+    pub(crate) fg: Color32,
+    pub(crate) cursor: Color32,
+    pub(crate) ansi: [Color32; 16],
 }
 
 static THEME: OnceLock<Theme> = OnceLock::new();
 
-pub fn init(theme: Theme) {
+pub(crate) fn init(theme: Theme) {
     let _ = THEME.set(theme);
 }
 
@@ -26,11 +26,11 @@ fn theme() -> &'static Theme {
 
 // ---- terminal cell mapping ----
 
-pub fn is_default_bg(c: &Color) -> bool {
+pub(crate) fn is_default_bg(c: Color) -> bool {
     matches!(c, Color::Named(NamedColor::Background))
 }
 
-pub fn to_color32(c: Color) -> Color32 {
+pub(crate) fn to_color32(c: Color) -> Color32 {
     match c {
         Color::Spec(rgb) => Color32::from_rgb(rgb.r, rgb.g, rgb.b),
         Color::Indexed(i) => indexed(i),
@@ -80,57 +80,57 @@ fn indexed(i: u8) -> Color32 {
 
 // ---- derived UI-chrome colors (everything keyed off the theme) ----
 
-pub fn bg() -> Color32 {
+pub(crate) fn bg() -> Color32 {
     theme().bg
 }
-pub fn fg() -> Color32 {
+pub(crate) fn fg() -> Color32 {
     theme().fg
 }
-pub fn cursor() -> Color32 {
+pub(crate) fn cursor() -> Color32 {
     theme().cursor
 }
-pub fn dim() -> Color32 {
+pub(crate) fn dim() -> Color32 {
     theme().ansi[8]
 }
-pub fn accent() -> Color32 {
+pub(crate) fn accent() -> Color32 {
     theme().ansi[4]
 }
-pub fn red() -> Color32 {
+pub(crate) fn red() -> Color32 {
     theme().ansi[1]
 }
-pub fn green() -> Color32 {
+pub(crate) fn green() -> Color32 {
     theme().ansi[2]
 }
-pub fn yellow() -> Color32 {
+pub(crate) fn yellow() -> Color32 {
     theme().ansi[3]
 }
-pub fn elevated() -> Color32 {
+pub(crate) fn elevated() -> Color32 {
     shade(theme().bg, 1.28) // active-tab bg, lighter than the bar
 }
-pub fn titlebar() -> Color32 {
+pub(crate) fn titlebar() -> Color32 {
     shade(theme().bg, 0.72) // tab-bar strip, darker than the body for separation
 }
-pub fn border() -> Color32 {
+pub(crate) fn border() -> Color32 {
     shade(theme().bg, 1.6) // hairline divider
 }
 /// Subtle hover-highlight fill for icon buttons.
-pub fn hover() -> Color32 {
+pub(crate) fn hover() -> Color32 {
     let e = elevated();
     Color32::from_rgba_unmultiplied(e.r(), e.g(), e.b(), 160)
 }
 /// Translucent fill painted over selected cells.
-pub fn selection() -> Color32 {
+pub(crate) fn selection() -> Color32 {
     let a = accent();
     Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 90)
 }
 /// Swatches offered by the right-click Color menu.
-pub fn tab_colors() -> [Color32; 6] {
+pub(crate) fn tab_colors() -> [Color32; 6] {
     let a = &theme().ansi;
     [a[1], a[4], a[3], a[5], a[2], a[6]]
 }
 
 fn shade(c: Color32, factor: f32) -> Color32 {
-    let f = |v: u8| ((v as f32 * factor).round().clamp(0.0, 255.0)) as u8;
+    let f = |v: u8| ((f32::from(v) * factor).round().clamp(0.0, 255.0)) as u8;
     Color32::from_rgb(f(c.r()), f(c.g()), f(c.b()))
 }
 
@@ -140,50 +140,86 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-pub fn one_half_dark() -> Theme {
+pub(crate) fn one_half_dark() -> Theme {
     Theme {
         bg: rgb(0x28, 0x2c, 0x34),
         fg: rgb(0xdc, 0xdf, 0xe4),
         cursor: rgb(0x61, 0xaf, 0xef),
         ansi: [
-            rgb(0x28, 0x2c, 0x34), rgb(0xe0, 0x6c, 0x75), rgb(0x98, 0xc3, 0x79), rgb(0xe5, 0xc0, 0x7b),
-            rgb(0x61, 0xaf, 0xef), rgb(0xc6, 0x78, 0xdd), rgb(0x56, 0xb6, 0xc2), rgb(0xdc, 0xdf, 0xe4),
-            rgb(0x5c, 0x63, 0x70), rgb(0xe0, 0x6c, 0x75), rgb(0x98, 0xc3, 0x79), rgb(0xe5, 0xc0, 0x7b),
-            rgb(0x61, 0xaf, 0xef), rgb(0xc6, 0x78, 0xdd), rgb(0x56, 0xb6, 0xc2), rgb(0xff, 0xff, 0xff),
+            rgb(0x28, 0x2c, 0x34),
+            rgb(0xe0, 0x6c, 0x75),
+            rgb(0x98, 0xc3, 0x79),
+            rgb(0xe5, 0xc0, 0x7b),
+            rgb(0x61, 0xaf, 0xef),
+            rgb(0xc6, 0x78, 0xdd),
+            rgb(0x56, 0xb6, 0xc2),
+            rgb(0xdc, 0xdf, 0xe4),
+            rgb(0x5c, 0x63, 0x70),
+            rgb(0xe0, 0x6c, 0x75),
+            rgb(0x98, 0xc3, 0x79),
+            rgb(0xe5, 0xc0, 0x7b),
+            rgb(0x61, 0xaf, 0xef),
+            rgb(0xc6, 0x78, 0xdd),
+            rgb(0x56, 0xb6, 0xc2),
+            rgb(0xff, 0xff, 0xff),
         ],
     }
 }
 
-pub fn dracula() -> Theme {
+pub(crate) fn dracula() -> Theme {
     Theme {
         bg: rgb(0x28, 0x2a, 0x36),
         fg: rgb(0xf8, 0xf8, 0xf2),
         cursor: rgb(0xbd, 0x93, 0xf9),
         ansi: [
-            rgb(0x21, 0x22, 0x2c), rgb(0xff, 0x55, 0x55), rgb(0x50, 0xfa, 0x7b), rgb(0xf1, 0xfa, 0x8c),
-            rgb(0xbd, 0x93, 0xf9), rgb(0xff, 0x79, 0xc6), rgb(0x8b, 0xe9, 0xfd), rgb(0xf8, 0xf8, 0xf2),
-            rgb(0x62, 0x72, 0xa4), rgb(0xff, 0x6e, 0x6e), rgb(0x69, 0xff, 0x94), rgb(0xff, 0xff, 0xa5),
-            rgb(0xd6, 0xac, 0xff), rgb(0xff, 0x92, 0xdf), rgb(0xa4, 0xff, 0xff), rgb(0xff, 0xff, 0xff),
+            rgb(0x21, 0x22, 0x2c),
+            rgb(0xff, 0x55, 0x55),
+            rgb(0x50, 0xfa, 0x7b),
+            rgb(0xf1, 0xfa, 0x8c),
+            rgb(0xbd, 0x93, 0xf9),
+            rgb(0xff, 0x79, 0xc6),
+            rgb(0x8b, 0xe9, 0xfd),
+            rgb(0xf8, 0xf8, 0xf2),
+            rgb(0x62, 0x72, 0xa4),
+            rgb(0xff, 0x6e, 0x6e),
+            rgb(0x69, 0xff, 0x94),
+            rgb(0xff, 0xff, 0xa5),
+            rgb(0xd6, 0xac, 0xff),
+            rgb(0xff, 0x92, 0xdf),
+            rgb(0xa4, 0xff, 0xff),
+            rgb(0xff, 0xff, 0xff),
         ],
     }
 }
 
-pub fn tokyo_night() -> Theme {
+pub(crate) fn tokyo_night() -> Theme {
     Theme {
         bg: rgb(0x1a, 0x1b, 0x26),
         fg: rgb(0xc0, 0xca, 0xf5),
         cursor: rgb(0x7a, 0xa2, 0xf7),
         ansi: [
-            rgb(0x15, 0x16, 0x1e), rgb(0xf7, 0x76, 0x8e), rgb(0x9e, 0xce, 0x6a), rgb(0xe0, 0xaf, 0x68),
-            rgb(0x7a, 0xa2, 0xf7), rgb(0xbb, 0x9a, 0xf7), rgb(0x7d, 0xcf, 0xff), rgb(0xa9, 0xb1, 0xd6),
-            rgb(0x41, 0x48, 0x68), rgb(0xf7, 0x76, 0x8e), rgb(0x9e, 0xce, 0x6a), rgb(0xe0, 0xaf, 0x68),
-            rgb(0x7a, 0xa2, 0xf7), rgb(0xbb, 0x9a, 0xf7), rgb(0x7d, 0xcf, 0xff), rgb(0xc0, 0xca, 0xf5),
+            rgb(0x15, 0x16, 0x1e),
+            rgb(0xf7, 0x76, 0x8e),
+            rgb(0x9e, 0xce, 0x6a),
+            rgb(0xe0, 0xaf, 0x68),
+            rgb(0x7a, 0xa2, 0xf7),
+            rgb(0xbb, 0x9a, 0xf7),
+            rgb(0x7d, 0xcf, 0xff),
+            rgb(0xa9, 0xb1, 0xd6),
+            rgb(0x41, 0x48, 0x68),
+            rgb(0xf7, 0x76, 0x8e),
+            rgb(0x9e, 0xce, 0x6a),
+            rgb(0xe0, 0xaf, 0x68),
+            rgb(0x7a, 0xa2, 0xf7),
+            rgb(0xbb, 0x9a, 0xf7),
+            rgb(0x7d, 0xcf, 0xff),
+            rgb(0xc0, 0xca, 0xf5),
         ],
     }
 }
 
 /// Look up a built-in theme by config name (falls back to OneHalfDark).
-pub fn by_name(name: &str) -> Theme {
+pub(crate) fn by_name(name: &str) -> Theme {
     match name.to_ascii_lowercase().replace([' ', '_'], "-").as_str() {
         "dracula" => dracula(),
         "tokyo-night" | "tokyonight" => tokyo_night(),

@@ -1,28 +1,30 @@
 //! OSC sequence scanner. Frames `ESC ] ... (BEL | ST)` across chunk boundaries (mirrors
 //! Tabby's middleware/oscProcessing.ts) and emits the events we care about:
+//!
 //!   - OSC 7  / OSC 1337 CurrentDir=  -> cwd
 //!   - OSC 52 c;<base64>              -> clipboard (raw payload; decoded at use site, M6)
 //!   - OSC 9;4;state;pct              -> precise progress (ConEmu protocol)
+//!
 //! All input bytes still flow to the terminal engine untouched; this only observes them.
 use crate::progress::Progress;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum OscEvent {
+pub(crate) enum OscEvent {
     Cwd(String),
     Clipboard(String),
     Progress(Progress),
 }
 
-pub struct OscScanner {
+pub(crate) struct OscScanner {
     buf: Vec<u8>, // partial OSC carried across reads
 }
 
 impl OscScanner {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { buf: Vec::new() }
     }
 
-    pub fn feed(&mut self, data: &[u8]) -> Vec<OscEvent> {
+    pub(crate) fn feed(&mut self, data: &[u8]) -> Vec<OscEvent> {
         let mut bytes = std::mem::take(&mut self.buf);
         bytes.extend_from_slice(data);
 
@@ -30,19 +32,15 @@ impl OscScanner {
         let mut i = 0;
         while let Some(p) = find(&bytes, b"\x1b]", i) {
             let payload_start = p + 2;
-            match find_suffix(&bytes, payload_start) {
-                Some((s, end)) => {
-                    if let Some(ev) = parse_osc(&bytes[payload_start..s]) {
-                        events.push(ev);
-                    }
-                    i = end;
-                }
-                None => {
-                    // Incomplete OSC - keep from the prefix for the next chunk.
-                    self.buf = bytes[p..].to_vec();
-                    return events;
-                }
+            let Some((s, end)) = find_suffix(&bytes, payload_start) else {
+                // Incomplete OSC - keep from the prefix for the next chunk.
+                self.buf = bytes[p..].to_vec();
+                return events;
+            };
+            if let Some(ev) = parse_osc(&bytes[payload_start..s]) {
+                events.push(ev);
             }
+            i = end;
         }
         // Carry a lone trailing ESC so a prefix split exactly on the boundary survives.
         if bytes.last() == Some(&0x1b) {
@@ -56,10 +54,7 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if from > hay.len() {
         return None;
     }
-    hay[from..]
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|k| from + k)
+    hay[from..].windows(needle.len()).position(|w| w == needle).map(|k| from + k)
 }
 
 /// Nearest OSC terminator at/after `from`: BEL (0x07) or ST (ESC \). Returns (payload_end, seq_end).
@@ -114,17 +109,33 @@ fn parse_osc(payload: &[u8]) -> Option<OscEvent> {
 }
 
 fn expand_home(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix('~') {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}{rest}");
-        }
+    if let Some(rest) = path.strip_prefix('~')
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return format!("{home}{rest}");
     }
     path.to_string()
 }
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
+
+    proptest! {
+        // Splitting a byte stream at ANY boundary must yield the same OSC events as feeding it
+        // whole - the core guarantee of the cross-chunk framing/carry logic.
+        #[test]
+        fn split_invariant(data in prop::collection::vec(any::<u8>(), 0..512), cut in 0usize..512) {
+            let cut = cut.min(data.len());
+            let whole = OscScanner::new().feed(&data);
+            let mut sc = OscScanner::new();
+            let mut split = sc.feed(&data[..cut]);
+            split.extend(sc.feed(&data[cut..]));
+            prop_assert_eq!(whole, split);
+        }
+    }
 
     #[test]
     fn cwd_via_osc_1337() {

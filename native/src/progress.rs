@@ -5,7 +5,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Progress {
+pub(crate) enum Progress {
     #[default]
     None,
     Normal(u8),
@@ -18,19 +18,19 @@ pub enum Progress {
 static PCT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(^|[^\d])(\d+(\.\d+)?)%([^\d]|$)").unwrap());
 
-pub struct ProgressScanner {
+pub(crate) struct ProgressScanner {
     enabled: bool,
     carry: String, // trailing digits carried so a % split across chunks still matches
 }
 
 impl ProgressScanner {
-    pub fn new(enabled: bool) -> Self {
+    pub(crate) fn new(enabled: bool) -> Self {
         Self { enabled, carry: String::new() }
     }
 
     /// One decision per chunk (Tabby semantics): a chunk with a valid percentage sets it,
     /// any other chunk clears to None. Suppressed while the alt-screen is active.
-    pub fn feed(&mut self, chunk: &str, alt_screen: bool) -> Progress {
+    pub(crate) fn feed(&mut self, chunk: &str, alt_screen: bool) -> Progress {
         if !self.enabled {
             self.carry.clear();
             return Progress::None;
@@ -42,10 +42,11 @@ impl ProgressScanner {
             return Progress::None;
         }
         if let Some(caps) = PCT.captures(&scan) {
-            if let Ok(v) = caps[2].parse::<f64>() {
-                if v > 0.0 && v <= 100.0 {
-                    return Progress::Normal(v as u8);
-                }
+            if let Ok(v) = caps[2].parse::<f64>()
+                && v > 0.0
+                && v <= 100.0
+            {
+                return Progress::Normal(v as u8);
             }
             return Progress::None; // matched a %, but out of range
         }
@@ -57,21 +58,36 @@ impl ProgressScanner {
 
 /// Trailing run of digits/dot (capped), so "...42" + "%" reunites into "42%".
 fn trailing_number(s: &str) -> String {
-    let mut t: String = s
-        .chars()
-        .rev()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
+    let mut t: String = s.chars().rev().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
     t.truncate(16);
     t.chars().rev().collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     fn s(enabled: bool) -> ProgressScanner {
         ProgressScanner::new(enabled)
+    }
+
+    proptest! {
+        // A percentage split anywhere inside its digits (so the `%` lands in the second chunk)
+        // must still be detected by the trailing-digit carry - the whole point of `carry`.
+        #[test]
+        fn percent_survives_digit_split(pct in 1u8..=100, cut in 0usize..3) {
+            let text = format!(" {pct}% done");
+            prop_assert_eq!(s(true).feed(&text, false), Progress::Normal(pct));
+
+            let digits = pct.to_string();
+            let split = 1 + cut.min(digits.len()); // after the leading space, within the digits
+            let (a, b) = text.split_at(split);
+            let mut sc = s(true);
+            let _ = sc.feed(a, false);
+            prop_assert_eq!(sc.feed(b, false), Progress::Normal(pct)); // % completes in `b`
+        }
     }
 
     #[test]

@@ -210,6 +210,28 @@ cargo test             # unit + headless integration
 - Builds + 17 tests green. Toast verified via a forced screenshot; drag/word/line select + Cmd+C
   + word-nav keys are live-interaction, **pending human verify**.
 
+### Repo guidelines + supreme-ify refactor (user ask: `.agents` + Rust best practices)
+- **Instruction files** mirror trakt-web's two-hop convention: `CLAUDE.md` (area router) →
+  `@AGENTS.md` (imports 4 always-on core rules) → domain rules loaded on demand. Core:
+  `project`, `code-principles`, `implementation`, `testing`. Domain: `ui` (egui), `terminal`
+  (alacritty + parsers), `performance`, `platform` (quake/hotkey). All under `.agents/rules/`.
+  Grounded in 3 parallel research passes (trakt-web recon, idiomatic Rust, egui/eframe).
+- **Tooling**: `rustfmt.toml` (edition 2024, max_width 100); `Cargo.toml [lints]` deny
+  `clippy::all` + warn `pedantic` with a justified allow-list; `unsafe_code = "deny"` (one
+  local `#[allow]` on the edition-2024 `set_var`); `proptest` dev-dep; CI at
+  `.github/workflows/native.yml` (fmt/clippy -D warnings/test on the `rust` branch).
+- **`ui.rs` extracted** from `main.rs` (was ~960 lines, mega-file): all pure helpers now live
+  there and are unit-tested - `pos_to_cell` (mouse→grid), `ellipsize`, `key_to_bytes`
+  (the whole keyboard table, incl. the modifier-arrow logic that had shipped a bug),
+  `ctrl_letter`, `progress_fraction`, `toast_alpha`, `basename` - plus the egui drawing
+  widgets (`draw_tab`, `icon_button`, `draw_toast`, `render_grid`, `tint`, `apply_theme`, the
+  `icons` codepoints). `main.rs` is now just the `eframe::App` + window/hotkey plumbing.
+- **Visibility**: every module flipped bare `pub` → `pub(crate)` (binary crate; nothing is a
+  real public API). `Config`'s `Default` is now derived. `is_default_bg` takes `Color` by value.
+- **Tests 17 → 29**: +10 `ui` helper unit tests, +2 `proptest` split-invariants (OSC event
+  stream equal under any chunk cut; progress % survives a digit-boundary split). Clippy
+  `-D warnings` clean; screenshot confirms zero visual regression.
+
 ### Tab-bar sexify (user ask)
 - **Icons: vendored Phosphor font**, NOT the `egui-phosphor` crate. That crate (0.12, latest)
   only supports egui 0.34 - adding it pulls a 2nd egui and `add_to_fonts` type-mismatches. So:
@@ -236,6 +258,12 @@ cargo test             # unit + headless integration
 - Icon glyphs optically centered with a +1px y nudge (Phosphor ink sits high in the line box).
 
 ## Gotchas / facts learned (don't rediscover these)
+- **Repo conventions live in `.agents/rules/`** - read via `CLAUDE.md`/`AGENTS.md`. Before
+  touching UI read `ui.md`; terminal/parsers `terminal.md`; quake/hotkey `platform.md`.
+- **CI gate is clippy `-D warnings`** (pedantic escalates in CI, warns locally). Keep
+  `cargo clippy --all-targets -- -D warnings` + `cargo fmt --check` clean before pushing.
+- **Pure logic goes in `ui.rs` with a test** - the render loop is untestable; extract the math.
+- **`unsafe_code = "deny"`** - the only `unsafe` is `set_var` in `main` with a local `#[allow]`.
 - **`cargo build 2>&1 | tail` masks the real exit code** - the pipe returns tail's 0 even
   when cargo failed. Use `cargo build 2>build.log; echo $?` and grep build.log for `^error`.
 - **eframe 0.35 changed the App trait**: implement `fn ui(&mut self, ui: &mut egui::Ui, frame)`

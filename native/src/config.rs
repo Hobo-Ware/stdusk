@@ -5,73 +5,54 @@ use std::str::FromStr;
 use global_hotkey::hotkey::{Code, Modifiers};
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct Config {
-    pub appearance: Appearance,
-    pub quake: Quake,
-    pub terminal: Terminal,
+pub(crate) struct Config {
+    pub(crate) appearance: Appearance,
+    pub(crate) quake: Quake,
+    pub(crate) terminal: Terminal,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
-pub struct Appearance {
-    pub theme: String,
-    pub opacity: f32,
-    pub font_size: f32,
+pub(crate) struct Appearance {
+    pub(crate) theme: String,
+    pub(crate) opacity: f32,
+    pub(crate) font_size: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
-pub struct Quake {
-    pub hotkey: String,
-    pub height_pct: f32,
-    pub hide_on_focus_loss: bool,
+pub(crate) struct Quake {
+    pub(crate) hotkey: String,
+    pub(crate) height_pct: f32,
+    pub(crate) hide_on_focus_loss: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
-pub struct Terminal {
-    pub detect_progress: bool,
+pub(crate) struct Terminal {
+    pub(crate) detect_progress: bool,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            appearance: Appearance::default(),
-            quake: Quake::default(),
-            terminal: Terminal::default(),
-        }
-    }
-}
 impl Default for Appearance {
     fn default() -> Self {
-        Self {
-            theme: "one-half-dark".into(),
-            opacity: 0.85,
-            font_size: 13.0,
-        }
+        Self { theme: "one-half-dark".into(), opacity: 0.85, font_size: 13.0 }
     }
 }
 impl Default for Quake {
     fn default() -> Self {
-        Self {
-            hotkey: "Ctrl+Grave".into(),
-            height_pct: 0.5,
-            hide_on_focus_loss: true,
-        }
+        Self { hotkey: "Ctrl+Grave".into(), height_pct: 0.5, hide_on_focus_loss: true }
     }
 }
 impl Default for Terminal {
     fn default() -> Self {
-        Self {
-            detect_progress: true,
-        }
+        Self { detect_progress: true }
     }
 }
 
 impl Config {
-    pub fn load() -> Self {
+    pub(crate) fn load() -> Self {
         let Some(path) = config_path() else {
             return Self::default();
         };
@@ -86,15 +67,13 @@ impl Config {
 }
 
 fn config_path() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(|home| {
-        std::path::Path::new(&home)
-            .join(".config/stdusk/config.toml")
-    })
+    std::env::var_os("HOME")
+        .map(|home| std::path::Path::new(&home).join(".config/stdusk/config.toml"))
 }
 
 /// Return the config path, creating it (with the example content) if it doesn't exist.
 /// Used by the settings gear so "open config" always opens something.
-pub fn ensure_and_path() -> Option<std::path::PathBuf> {
+pub(crate) fn ensure_and_path() -> Option<std::path::PathBuf> {
     let p = config_path()?;
     if !p.exists() {
         if let Some(dir) = p.parent() {
@@ -107,8 +86,8 @@ pub fn ensure_and_path() -> Option<std::path::PathBuf> {
 
 /// Parse a hotkey string like "Ctrl+Grave", "F13", "Cmd+Grave", "Ctrl+Shift+T" into
 /// (modifiers, key). Falls back to Ctrl+Grave on anything unparseable.
-pub fn parse_hotkey(s: &str) -> (Option<Modifiers>, Code) {
-    let parts: Vec<&str> = s.split('+').map(|p| p.trim()).filter(|p| !p.is_empty()).collect();
+pub(crate) fn parse_hotkey(s: &str) -> (Option<Modifiers>, Code) {
+    let parts: Vec<&str> = s.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
     if parts.is_empty() {
         return (Some(Modifiers::CONTROL), Code::Backquote);
     }

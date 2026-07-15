@@ -15,35 +15,35 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 use base64::Engine;
 use eframe::egui::Color32;
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::colors;
 use crate::osc::{OscEvent, OscScanner};
 use crate::progress::{Progress, ProgressScanner};
 
 /// One styled cell for the renderer. `bg == None` means the terminal default (transparent).
-pub struct CellSnap {
-    pub c: char,
-    pub fg: Color32,
-    pub bg: Option<Color32>,
-    pub selected: bool,
+pub(crate) struct CellSnap {
+    pub(crate) c: char,
+    pub(crate) fg: Color32,
+    pub(crate) bg: Option<Color32>,
+    pub(crate) selected: bool,
 }
 
 /// A frame's worth of visible grid, ready to paint.
-pub struct GridSnap {
-    pub cols: usize,
-    pub rows: usize,
-    pub cells: Vec<CellSnap>,   // row-major, rows*cols
-    pub cursor: Option<(usize, usize)>, // (row, col); None while scrolled into history
-    pub top_line: i32,          // buffer line of viewport row 0 (for mouse->grid mapping)
+pub(crate) struct GridSnap {
+    pub(crate) cols: usize,
+    pub(crate) rows: usize,
+    pub(crate) cells: Vec<CellSnap>,           // row-major, rows*cols
+    pub(crate) cursor: Option<(usize, usize)>, // (row, col); None while scrolled into history
+    pub(crate) top_line: i32, // buffer line of viewport row 0 (for mouse->grid mapping)
 }
 
 /// Per-tab observable state, written by the reader thread, read by the UI.
 #[derive(Default)]
-pub struct TabState {
-    pub progress: Progress,
-    pub cwd: Option<String>,
-    pub clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
+pub(crate) struct TabState {
+    pub(crate) progress: Progress,
+    pub(crate) cwd: Option<String>,
+    pub(crate) clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
 }
 
 /// Grid sizing. History (scrollback) comes from `Config::scrolling_history`, not here.
@@ -70,7 +70,7 @@ impl EventListener for EventProxy {
     fn send_event(&self, _event: Event) {}
 }
 
-pub struct PtyTerm {
+pub(crate) struct PtyTerm {
     term: Arc<FairMutex<Term<EventProxy>>>,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>, // kept for resize
@@ -80,7 +80,7 @@ pub struct PtyTerm {
 }
 
 impl PtyTerm {
-    pub fn spawn(
+    pub(crate) fn spawn(
         cols: usize,
         rows: usize,
         ctx: egui::Context,
@@ -146,10 +146,9 @@ impl PtyTerm {
                                 OscEvent::Clipboard(b64) => {
                                     if let Ok(bytes) =
                                         base64::engine::general_purpose::STANDARD.decode(b64)
+                                        && let Ok(s) = String::from_utf8(bytes)
                                     {
-                                        if let Ok(s) = String::from_utf8(bytes) {
-                                            clip_update = Some(s);
-                                        }
+                                        clip_update = Some(s);
                                     }
                                 }
                             }
@@ -173,13 +172,13 @@ impl PtyTerm {
         Self { term, writer, master: pair.master, state, cols, rows }
     }
 
-    pub fn send(&mut self, bytes: &[u8]) {
+    pub(crate) fn send(&mut self, bytes: &[u8]) {
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();
     }
 
     /// Paste text, wrapped in bracketed-paste markers when the app enabled that mode.
-    pub fn paste(&mut self, text: &str) {
+    pub(crate) fn paste(&mut self, text: &str) {
         let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
         if bracketed {
             self.send(b"\x1b[200~");
@@ -191,7 +190,7 @@ impl PtyTerm {
     }
 
     /// Resize the pty + terminal grid to a new cell geometry (no-op if unchanged).
-    pub fn resize(&mut self, cols: usize, rows: usize) {
+    pub(crate) fn resize(&mut self, cols: usize, rows: usize) {
         if cols == self.cols && rows == self.rows || cols == 0 || rows == 0 {
             return;
         }
@@ -206,23 +205,23 @@ impl PtyTerm {
         self.term.lock().resize(Dims { cols, rows });
     }
 
-    pub fn scroll(&self, delta_lines: i32) {
+    pub(crate) fn scroll(&self, delta_lines: i32) {
         self.term.lock().scroll_display(Scroll::Delta(delta_lines));
     }
 
-    pub fn scroll_to_bottom(&self) {
+    pub(crate) fn scroll_to_bottom(&self) {
         self.term.lock().scroll_display(Scroll::Bottom);
     }
 
     /// (display_offset, history_size) - for drawing the scrollbar.
-    pub fn scroll_state(&self) -> (usize, usize) {
+    pub(crate) fn scroll_state(&self) -> (usize, usize) {
         let t = self.term.lock();
         let g = t.grid();
         (g.display_offset(), g.history_size())
     }
 
     /// Jump the viewport to an absolute history offset (0 = bottom/live).
-    pub fn scroll_to_offset(&self, target: usize) {
+    pub(crate) fn scroll_to_offset(&self, target: usize) {
         let cur = self.term.lock().grid().display_offset();
         let delta = target as i32 - cur as i32;
         if delta != 0 {
@@ -230,21 +229,21 @@ impl PtyTerm {
         }
     }
 
-    pub fn progress(&self) -> Progress {
+    pub(crate) fn progress(&self) -> Progress {
         self.state.lock().unwrap().progress
     }
 
-    pub fn cwd(&self) -> Option<String> {
+    pub(crate) fn cwd(&self) -> Option<String> {
         self.state.lock().unwrap().cwd.clone()
     }
 
     /// Take a pending OSC 52 clipboard payload (set by the shell), if any.
-    pub fn take_clipboard(&self) -> Option<String> {
+    pub(crate) fn take_clipboard(&self) -> Option<String> {
         self.state.lock().unwrap().clipboard.take()
     }
 
     /// Snapshot the visible viewport (honoring scrollback offset) with colors + cursor.
-    pub fn grid_snapshot(&self) -> GridSnap {
+    pub(crate) fn grid_snapshot(&self) -> GridSnap {
         let term = self.term.lock();
         let selection = term.selection.as_ref().and_then(|s| s.to_range(&term));
         let grid = term.grid();
@@ -257,23 +256,14 @@ impl PtyTerm {
             }
             let cell = indexed.cell;
             let inverse = cell.flags.contains(Flags::INVERSE);
-            let (fg_c, bg_c) = if inverse {
-                (cell.bg, cell.fg)
-            } else {
-                (cell.fg, cell.bg)
-            };
-            let bg = if !inverse && colors::is_default_bg(&cell.bg) {
+            let (fg_c, bg_c) = if inverse { (cell.bg, cell.fg) } else { (cell.fg, cell.bg) };
+            let bg = if !inverse && colors::is_default_bg(cell.bg) {
                 None
             } else {
                 Some(colors::to_color32(bg_c))
             };
             let selected = selection.as_ref().is_some_and(|r| r.contains(indexed.point));
-            cells.push(CellSnap {
-                c: cell.c,
-                fg: colors::to_color32(fg_c),
-                bg,
-                selected,
-            });
+            cells.push(CellSnap { c: cell.c, fg: colors::to_color32(fg_c), bg, selected });
         }
         // Cursor only shown when the viewport is at the bottom (not scrolled into history).
         let cursor = if grid.display_offset() == 0 {
@@ -285,24 +275,18 @@ impl PtyTerm {
         } else {
             None
         };
-        GridSnap {
-            cols: self.cols,
-            rows: self.rows,
-            cells,
-            cursor,
-            top_line,
-        }
+        GridSnap { cols: self.cols, rows: self.rows, cells, cursor, top_line }
     }
 
     /// Begin a text selection anchored at a grid point (mapped from mouse coords).
-    pub fn start_selection(&self, line: i32, col: usize, right: bool) {
+    pub(crate) fn start_selection(&self, line: i32, col: usize, right: bool) {
         let point = Point::new(Line(line), Column(col));
         let side = if right { Side::Right } else { Side::Left };
         self.term.lock().selection = Some(Selection::new(SelectionType::Simple, point, side));
     }
 
     /// Extend the in-progress selection to a new grid point (drag).
-    pub fn update_selection(&self, line: i32, col: usize, right: bool) {
+    pub(crate) fn update_selection(&self, line: i32, col: usize, right: bool) {
         let point = Point::new(Line(line), Column(col));
         let side = if right { Side::Right } else { Side::Left };
         if let Some(sel) = self.term.lock().selection.as_mut() {
@@ -311,23 +295,24 @@ impl PtyTerm {
     }
 
     /// Select the word under a point (double-click), using alacritty's semantic rules.
-    pub fn select_word(&self, line: i32, col: usize) {
+    pub(crate) fn select_word(&self, line: i32, col: usize) {
         let point = Point::new(Line(line), Column(col));
-        self.term.lock().selection = Some(Selection::new(SelectionType::Semantic, point, Side::Left));
+        self.term.lock().selection =
+            Some(Selection::new(SelectionType::Semantic, point, Side::Left));
     }
 
     /// Select the whole line under a point (triple-click).
-    pub fn select_line(&self, line: i32, col: usize) {
+    pub(crate) fn select_line(&self, line: i32, col: usize) {
         let point = Point::new(Line(line), Column(col));
         self.term.lock().selection = Some(Selection::new(SelectionType::Lines, point, Side::Left));
     }
 
-    pub fn clear_selection(&self) {
+    pub(crate) fn clear_selection(&self) {
         self.term.lock().selection = None;
     }
 
     /// Selected text (for Cmd+C), or None when there's no non-empty selection.
-    pub fn selection_text(&self) -> Option<String> {
+    pub(crate) fn selection_text(&self) -> Option<String> {
         self.term.lock().selection_to_string().filter(|s| !s.is_empty())
     }
 }
