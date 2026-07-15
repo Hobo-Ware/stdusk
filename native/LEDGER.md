@@ -231,6 +231,13 @@ cargo test             # unit + headless integration
   caret-down E136. Don't guess codepoints - the font's glyph names are stripped to `uniXXXX`.
 - Limitation: only the CURRENT match is highlighted (all-match highlight + regex toggle deferred).
 - 34 tests green; clippy -D warnings clean.
+- **Find-bar polish (user: "sexier, beat Tabby")**: the bar is now a compact right-aligned
+  rounded pill (elevated fill + border + drop shadow) floating in the top strip, instead of a
+  flat full-width bar - magnifier, inset field (bg = theme), `cur/total`, caret-up/down, close.
+  Right-aligned via `add_space(available - PILL_W)` in a plain LTR horizontal (a `right_to_left`
+  wrapper reversed the inner widget order - avoid it for this). **No-results feedback**: a
+  non-empty query with zero matches turns the field text + count red, and a query change that
+  yields nothing fires the "No results" toast (reuses the M6.5 toast).
 
 ### Repo guidelines + supreme-ify refactor (user ask: `.agents` + Rust best practices)
 - **Instruction files** mirror trakt-web's two-hop convention: `CLAUDE.md` (area router) →

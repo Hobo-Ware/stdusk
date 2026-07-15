@@ -231,48 +231,73 @@ impl Stdusk {
         let mut close = false;
         let mut recompute = false;
         let mut step: i32 = 0;
+        // Red input + count once a non-empty query matches nothing (reflects last recompute).
+        let no_results = !st.query.is_empty() && st.matches.is_empty();
         egui::Panel::top("findbar")
-            .frame(
-                egui::Frame::new()
-                    .fill(colors::titlebar())
-                    .inner_margin(egui::Margin::symmetric(10, 5)),
-            )
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 8)))
             .show(ui, |ui| {
+                // A compact rounded pill pushed to the right edge - floats like Tabby's find bar.
+                const PILL_W: f32 = 440.0;
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("{} ", icons::MAGNIFYING_GLASS))
-                            .color(colors::dim()),
-                    );
-                    let r = ui.add(
-                        egui::TextEdit::singleline(&mut st.query)
-                            .desired_width(240.0)
-                            .hint_text("Find in scrollback"),
-                    );
-                    if st.focus {
-                        r.request_focus();
-                        st.focus = false;
-                    }
-                    if r.changed() {
-                        recompute = true;
-                    }
-                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        step = if ui.input(|i| i.modifiers.shift) { -1 } else { 1 };
-                        st.focus = true; // keep focus for repeated Enter
-                    }
-                    let count = if st.matches.is_empty() { 0 } else { st.current + 1 };
-                    ui.label(
-                        egui::RichText::new(format!("{count}/{}", st.matches.len()))
-                            .color(colors::dim()),
-                    );
-                    if icon_button(ui, icons::CARET_UP, "Previous (Shift+Enter)").clicked() {
-                        step = -1;
-                    }
-                    if icon_button(ui, icons::CARET_DOWN, "Next (Enter)").clicked() {
-                        step = 1;
-                    }
-                    if icon_button(ui, icons::X, "Close (Esc)").clicked() {
-                        close = true;
-                    }
+                    ui.add_space((ui.available_width() - PILL_W).max(0.0));
+                    egui::Frame::new()
+                        .fill(colors::elevated())
+                        .stroke(egui::Stroke::new(1.0, colors::border()))
+                        .corner_radius(10)
+                        .shadow(egui::epaint::Shadow {
+                            offset: [0, 3],
+                            blur: 12,
+                            spread: 0,
+                            color: egui::Color32::from_black_alpha(90),
+                        })
+                        .inner_margin(egui::Margin::symmetric(10, 5))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                ui.visuals_mut().extreme_bg_color = colors::bg(); // field bg = theme
+                                ui.label(
+                                    egui::RichText::new(icons::MAGNIFYING_GLASS)
+                                        .color(colors::dim()),
+                                );
+                                let accent = if no_results { colors::red() } else { colors::fg() };
+                                let r = ui.add(
+                                    egui::TextEdit::singleline(&mut st.query)
+                                        .desired_width(220.0)
+                                        .text_color(accent)
+                                        .hint_text("Find"),
+                                );
+                                if st.focus {
+                                    r.request_focus();
+                                    st.focus = false;
+                                }
+                                if r.changed() {
+                                    recompute = true;
+                                }
+                                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    step = if ui.input(|i| i.modifiers.shift) { -1 } else { 1 };
+                                    st.focus = true; // keep focus for repeated Enter
+                                }
+                                let count = if st.matches.is_empty() { 0 } else { st.current + 1 };
+                                let count_color =
+                                    if no_results { colors::red() } else { colors::dim() };
+                                ui.label(
+                                    egui::RichText::new(format!("{count}/{}", st.matches.len()))
+                                        .color(count_color)
+                                        .monospace(),
+                                );
+                                if icon_button(ui, icons::CARET_UP, "Previous (Shift+Enter)")
+                                    .clicked()
+                                {
+                                    step = -1;
+                                }
+                                if icon_button(ui, icons::CARET_DOWN, "Next (Enter)").clicked() {
+                                    step = 1;
+                                }
+                                if icon_button(ui, icons::X, "Close (Esc)").clicked() {
+                                    close = true;
+                                }
+                            });
+                        });
                 });
             });
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -293,8 +318,14 @@ impl Stdusk {
         } else {
             term.clear_selection();
         }
+        // "No results" toast, only when a query change just produced zero matches.
+        let empty_now = recompute && !st.query.is_empty() && st.matches.is_empty();
+        if empty_now {
+            let now = ui.input(|i| i.time);
+            self.toast = Some(("No results".into(), now + 1.4));
+        }
         if close {
-            term.clear_selection();
+            self.tabs[self.active].term.clear_selection();
         } else {
             self.search = Some(st);
         }
