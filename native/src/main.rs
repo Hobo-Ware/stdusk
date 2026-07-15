@@ -53,6 +53,15 @@ fn basename(p: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
+/// Truncate to `max` chars with an ellipsis; returns (shown, was_truncated).
+fn ellipsize(s: &str, max: usize) -> (String, bool) {
+    if s.chars().count() <= max {
+        return (s.to_string(), false);
+    }
+    let head: String = s.chars().take(max.saturating_sub(1)).collect();
+    (format!("{head}…"), true)
+}
+
 struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
@@ -226,9 +235,11 @@ fn draw_tab(
     active: bool,
     color: Option<egui::Color32>,
     progress: Progress,
-) -> egui::Response {
+) -> (egui::Response, bool) {
+    let (shown, truncated) = ellipsize(title, 14);
     let fg = if active { colors::fg() } else { colors::dim() };
-    let mut rt = egui::RichText::new(format!("{idx}  {title}")).color(fg).monospace();
+    // trailing spaces reserve room for the close x
+    let mut rt = egui::RichText::new(format!("{idx}  {shown}   ")).color(fg).monospace();
     if active {
         rt = rt.strong();
     }
@@ -239,15 +250,18 @@ fn draw_tab(
     };
     let inner = egui::Frame::new()
         .fill(fill)
-        .inner_margin(egui::Margin::symmetric(12, 7))
+        .corner_radius(egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }) // top-rounded tab shape
+        .inner_margin(egui::Margin::symmetric(10, 7))
         .show(ui, |ui| {
-            ui.add(egui::Label::new(rt).selectable(false));
+            let lbl = ui.add(egui::Label::new(rt).selectable(false));
+            if truncated {
+                lbl.on_hover_text(title);
+            }
         });
     let rect = inner.response.rect;
-    let p = ui.painter();
-    // Per-tab color underline (bottom edge) - only when the user has set a color (M5 menu).
+    // Per-tab color underline (bottom edge) - only when the user set a color.
     if let Some(color) = color {
-        p.rect_filled(
+        ui.painter().rect_filled(
             egui::Rect::from_min_size(
                 egui::pos2(rect.left(), rect.bottom() - 2.0),
                 egui::vec2(rect.width(), 2.0),
@@ -256,9 +270,9 @@ fn draw_tab(
             color,
         );
     }
-    // Progress bar (top edge), width = fraction, colored by state.
+    // Progress bar (top edge).
     if let Some((frac, pcolor)) = progress_bar(progress) {
-        p.rect_filled(
+        ui.painter().rect_filled(
             egui::Rect::from_min_size(
                 egui::pos2(rect.left(), rect.top()),
                 egui::vec2(rect.width() * frac, 2.0),
@@ -267,7 +281,22 @@ fn draw_tab(
             pcolor,
         );
     }
-    inner.response.interact(egui::Sense::click())
+    // Close x, revealed on the active or hovered tab.
+    let mut close = false;
+    if active || inner.response.hovered() {
+        let x_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - 20.0, rect.center().y - 8.0),
+            egui::vec2(16.0, 16.0),
+        );
+        let x = ui.put(
+            x_rect,
+            egui::Button::new(egui::RichText::new("✕").size(11.0).color(colors::dim())).frame(false),
+        );
+        if x.clicked() {
+            close = true;
+        }
+    }
+    (inner.response.interact(egui::Sense::click()), close)
 }
 
 /// Right-click tab context menu. Sets `action`; egui auto-closes the menu on any button click.
@@ -454,18 +483,55 @@ impl eframe::App for Stdusk {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for (i, tab) in self.tabs.iter().enumerate() {
-                        let active = i == self.active;
-                        let resp =
-                            draw_tab(ui, i + 1, &tab.title, active, tab.color, tab.term.progress());
-                        if resp.clicked() {
-                            clicked = Some(i);
+                    // Right cluster (added right-to-left): gear, tab manager, new tab.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(egui::Button::new(egui::RichText::new("⚙").size(15.0)).frame(false))
+                            .on_hover_text("Settings (config.toml)")
+                            .clicked()
+                        {
+                            if let Some(p) = config::ensure_and_path() {
+                                let _ = std::process::Command::new("open").arg(p).spawn();
+                            }
                         }
-                        resp.context_menu(|ui| tab_menu(ui, i, &mut action));
-                    }
-                    if ui.button("  +  ").clicked() {
-                        action = Some(TabAction::New);
-                    }
+                        ui.menu_button(egui::RichText::new("☰").size(15.0), |ui| {
+                            ui.label(egui::RichText::new("Tabs").small().color(colors::dim()));
+                            for (i, tab) in self.tabs.iter().enumerate() {
+                                if ui.button(format!("{}  {}", i + 1, tab.title)).clicked() {
+                                    clicked = Some(i);
+                                }
+                            }
+                        });
+                        if ui
+                            .add(egui::Button::new(egui::RichText::new("+").size(17.0)).frame(false))
+                            .on_hover_text("New tab")
+                            .clicked()
+                        {
+                            action = Some(TabAction::New);
+                        }
+
+                        // Left content: the tabs, filling the remaining width.
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            for (i, tab) in self.tabs.iter().enumerate() {
+                                let active = i == self.active;
+                                let (resp, close) = draw_tab(
+                                    ui,
+                                    i + 1,
+                                    &tab.title,
+                                    active,
+                                    tab.color,
+                                    tab.term.progress(),
+                                );
+                                if close {
+                                    action = Some(TabAction::Close(i));
+                                } else if resp.clicked() {
+                                    clicked = Some(i);
+                                }
+                                resp.context_menu(|ui| tab_menu(ui, i, &mut action));
+                            }
+                        });
+                    });
                 });
             });
 

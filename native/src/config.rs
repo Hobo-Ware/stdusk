@@ -92,6 +92,19 @@ fn config_path() -> Option<std::path::PathBuf> {
     })
 }
 
+/// Return the config path, creating it (with the example content) if it doesn't exist.
+/// Used by the settings gear so "open config" always opens something.
+pub fn ensure_and_path() -> Option<std::path::PathBuf> {
+    let p = config_path()?;
+    if !p.exists() {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&p, include_str!("../config.example.toml"));
+    }
+    Some(p)
+}
+
 /// Parse a hotkey string like "Ctrl+Grave", "F13", "Cmd+Grave", "Ctrl+Shift+T" into
 /// (modifiers, key). Falls back to Ctrl+Grave on anything unparseable.
 pub fn parse_hotkey(s: &str) -> (Option<Modifiers>, Code) {
