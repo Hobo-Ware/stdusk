@@ -661,6 +661,8 @@ impl eframe::App for Stdusk {
                         );
                         if close {
                             action = Some(TabAction::Close(i));
+                        } else if resp.double_clicked() {
+                            action = Some(TabAction::Rename(i)); // double-click to rename
                         } else if resp.clicked() {
                             clicked = Some(i);
                         }
