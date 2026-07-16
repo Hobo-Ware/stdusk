@@ -246,8 +246,25 @@ fn progress_bar(p: Progress) -> Option<(f32, egui::Color32)> {
     Some((frac, color))
 }
 
-/// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline,
-/// and progress rendered as a thin bar on the TOP edge. Returns (click response, close-clicked).
+/// A tiny glyph on the tab that previews the pane split layout (nested rectangles). `rects` are
+/// the leaf rects of `Pane::miniature()` in a unit square; drawn only when there's >1 pane.
+fn draw_mini_layout(ui: &mut egui::Ui, rects: &[egui::Rect], active: bool) {
+    let (box_rect, _) = ui.allocate_exact_size(egui::vec2(15.0, 15.0), egui::Sense::hover());
+    let inner = box_rect.shrink(1.0);
+    let col = if active { colors::fg() } else { colors::dim() };
+    let painter = ui.painter();
+    for r in rects {
+        let cell = egui::Rect::from_min_max(
+            inner.min + egui::vec2(r.min.x * inner.width(), r.min.y * inner.height()),
+            inner.min + egui::vec2(r.max.x * inner.width(), r.max.y * inner.height()),
+        );
+        painter.rect_filled(cell, 1.0, col);
+    }
+}
+
+/// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline, a
+/// split-layout preview glyph, and progress as a thin bar on the TOP edge. Returns (click
+/// response, close-clicked). `layout` = `Pane::miniature()` leaf rects (glyph shown when >1).
 pub(crate) fn draw_tab(
     ui: &mut egui::Ui,
     idx: usize,
@@ -255,6 +272,7 @@ pub(crate) fn draw_tab(
     active: bool,
     color: Option<egui::Color32>,
     progress: Progress,
+    layout: &[egui::Rect],
 ) -> (egui::Response, bool) {
     let (shown, truncated) = ellipsize(title, 14);
     let fg = if active { colors::fg() } else { colors::dim() };
@@ -269,10 +287,16 @@ pub(crate) fn draw_tab(
         .corner_radius(egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }) // top-rounded tab shape
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
-            let lbl = ui.add(egui::Label::new(rt).selectable(false));
-            if truncated {
-                lbl.on_hover_text(title);
-            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 7.0;
+                if layout.len() > 1 {
+                    draw_mini_layout(ui, layout, active);
+                }
+                let lbl = ui.add(egui::Label::new(rt).selectable(false));
+                if truncated {
+                    lbl.on_hover_text(title);
+                }
+            });
         });
     let rect = inner.response.rect;
     // A foreground-layer painter: the row layout's clip cuts off the tab's top/bottom edges,

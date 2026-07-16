@@ -231,6 +231,12 @@ cargo test             # unit + headless integration
   each pane's pty to its rect, wheel-scroll the pane under the pointer, route keys/paste/Cmd+C to
   the focused pane, set focus on click/drag. Draggable splitters drawn in the gutters (accent on
   hover, resize cursor). Verified via a forced 3-pane screenshot (row+column, focus border correct).
+- **Mini-layout tab glyph** (user ask): each tab with >1 pane shows a tiny nested-rectangles
+  preview of its split layout before the title (fractal - left/right → two vertical rects,
+  top/bottom → two horizontal, recursing). `Pane::miniature()` returns leaf rects in a unit
+  square (reuses `split_rect` with a proportional gap); `ui::draw_mini_layout` scales them into a
+  15px box (fg when active, dim otherwise). `split_rect` gained a `gutter` param so the mini
+  version uses a small proportional gap. 1 unit test.
 - **Right-click pane menu** (user ask, useful subset of Tabby's): Copy (enabled with a selection),
   Copy current path (cwd), Split Right/Down/Left/Up, New tab, Close pane. Built via
   `resp.context_menu` → a `PaneAction` enum collected then applied after the panel (deferred, like

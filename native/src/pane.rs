@@ -203,13 +203,34 @@ impl<T> Pane<T> {
         match self {
             Pane::Leaf(_) => out.push((path.clone(), rect)),
             Pane::Split { dir, ratio, a, b } => {
-                let (ra, rb) = split_rect(rect, *dir, *ratio);
+                let (ra, rb) = split_rect(rect, *dir, *ratio, GUTTER);
                 path.push(Side::A);
                 a.layout_into(ra, path, out);
                 path.pop();
                 path.push(Side::B);
                 b.layout_into(rb, path, out);
                 path.pop();
+            }
+        }
+    }
+
+    /// Leaf rects for a tiny tab glyph that previews the split layout - same structure as
+    /// `layout` but in a unit square with a proportional gap, so the caller scales it to any box.
+    pub(crate) fn miniature(&self) -> Vec<Rect> {
+        let mut out = Vec::new();
+        self.mini_into(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 1.0)), &mut out);
+        out
+    }
+
+    fn mini_into(&self, rect: Rect, out: &mut Vec<Rect>) {
+        match self {
+            Pane::Leaf(_) => out.push(rect),
+            Pane::Split { dir, ratio, a, b } => {
+                // Gap proportional to the smaller side so nested splits keep visible seams.
+                let gap = 0.12 * rect.width().min(rect.height());
+                let (ra, rb) = split_rect(rect, *dir, *ratio, gap);
+                a.mini_into(ra, out);
+                b.mini_into(rb, out);
             }
         }
     }
@@ -231,7 +252,7 @@ impl<T> Pane<T> {
     ) {
         if let Pane::Split { dir, ratio, a, b } = self {
             out.push((path.clone(), *dir, gutter_rect(rect, *dir, *ratio), rect));
-            let (ra, rb) = split_rect(rect, *dir, *ratio);
+            let (ra, rb) = split_rect(rect, *dir, *ratio, GUTTER);
             path.push(Side::A);
             a.splitters_into(ra, path, out);
             path.pop();
@@ -242,25 +263,25 @@ impl<T> Pane<T> {
     }
 }
 
-/// Split `rect` into two child rects by `ratio`, leaving a `GUTTER` gap between them.
-fn split_rect(rect: Rect, dir: SplitDir, ratio: f32) -> (Rect, Rect) {
+/// Split `rect` into two child rects by `ratio`, leaving a `gutter` gap between them.
+fn split_rect(rect: Rect, dir: SplitDir, ratio: f32, gutter: f32) -> (Rect, Rect) {
     match dir {
         SplitDir::Row => {
-            let usable = (rect.width() - GUTTER).max(0.0);
+            let usable = (rect.width() - gutter).max(0.0);
             let aw = usable * ratio;
             let a = Rect::from_min_size(rect.min, vec2(aw, rect.height()));
             let b = Rect::from_min_size(
-                pos2(rect.min.x + aw + GUTTER, rect.min.y),
+                pos2(rect.min.x + aw + gutter, rect.min.y),
                 vec2((usable - aw).max(0.0), rect.height()),
             );
             (a, b)
         }
         SplitDir::Column => {
-            let usable = (rect.height() - GUTTER).max(0.0);
+            let usable = (rect.height() - gutter).max(0.0);
             let ah = usable * ratio;
             let a = Rect::from_min_size(rect.min, vec2(rect.width(), ah));
             let b = Rect::from_min_size(
-                pos2(rect.min.x, rect.min.y + ah + GUTTER),
+                pos2(rect.min.x, rect.min.y + ah + gutter),
                 vec2(rect.width(), (usable - ah).max(0.0)),
             );
             (a, b)
@@ -371,6 +392,21 @@ mod tests {
         assert_eq!(b.width(), (100.0 - GUTTER) * 0.5);
         assert_eq!(a.height(), 40.0);
         assert_eq!(b.min.x, a.max.x + GUTTER); // gutter between them
+    }
+
+    #[test]
+    fn miniature_reflects_structure() {
+        // Single leaf -> one rect filling (near) the whole unit square.
+        assert_eq!(Pane::leaf(1u32).miniature().len(), 1);
+        // Row split -> two rects side by side (a left of b, same height range).
+        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false);
+        let r = tree.miniature();
+        assert_eq!(r.len(), 2);
+        assert!(r[0].max.x <= r[1].min.x); // a is left of b (with a gap)
+        assert!((r[0].height() - 1.0).abs() < 1e-6 && (r[1].height() - 1.0).abs() < 1e-6);
+        // Nested (row then column on B) -> three leaf rects.
+        let (tree, _) = tree.split(&[Side::B], SplitDir::Column, 3, false);
+        assert_eq!(tree.miniature().len(), 3);
     }
 
     #[test]

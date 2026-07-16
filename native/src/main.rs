@@ -644,6 +644,7 @@ impl eframe::App for Stdusk {
                                     active,
                                     tab.color,
                                     tab.focused_term().progress(),
+                                    &tab.root().miniature(),
                                 );
                                 if close {
                                     action = Some(TabAction::Close(i));
