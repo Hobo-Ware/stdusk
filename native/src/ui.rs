@@ -349,8 +349,9 @@ pub(crate) fn collect_input(ui: &egui::Ui) -> Vec<u8> {
 
 /// Paint one terminal pane inside `rect`: per-cell bg + selection overlay + glyph + cursor +
 /// a scrollbar, and drive mouse selection (drag / double / triple click) + wheel scroll. When
-/// `highlight` is set, draw a focus border. Returns the pane's `Response` (so the caller can
-/// focus on click/drag + attach a context menu). `id_src` must be unique per pane (its path).
+/// `dimmed` fades the pane toward the background (used for unfocused panes in a split). Returns
+/// the pane's `Response` (so the caller can focus on click/drag + attach a context menu).
+/// `id_src` must be unique per pane (its path).
 pub(crate) fn render_grid(
     ui: &mut egui::Ui,
     id_src: &[crate::pane::Side],
@@ -360,7 +361,7 @@ pub(crate) fn render_grid(
     cw: f32,
     ch: f32,
     font: &egui::FontId,
-    highlight: bool,
+    dimmed: bool,
 ) -> egui::Response {
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -421,12 +422,13 @@ pub(crate) fn render_grid(
 
     pane_scrollbar(ui, id_src, rect, term, snap.rows);
 
-    if highlight {
-        painter.rect_stroke(
-            rect.shrink(0.5),
+    // Inactive panes dim toward the background (Tabby-style), instead of bordering the active one.
+    if dimmed {
+        let b = colors::bg();
+        painter.rect_filled(
+            rect,
             0.0,
-            egui::Stroke::new(1.0, colors::accent()),
-            egui::StrokeKind::Inside,
+            egui::Color32::from_rgba_unmultiplied(b.r(), b.g(), b.b(), 115),
         );
     }
     resp

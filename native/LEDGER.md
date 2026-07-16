@@ -224,8 +224,9 @@ cargo test             # unit + headless integration
 - **Keybinds**: Cmd+D split Row, Cmd+Shift+D split Column (new pane inherits focused cwd, gets
   focus); Cmd+W closes the focused pane, or the tab on its last pane.
 - **Render**: `render_grid` reworked to paint ONE leaf at an arbitrary `rect` via `painter_at`
-  (was `allocate_painter`), taking the pane path as its egui `Id`, drawing a per-pane scrollbar +
-  an accent focus border (only when >1 pane). The central panel tiles `root.layout(area)`: resize
+  (was `allocate_painter`), taking the pane path as its egui `Id`, drawing a per-pane scrollbar.
+  Focus is shown Tabby-style by **dimming the UNFOCUSED panes** (a translucent bg scrim, `dimmed`
+  arg) rather than bordering the focused one. The central panel tiles `root.layout(area)`: resize
   each pane's pty to its rect, wheel-scroll the pane under the pointer, route keys/paste/Cmd+C to
   the focused pane, set focus on click/drag. Draggable splitters drawn in the gutters (accent on
   hover, resize cursor). Verified via a forced 3-pane screenshot (row+column, focus border correct).

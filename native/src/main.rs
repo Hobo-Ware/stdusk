@@ -835,10 +835,10 @@ impl eframe::App for Stdusk {
                     }
                     let term = tab.root().leaf_at(path).expect("leaf");
                     let snap = term.grid_snapshot();
-                    let highlight = multi && path == &tab.focused;
+                    let dimmed = multi && path != &tab.focused;
                     let has_sel = term.selection_text().is_some();
                     let cwd = term.cwd();
-                    let resp = render_grid(ui, path, *rect, term, &snap, cw, ch, &font, highlight);
+                    let resp = render_grid(ui, path, *rect, term, &snap, cw, ch, &font, dimmed);
                     if resp.clicked() || resp.drag_started() {
                         focus_click = Some(path.clone());
                     }
