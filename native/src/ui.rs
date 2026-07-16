@@ -159,12 +159,24 @@ pub(crate) fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(v);
 }
 
-/// A filled-circle color swatch for the tab Color menu. Hover draws a ring; returns the Response.
-pub(crate) fn color_swatch(ui: &mut egui::Ui, color: egui::Color32) -> egui::Response {
+/// A filled-circle color swatch for the tab Color menu. Draws a bright ring when `selected`, a
+/// dim ring on hover; returns the Response.
+pub(crate) fn color_swatch(
+    ui: &mut egui::Ui,
+    color: egui::Color32,
+    selected: bool,
+) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::click());
     let center = rect.center();
-    if resp.hovered() {
-        ui.painter().circle_stroke(center, 10.0, egui::Stroke::new(1.5, colors::fg()));
+    let ring = if selected {
+        Some((colors::fg(), 2.0))
+    } else if resp.hovered() {
+        Some((colors::dim(), 1.5))
+    } else {
+        None
+    };
+    if let Some((c, w)) = ring {
+        ui.painter().circle_stroke(center, 10.0, egui::Stroke::new(w, c));
     }
     ui.painter().circle_filled(center, 8.0, color);
     resp
@@ -326,9 +338,8 @@ pub(crate) fn draw_tab(
     let rect = inner.response.rect;
     // A foreground-layer painter: the row layout's clip cuts off the tab's top/bottom edges,
     // so edge strokes (underline, progress) must be drawn on an unclipped layer.
-    let dp = ui
-        .ctx()
-        .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tab_deco")));
+    let dp =
+        ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("tab_deco")));
     // Per-tab color underline (bottom edge) - only when the user set a color.
     if let Some(color) = color {
         dp.rect_filled(

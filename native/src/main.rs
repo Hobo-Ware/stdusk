@@ -481,7 +481,12 @@ fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
 }
 
 /// Right-click tab context menu. Sets `action`; egui auto-closes the menu on any button click.
-fn tab_menu(ui: &mut egui::Ui, i: usize, action: &mut Option<TabAction>) {
+fn tab_menu(
+    ui: &mut egui::Ui,
+    i: usize,
+    current: Option<egui::Color32>,
+    action: &mut Option<TabAction>,
+) {
     style_menu(ui);
     if ui.button("New tab").clicked() {
         *action = Some(TabAction::New);
@@ -490,17 +495,19 @@ fn tab_menu(ui: &mut egui::Ui, i: usize, action: &mut Option<TabAction>) {
         *action = Some(TabAction::Rename(i));
     }
     ui.menu_button("Color", |ui| {
-        style_menu(ui);
+        // Snug width for the swatch grid (style_menu's 210 leaves dead space here).
+        ui.spacing_mut().button_padding = egui::vec2(12.0, 7.0);
+        ui.set_min_width(168.0);
         if ui.button("No color").clicked() {
             *action = Some(TabAction::SetColor(i, None));
         }
         ui.add_space(4.0);
-        // Filled-circle swatches, 2 rows of 6.
+        // Filled-circle swatches, 2 rows of 6; the current color gets a ring.
         for row in colors::tab_colors().chunks(6) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for &col in row {
-                    if color_swatch(ui, col).clicked() {
+                    if color_swatch(ui, col, current == Some(col)).clicked() {
                         *action = Some(TabAction::SetColor(i, Some(col)));
                     }
                 }
@@ -657,7 +664,8 @@ impl eframe::App for Stdusk {
                         } else if resp.clicked() {
                             clicked = Some(i);
                         }
-                        resp.context_menu(|ui| tab_menu(ui, i, &mut action));
+                        let tab_color = tab.color;
+                        resp.context_menu(|ui| tab_menu(ui, i, tab_color, &mut action));
                     }
                     ui.add_space(6.0);
                     if icon_button(ui, icons::PLUS, "New tab").clicked() {
