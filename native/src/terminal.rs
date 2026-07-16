@@ -55,6 +55,7 @@ pub(crate) struct TabState {
     pub(crate) cwd: Option<String>,
     pub(crate) clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
     pub(crate) cmd: CmdState,             // OSC 133 last-command state (tab dot)
+    pub(crate) bell: bool,                // BEL rung since last consumed (drives the visual flash)
 }
 
 /// Grid sizing. History (scrollback) comes from `Config::scrolling_history`, not here.
@@ -74,11 +75,20 @@ impl Dimensions for Dims {
     }
 }
 
-/// No-op event sink. We drive repaints from the reader thread directly.
+/// Event sink for the alacritty `Term`. We drive repaints from the reader thread, so the only
+/// event we care about is the bell -> flag it on the shared state for the UI to flash.
 #[derive(Clone)]
-struct EventProxy;
+struct EventProxy {
+    state: Arc<Mutex<TabState>>,
+}
 impl EventListener for EventProxy {
-    fn send_event(&self, _event: Event) {}
+    fn send_event(&self, event: Event) {
+        if matches!(event, Event::Bell)
+            && let Ok(mut s) = self.state.lock()
+        {
+            s.bell = true;
+        }
+    }
 }
 
 pub(crate) struct PtyTerm {
@@ -119,13 +129,12 @@ impl PtyTerm {
         let mut reader = pair.master.try_clone_reader().expect("reader");
         let writer = pair.master.take_writer().expect("writer");
 
+        let state = Arc::new(Mutex::new(TabState::default()));
         let term = Arc::new(FairMutex::new(Term::new(
             Config::default(),
             &Dims { cols, rows },
-            EventProxy,
+            EventProxy { state: state.clone() },
         )));
-
-        let state = Arc::new(Mutex::new(TabState::default()));
 
         let term_reader = term.clone();
         let state_reader = state.clone();
@@ -264,6 +273,11 @@ impl PtyTerm {
 
     pub(crate) fn cmd_state(&self) -> CmdState {
         self.state.lock().unwrap().cmd
+    }
+
+    /// Take the pending bell (BEL rung since last call), for a one-shot visual flash.
+    pub(crate) fn take_bell(&self) -> bool {
+        std::mem::take(&mut self.state.lock().unwrap().bell)
     }
 
     pub(crate) fn cwd(&self) -> Option<String> {

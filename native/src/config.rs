@@ -35,6 +35,7 @@ pub(crate) struct Terminal {
     pub(crate) detect_progress: bool,
     pub(crate) cursor: String,          // "block" | "underline" | "beam"
     pub(crate) shell_integration: bool, // inject OSC 133 hooks into the spawned shell
+    pub(crate) bell: String,            // "visual" | "off"
 }
 
 impl Default for Appearance {
@@ -49,7 +50,12 @@ impl Default for Quake {
 }
 impl Default for Terminal {
     fn default() -> Self {
-        Self { detect_progress: true, cursor: "block".into(), shell_integration: true }
+        Self {
+            detect_progress: true,
+            cursor: "block".into(),
+            shell_integration: true,
+            bell: "visual".into(),
+        }
     }
 }
 

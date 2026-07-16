@@ -149,6 +149,7 @@ struct Stdusk {
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
+    flash: f64,        // bell visual-flash expiry (egui time); 0 = none
     screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
 }
 
@@ -163,6 +164,23 @@ impl Stdusk {
         );
         if let Some(keys) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
             keys.insert(1, "phosphor".to_owned());
+        }
+        // Broad monochrome fallbacks (macOS) for arrows / box-drawing / powerline / misc symbols
+        // the bundled fonts miss - appended as lowest priority so the primary fonts win. Loaded
+        // best-effort; absent files (other OSes) are simply skipped. NOTE: SMP color emoji
+        // (😀 💰) still can't render - egui rasterizes monochrome glyph outlines only.
+        for (name, path) in [
+            ("sys-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+            ("sys-symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(bytes).into());
+                for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                    if let Some(keys) = fonts.families.get_mut(&fam) {
+                        keys.push(name.to_owned());
+                    }
+                }
+            }
         }
         cc.egui_ctx.set_fonts(fonts);
 
@@ -222,6 +240,7 @@ impl Stdusk {
             renaming: None,
             search: None,
             toast: None,
+            flash: 0.0,
             screenshot,
         }
     }
@@ -774,7 +793,9 @@ impl eframe::App for Stdusk {
         self.find_panel(ui);
 
         let now = ctx.input(|i| i.time);
+        let bell_on = self.cfg.terminal.bell != "off";
         let mut copied = false; // set inside the central panel when Cmd+C copies a selection
+        let mut bell_rang = false; // any pane rang BEL this frame -> visual flash
         let mut pane_action: Option<PaneAction> = None; // from the pane right-click menu
         egui::CentralPanel::default()
             .frame(
@@ -853,6 +874,9 @@ impl eframe::App for Stdusk {
                     let cwd = term.cwd();
                     let resp =
                         render_grid(ui, path, *rect, term, &snap, cw, ch, &font, cursor, dimmed);
+                    if bell_on && term.take_bell() {
+                        bell_rang = true;
+                    }
                     if resp.clicked() || resp.drag_started() {
                         focus_click = Some(path.clone());
                     }
@@ -940,6 +964,21 @@ impl eframe::App for Stdusk {
             }
             Some(PaneAction::NewTab) => self.new_tab(&ctx),
             None => {}
+        }
+
+        // Bell: a brief translucent flash over the whole window, fading out.
+        if bell_rang {
+            self.flash = now + 0.18;
+        }
+        if self.flash > now {
+            let a = toast_alpha(self.flash - now, 0.18);
+            let f = colors::fg();
+            ui.painter().rect_filled(
+                ui.max_rect(),
+                10.0,
+                egui::Color32::from_rgba_unmultiplied(f.r(), f.g(), f.b(), (55.0 * a) as u8),
+            );
+            ctx.request_repaint();
         }
 
         // Transient "Copied" toast at the bottom-center, fading out.
