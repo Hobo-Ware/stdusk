@@ -109,8 +109,14 @@ only for the thin slice that truly needs a widget tree (focus moving on tab swit
 
 - **Toasts:** `{ text, born|expiry }`; draw a bottom-centre pill on a foreground layer, fade
   over the last ~0.35s via `toast_alpha`, `request_repaint` while live so it self-dismisses.
-- **Focus:** request focus on the terminal surface on the quake open-transition edge only -
-  never every frame, or typing breaks. Rename field uses `request_focus()` once.
+- **Focus & input capture (three hard rules, each cost a bug):**
+  1. Request focus on a text field ONCE (a one-shot flag), never every frame - re-requesting
+     stops egui from ever reporting the Enter-triggered `lost_focus`, so Enter never submits.
+  2. The focused terminal pane requests focus every frame, so it will steal focus from any open
+     text field. Gate that (and pty input) on `input_captured = search.is_some() ||
+     renaming.is_some()` - every modal text field must be in that expression.
+  3. Sample `input_captured` BEFORE the modals run this frame. Sampling after lets the key that
+     closes a modal (Enter committing a rename) leak to the shell once the modal clears its state.
 - **Keybinds:** `Modifiers::command` (Cmd on macOS, Ctrl elsewhere) for app binds
   (Cmd+T/W/1..9); raw `ctrl` only where terminal semantics demand it (Ctrl-C = SIGINT).
   Cmd+C/V arrive as `Event::Copy`/`Event::Paste`, NOT key presses - watch the events.

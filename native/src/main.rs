@@ -755,6 +755,12 @@ impl eframe::App for Stdusk {
             None => {}
         }
 
+        // A text field (find bar or rename dialog) owns the keyboard: don't forward keys to the
+        // pty and don't let the terminal steal egui focus back while one is open. Captured MUST be
+        // sampled BEFORE the modals run this frame - else the key that closes a modal (Enter to
+        // commit a rename) would leak to the shell once the modal clears its own state.
+        let input_captured = self.search.is_some() || self.renaming.is_some();
+
         self.rename_window(&ctx);
 
         // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.
@@ -764,9 +770,6 @@ impl eframe::App for Stdusk {
             ctx.copy_text(text);
         }
 
-        // A text field (find bar or rename dialog) owns the keyboard: don't forward keys to the
-        // pty and don't let the terminal steal egui focus back while one is open.
-        let input_captured = self.search.is_some() || self.renaming.is_some();
         self.find_panel(ui);
 
         let now = ctx.input(|i| i.time);
