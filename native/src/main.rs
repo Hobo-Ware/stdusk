@@ -146,7 +146,7 @@ struct Stdusk {
     visible: bool,
     was_focused: bool, // gained focus since last show (so blur can hide)
     sized: bool,       // applied quake sizing once the monitor size was known
-    renaming: Option<(usize, String)>, // tab index + edit buffer while renaming
+    renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
     screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
@@ -260,7 +260,7 @@ impl Stdusk {
 
     /// Modal rename field, shown while `self.renaming` is set.
     fn rename_window(&mut self, ctx: &egui::Context) {
-        let Some((idx, mut buf)) = self.renaming.take() else {
+        let Some((idx, mut buf, mut focus)) = self.renaming.take() else {
             return;
         };
         let mut commit = false;
@@ -275,7 +275,12 @@ impl Stdusk {
                 ui.label(egui::RichText::new("Rename tab").color(colors::dim()));
                 ui.add_space(6.0);
                 let r = ui::text_field(ui, &mut buf, "Tab name", 220.0, colors::fg());
-                r.request_focus();
+                // Focus ONCE on open. Re-requesting every frame would stop egui from ever
+                // reporting the Enter-triggered lost_focus, so Enter would never commit.
+                if focus {
+                    r.request_focus();
+                    focus = false;
+                }
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     commit = true;
                 }
@@ -300,7 +305,7 @@ impl Stdusk {
                 t.renamed = true;
             }
         } else if !cancel {
-            self.renaming = Some((idx, buf)); // keep editing next frame
+            self.renaming = Some((idx, buf, focus)); // keep editing next frame
         }
     }
 
@@ -736,7 +741,7 @@ impl eframe::App for Stdusk {
             Some(TabAction::New) => self.new_tab(&ctx),
             Some(TabAction::Rename(i)) => {
                 if let Some(t) = self.tabs.get(i) {
-                    self.renaming = Some((i, t.title.clone()));
+                    self.renaming = Some((i, t.title.clone(), true));
                 }
             }
             Some(TabAction::SetColor(i, c)) => {
