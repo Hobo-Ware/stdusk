@@ -139,6 +139,23 @@ pub(crate) fn toast_alpha(remaining_s: f64, fade_window_s: f64) -> f32 {
     (remaining_s / fade_window_s).clamp(0.0, 1.0) as f32
 }
 
+/// Terminal cursor shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CursorStyle {
+    Block,
+    Underline,
+    Beam,
+}
+
+/// Parse the config `cursor` string; unknown values fall back to `Block` (the default).
+pub(crate) fn cursor_style(s: &str) -> CursorStyle {
+    match s.to_ascii_lowercase().as_str() {
+        "underline" | "under" => CursorStyle::Underline,
+        "beam" | "bar" | "ibeam" => CursorStyle::Beam,
+        _ => CursorStyle::Block,
+    }
+}
+
 // ---- egui drawing widgets (thin; not unit-tested) ----
 
 /// Apply window opacity to a fill color (straight alpha).
@@ -488,6 +505,7 @@ pub(crate) fn render_grid(
     cw: f32,
     ch: f32,
     font: &egui::FontId,
+    cursor: CursorStyle,
     dimmed: bool,
 ) -> egui::Response {
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
@@ -541,14 +559,33 @@ pub(crate) fn render_grid(
         }
     }
 
-    // Beam cursor (block/underline styles land in M9); hidden while scrolled into history.
+    // Cursor (block/underline/beam); hidden while scrolled into history.
     if let Some((cr, cc)) = snap.cursor {
         let cpos = origin + egui::vec2(cc as f32 * cw, cr as f32 * ch);
-        painter.rect_filled(
-            egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)),
-            0.0,
-            fade(colors::cursor()),
-        );
+        let cur = fade(colors::cursor());
+        match cursor {
+            CursorStyle::Beam => {
+                painter.rect_filled(egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)), 0.0, cur);
+            }
+            CursorStyle::Underline => {
+                let u = egui::pos2(cpos.x, cpos.y + ch - 2.0);
+                painter.rect_filled(egui::Rect::from_min_size(u, egui::vec2(cw, 2.0)), 0.0, cur);
+            }
+            CursorStyle::Block => {
+                painter.rect_filled(egui::Rect::from_min_size(cpos, egui::vec2(cw, ch)), 0.0, cur);
+                // Redraw the glyph under the block in the background color so it stays legible.
+                let glyph = snap.cells[cr * snap.cols + cc].c;
+                if glyph != ' ' && glyph != '\0' {
+                    painter.text(
+                        cpos,
+                        egui::Align2::LEFT_TOP,
+                        glyph,
+                        font.clone(),
+                        fade(colors::bg()),
+                    );
+                }
+            }
+        }
     }
 
     pane_scrollbar(ui, id_src, rect, term, snap.rows);
@@ -703,6 +740,15 @@ mod tests {
         assert_eq!(progress_fraction(Progress::Paused(20)), Some(0.2));
         assert_eq!(progress_fraction(Progress::Error(0)), Some(1.0));
         assert_eq!(progress_fraction(Progress::Indeterminate), Some(1.0));
+    }
+
+    #[test]
+    fn cursor_style_parse() {
+        assert_eq!(cursor_style("block"), CursorStyle::Block);
+        assert_eq!(cursor_style("Underline"), CursorStyle::Underline);
+        assert_eq!(cursor_style("beam"), CursorStyle::Beam);
+        assert_eq!(cursor_style("bar"), CursorStyle::Beam);
+        assert_eq!(cursor_style("nonsense"), CursorStyle::Block); // fallback
     }
 
     #[test]

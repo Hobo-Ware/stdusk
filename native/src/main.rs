@@ -787,6 +787,7 @@ impl eframe::App for Stdusk {
                 let font = egui::FontId::monospace(self.cfg.appearance.font_size);
                 let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
                 let (cw, ch) = (m.size().x, m.size().y);
+                let cursor = ui::cursor_style(&self.cfg.terminal.cursor);
 
                 let tab = &mut self.tabs[self.active];
 
@@ -850,7 +851,8 @@ impl eframe::App for Stdusk {
                     let dimmed = multi && path != &tab.focused;
                     let has_sel = term.selection_text().is_some();
                     let cwd = term.cwd();
-                    let resp = render_grid(ui, path, *rect, term, &snap, cw, ch, &font, dimmed);
+                    let resp =
+                        render_grid(ui, path, *rect, term, &snap, cw, ch, &font, cursor, dimmed);
                     if resp.clicked() || resp.drag_started() {
                         focus_click = Some(path.clone());
                     }

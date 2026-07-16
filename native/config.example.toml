@@ -13,3 +13,5 @@ hide_on_focus_loss = true
 
 [terminal]
 detect_progress = true    # scrape N% from output into the tab progress bar (Tabby-style)
+cursor = "block"          # cursor shape: "block" | "underline" | "beam"
+shell_integration = true  # inject OSC 133 hooks so tabs show a command exit-state dot
