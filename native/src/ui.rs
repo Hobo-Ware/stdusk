@@ -420,8 +420,14 @@ pub(crate) fn draw_tab(
     let dp =
         ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("tab_deco")));
     // OSC 133 exit-state accent bar on the tab's left edge (amber=running, green=ok, red=fail).
+    // Short + vertically centered with rounded ends, so it clears the bottom color underline.
     if let Some(c) = cmd_dot(cmd) {
-        dp.rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())), 0.0, c);
+        let h = 16.0_f32.min(rect.height() - 8.0);
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 1.0, rect.center().y - h / 2.0),
+            egui::vec2(3.0, h),
+        );
+        dp.rect_filled(bar, 1.5, c);
     }
     // Per-tab color underline (bottom edge) - only when the user set a color.
     if let Some(color) = color {
