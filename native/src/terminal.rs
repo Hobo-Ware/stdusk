@@ -18,8 +18,18 @@ use eframe::egui::Color32;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::colors;
-use crate::osc::{OscEvent, OscScanner};
+use crate::osc::{OscEvent, OscScanner, ShellEvent};
 use crate::progress::{Progress, ProgressScanner};
+
+/// Last-command state from OSC 133 shell integration, shown as the tab's state dot.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum CmdState {
+    #[default]
+    Idle, // no command run yet (no dot)
+    Running,
+    Ok,
+    Fail,
+}
 
 /// One styled cell for the renderer. `bg == None` means the terminal default (transparent).
 pub(crate) struct CellSnap {
@@ -44,6 +54,7 @@ pub(crate) struct TabState {
     pub(crate) progress: Progress,
     pub(crate) cwd: Option<String>,
     pub(crate) clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
+    pub(crate) cmd: CmdState,             // OSC 133 last-command state (tab dot)
 }
 
 /// Grid sizing. History (scrollback) comes from `Config::scrolling_history`, not here.
@@ -139,6 +150,7 @@ impl PtyTerm {
                         let mut progress = prog.feed(&text, alt);
                         let mut cwd_update = None;
                         let mut clip_update = None;
+                        let mut cmd_update = None;
                         for ev in osc_events {
                             match ev {
                                 OscEvent::Progress(p) => progress = p, // OSC 9;4 wins over %-scrape
@@ -151,6 +163,20 @@ impl PtyTerm {
                                         clip_update = Some(s);
                                     }
                                 }
+                                OscEvent::Shell(s) => match s {
+                                    ShellEvent::CommandStart => {
+                                        cmd_update = Some(CmdState::Running);
+                                    }
+                                    ShellEvent::CommandEnd(code) => {
+                                        cmd_update = Some(if code.unwrap_or(0) == 0 {
+                                            CmdState::Ok
+                                        } else {
+                                            CmdState::Fail
+                                        });
+                                    }
+                                    // PromptStart: keep the last result visible at the prompt.
+                                    ShellEvent::PromptStart => {}
+                                },
                             }
                         }
                         {
@@ -161,6 +187,9 @@ impl PtyTerm {
                             }
                             if let Some(c) = clip_update {
                                 s.clipboard = Some(c);
+                            }
+                            if let Some(c) = cmd_update {
+                                s.cmd = c;
                             }
                         }
                         ctx.request_repaint();
@@ -231,6 +260,10 @@ impl PtyTerm {
 
     pub(crate) fn progress(&self) -> Progress {
         self.state.lock().unwrap().progress
+    }
+
+    pub(crate) fn cmd_state(&self) -> CmdState {
+        self.state.lock().unwrap().cmd
     }
 
     pub(crate) fn cwd(&self) -> Option<String> {

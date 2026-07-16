@@ -46,7 +46,7 @@ cargo test             # unit + headless integration
 | M6.5 | Mouse text selection + Cmd+C copy | 🟡 code done, builds + 17 tests green, pending human verify |
 | M7 | Scrollback search (Cmd+F) | 🟡 code done, builds + 34 tests green, pending human verify |
 | M8 | Split panes (pane tree, focus, drag-resize, per-pane pty) | 🟡 code done, builds + 46 tests green, pending human verify |
-| M9 | Shell integration (OSC 133) + exit state dot | todo |
+| M9 | Shell integration (OSC 133) + exit dot; bell; cursor styles | 🟡 OSC 133 dot done (49 tests); bell + cursor styles remain |
 | M10 | First-party AI agent | todo |
 | M11 | Polish + settings GUI | todo |
 
@@ -209,6 +209,17 @@ cargo test             # unit + headless integration
   regardless of modifiers - the "moves one-by-one" bug.)
 - Builds + 17 tests green. Toast verified via a forced screenshot; drag/word/line select + Cmd+C
   + word-nav keys are live-interaction, **pending human verify**.
+
+### M9 (in progress) - shell integration (`osc.rs`, `terminal.rs`, `ui.rs`)
+- **OSC 133 → tab exit-state dot** (done). `osc.rs` parses `133;A|C|D[;code]` → `OscEvent::Shell(
+  ShellEvent{PromptStart|CommandStart|CommandEnd(Option<i32>)})`; reader thread maps to
+  `TabState.cmd: CmdState {Idle|Running|Ok|Fail}` (CommandStart→Running, CommandEnd 0/none→Ok else
+  Fail, PromptStart keeps last result). `draw_tab` shows a small dot before the number:
+  yellow=running, green=ok, red=fail, none=idle. Focused pane's state (aggregation deferred).
+  6 OSC-133 parse cases tested.
+- **NOTE: needs the shell to emit OSC 133.** zsh/bash don't by default; degrades gracefully (no
+  dot). TODO: ship an opt-in shell-integration snippet (precmd/preexec hooks) + auto-source it.
+- **Remaining M9**: bell (visual flash / config), cursor styles (block/underline; beam-only now).
 
 ### M8 - split panes (`pane.rs`, `main.rs`, `ui.rs`)
 - **Pure `pane.rs`**: generic binary tree `Pane<T> { Leaf(T) | Split{dir, ratio, a, b} }` (`T =

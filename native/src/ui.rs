@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::colors;
 use crate::progress::Progress;
-use crate::terminal::{GridSnap, PtyTerm};
+use crate::terminal::{CmdState, GridSnap, PtyTerm};
 
 /// Phosphor icon codepoints (font vendored in assets/Phosphor.ttf, MIT).
 pub(crate) mod icons {
@@ -333,6 +333,16 @@ fn progress_bar(p: Progress) -> Option<(f32, egui::Color32)> {
     Some((frac, color))
 }
 
+/// Tab exit-state dot color from OSC 133 (`None` = idle, no dot).
+fn cmd_dot(state: CmdState) -> Option<egui::Color32> {
+    match state {
+        CmdState::Idle => None,
+        CmdState::Running => Some(colors::yellow()),
+        CmdState::Ok => Some(colors::green()),
+        CmdState::Fail => Some(colors::red()),
+    }
+}
+
 /// A tiny glyph on the tab that previews the pane split layout (nested rectangles). `rects` are
 /// the leaf rects of `Pane::miniature()` in a unit square; drawn only when there's >1 pane.
 fn draw_mini_layout(ui: &mut egui::Ui, rects: &[egui::Rect], active: bool) {
@@ -359,6 +369,7 @@ pub(crate) fn draw_tab(
     active: bool,
     color: Option<egui::Color32>,
     progress: Progress,
+    cmd: CmdState,
     layout: &[egui::Rect],
 ) -> (egui::Response, bool) {
     let (shown, truncated) = ellipsize(title, 14);
@@ -376,6 +387,12 @@ pub(crate) fn draw_tab(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
+                // OSC 133 exit-state dot (running/ok/fail).
+                if let Some(dot) = cmd_dot(cmd) {
+                    let (r, _) =
+                        ui.allocate_exact_size(egui::vec2(8.0, 14.0), egui::Sense::hover());
+                    ui.painter().circle_filled(r.center(), 4.0, dot);
+                }
                 if layout.len() > 1 {
                     draw_mini_layout(ui, layout, active);
                 }

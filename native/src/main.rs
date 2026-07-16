@@ -642,6 +642,7 @@ impl eframe::App for Stdusk {
                             active,
                             tab.color,
                             tab.focused_term().progress(),
+                            tab.focused_term().cmd_state(),
                             &tab.root().miniature(),
                         );
                         if close {

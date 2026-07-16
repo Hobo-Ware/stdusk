@@ -13,6 +13,15 @@ pub(crate) enum OscEvent {
     Cwd(String),
     Clipboard(String),
     Progress(Progress),
+    Shell(ShellEvent),
+}
+
+/// OSC 133 shell-integration marks (FinalTerm / iTerm2 protocol). Feeds the tab exit-state dot.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ShellEvent {
+    PromptStart,             // 133;A
+    CommandStart,            // 133;C (command begins executing)
+    CommandEnd(Option<i32>), // 133;D[;exit_code]
 }
 
 pub(crate) struct OscScanner {
@@ -104,6 +113,16 @@ fn parse_osc(payload: &[u8]) -> Option<OscEvent> {
             };
             Some(OscEvent::Progress(progress))
         }
+        "133" => {
+            // 133 ; A|B|C|D [; exit_code] - shell-integration marks.
+            let ev = match *fields.get(1)? {
+                "A" => ShellEvent::PromptStart,
+                "C" => ShellEvent::CommandStart,
+                "D" => ShellEvent::CommandEnd(fields.get(2).and_then(|s| s.parse::<i32>().ok())),
+                _ => return None, // B (prompt end) and others: ignored
+            };
+            Some(OscEvent::Shell(ev))
+        }
         _ => None,
     }
 }
@@ -169,6 +188,23 @@ mod tests {
             OscScanner::new().feed(b"\x1b]9;4;3\x07"),
             vec![OscEvent::Progress(Progress::Indeterminate)]
         );
+    }
+
+    #[test]
+    fn shell_integration_osc_133() {
+        use ShellEvent::{CommandEnd, CommandStart, PromptStart};
+        let cases: [(&[u8], ShellEvent); 5] = [
+            (b"\x1b]133;A\x07", PromptStart),
+            (b"\x1b]133;C\x07", CommandStart),
+            (b"\x1b]133;D;0\x07", CommandEnd(Some(0))),
+            (b"\x1b]133;D;127\x07", CommandEnd(Some(127))),
+            (b"\x1b]133;D\x07", CommandEnd(None)),
+        ];
+        for (input, want) in cases {
+            assert_eq!(OscScanner::new().feed(input), vec![OscEvent::Shell(want)], "{input:?}");
+        }
+        // 133;B (prompt end) and unknown kinds are ignored.
+        assert_eq!(OscScanner::new().feed(b"\x1b]133;B\x07"), vec![]);
     }
 
     #[test]
