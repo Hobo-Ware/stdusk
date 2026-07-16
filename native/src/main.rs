@@ -11,6 +11,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 mod colors;
 mod config;
 mod osc;
+mod pane;
 mod progress;
 mod search;
 mod terminal;
@@ -29,7 +30,24 @@ struct Tab {
     title: String,
     color: Option<egui::Color32>, // None = no underline (Tabby default); set via the menu
     renamed: bool,                // once renamed, stop auto-titling from cwd
-    term: PtyTerm,
+    root: Option<pane::Pane<PtyTerm>>, // Option so whole-tree transforms can `take()` it
+    focused: Vec<pane::Side>,     // path to the focused leaf (its identity)
+}
+
+impl Tab {
+    fn root(&self) -> &pane::Pane<PtyTerm> {
+        self.root.as_ref().expect("pane root")
+    }
+    fn root_mut(&mut self) -> &mut pane::Pane<PtyTerm> {
+        self.root.as_mut().expect("pane root")
+    }
+    fn focused_term(&self) -> &PtyTerm {
+        self.root().leaf_at(&self.focused).expect("focused leaf")
+    }
+    fn focused_term_mut(&mut self) -> &mut PtyTerm {
+        let path = self.focused.clone();
+        self.root_mut().leaf_at_mut(&path).expect("focused leaf")
+    }
 }
 
 fn spawn_tab(ctx: &egui::Context, detect_progress: bool, cwd: Option<String>) -> Tab {
@@ -37,7 +55,8 @@ fn spawn_tab(ctx: &egui::Context, detect_progress: bool, cwd: Option<String>) ->
         title: "zsh".into(),
         color: None,
         renamed: false,
-        term: PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect_progress, cwd),
+        root: Some(pane::Pane::leaf(PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect_progress, cwd))),
+        focused: Vec::new(),
     }
 }
 
@@ -151,7 +170,7 @@ impl Stdusk {
     }
 
     fn new_tab(&mut self, ctx: &egui::Context) {
-        let cwd = self.tabs.get(self.active).and_then(|t| t.term.cwd());
+        let cwd = self.tabs.get(self.active).and_then(|t| t.focused_term().cwd());
         let detect = self.cfg.terminal.detect_progress;
         self.tabs.push(spawn_tab(ctx, detect, cwd));
         self.active = self.tabs.len() - 1;
@@ -354,7 +373,7 @@ impl Stdusk {
             close = true;
         }
 
-        let term = &self.tabs[self.active].term;
+        let term = self.tabs[self.active].focused_term();
         if recompute {
             st.matches = search::find_matches(&term.buffer_lines(), &st.query, st.opts);
             st.current = 0;
@@ -375,7 +394,7 @@ impl Stdusk {
             self.toast = Some(("No results".into(), now + 1.4));
         }
         if close {
-            self.tabs[self.active].term.clear_selection();
+            self.tabs[self.active].focused_term().clear_selection();
         } else {
             self.search = Some(st);
         }
@@ -491,20 +510,22 @@ impl eframe::App for Stdusk {
         // Auto-title unrenamed tabs from their cwd (basename).
         for tab in &mut self.tabs {
             if !tab.renamed
-                && let Some(c) = tab.term.cwd()
+                && let Some(c) = tab.focused_term().cwd()
             {
                 tab.title = basename(&c);
             }
         }
 
-        // Browser-style keybinds: Cmd+T new, Cmd+W close, Cmd+1..9 switch.
+        // Browser-style keybinds: Cmd+T new, Cmd+W close focused pane/tab, Cmd+1..9 switch,
+        // Cmd+D split side-by-side, Cmd+Shift+D split stacked.
         let mut kb_new = false;
         let mut kb_close = false;
         let mut kb_find = false;
+        let mut kb_split: Option<pane::SplitDir> = None;
         let mut kb_switch: Option<usize> = None;
         ctx.input(|i| {
             if i.modifiers.command {
-                use egui::Key::{F, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, T, W};
+                use egui::Key::{D, F, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, T, W};
                 if i.key_pressed(T) {
                     kb_new = true;
                 }
@@ -513,6 +534,13 @@ impl eframe::App for Stdusk {
                 }
                 if i.key_pressed(F) {
                     kb_find = true;
+                }
+                if i.key_pressed(D) {
+                    kb_split = Some(if i.modifiers.shift {
+                        pane::SplitDir::Column
+                    } else {
+                        pane::SplitDir::Row
+                    });
                 }
                 for (n, k) in
                     [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9].into_iter().enumerate()
@@ -562,7 +590,7 @@ impl eframe::App for Stdusk {
                                     &tab.title,
                                     active,
                                     tab.color,
-                                    tab.term.progress(),
+                                    tab.focused_term().progress(),
                                 );
                                 if close {
                                     action = Some(TabAction::Close(i));
@@ -610,12 +638,35 @@ impl eframe::App for Stdusk {
         if kb_new {
             action = Some(TabAction::New);
         }
+        if let Some(dir) = kb_split {
+            let cwd = self.tabs[self.active].focused_term().cwd();
+            let detect = self.cfg.terminal.detect_progress;
+            let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect, cwd);
+            let tab = &mut self.tabs[self.active];
+            let root = tab.root.take().expect("root");
+            let (root, focus) = root.split(&tab.focused, dir, new);
+            tab.root = Some(root);
+            if let Some(f) = focus {
+                tab.focused = f;
+            }
+        }
         if kb_close {
-            action = Some(TabAction::Close(self.active));
+            // Cmd+W closes the focused pane; the tab only closes on its last pane.
+            let tab = &mut self.tabs[self.active];
+            if tab.root().leaf_count() > 1 {
+                let root = tab.root.take().expect("root");
+                let (root, focus) = root.close(&tab.focused);
+                tab.root = root;
+                if let Some(f) = focus {
+                    tab.focused = f;
+                }
+            } else {
+                action = Some(TabAction::Close(self.active));
+            }
         }
         if kb_find {
             match self.search.take() {
-                Some(_) => self.tabs[self.active].term.clear_selection(),
+                Some(_) => self.tabs[self.active].focused_term().clear_selection(),
                 None => {
                     self.search = Some(Search {
                         query: String::new(),
@@ -647,8 +698,10 @@ impl eframe::App for Stdusk {
 
         self.rename_window(&ctx);
 
-        // OSC 52: a shell "copy" request -> the system clipboard.
-        if let Some(text) = self.tabs.get(self.active).and_then(|t| t.term.take_clipboard()) {
+        // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.
+        if let Some(text) =
+            self.tabs.get(self.active).and_then(|t| t.focused_term().take_clipboard())
+        {
             ctx.copy_text(text);
         }
 
@@ -665,28 +718,29 @@ impl eframe::App for Stdusk {
             )
             .show(ui, |ui| {
                 let area = ui.max_rect();
-                let term = &mut self.tabs[self.active].term;
+                let font = egui::FontId::monospace(self.cfg.appearance.font_size);
+                let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
+                let (cw, ch) = (m.size().x, m.size().y);
 
-                // Cmd+C arrives as egui's Copy event (not a raw key). Copy the selection;
-                // Ctrl+C stays SIGINT (collect_input handles that). `copied` -> toast below.
+                let tab = &mut self.tabs[self.active];
+
+                // Cmd+C copies the focused pane's selection (Ctrl+C stays SIGINT).
                 let want_copy =
                     ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-                if want_copy && let Some(txt) = term.selection_text() {
+                if want_copy && let Some(txt) = tab.focused_term().selection_text() {
                     ctx.copy_text(txt);
                     copied = true;
                 }
 
-                // Keystrokes -> pty; typing clears any selection and jumps back to the bottom.
-                // Suppressed while the find bar is open (it owns the keyboard).
+                // Keystrokes + paste -> focused pane (unless the find bar owns the keyboard).
                 if !search_open {
                     let input = collect_input(ui);
                     if !input.is_empty() {
-                        term.send(&input);
-                        term.clear_selection();
-                        term.scroll_to_bottom();
+                        let t = tab.focused_term_mut();
+                        t.send(&input);
+                        t.clear_selection();
+                        t.scroll_to_bottom();
                     }
-
-                    // Paste (Cmd+V -> egui Paste event); bracketed if the app requested it.
                     let pastes: Vec<String> = ui.input(|i| {
                         i.events
                             .iter()
@@ -697,72 +751,69 @@ impl eframe::App for Stdusk {
                             .collect()
                     });
                     for p in pastes {
-                        term.paste(&p);
-                        term.clear_selection();
-                        term.scroll_to_bottom();
+                        let t = tab.focused_term_mut();
+                        t.paste(&p);
+                        t.clear_selection();
+                        t.scroll_to_bottom();
                     }
                 }
 
-                // Cell metrics + wheel scrollback.
-                let font = egui::FontId::monospace(self.cfg.appearance.font_size);
-                let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
-                let (cw, ch) = (m.size().x, m.size().y);
-
+                // Tile the pane tree and render each leaf in its rect.
+                let layout = tab.root().layout(area);
+                let multi = layout.len() > 1;
                 let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
-                if scroll_y != 0.0 {
-                    let mut lines = (scroll_y / ch).round() as i32;
-                    if lines == 0 {
-                        lines = scroll_y.signum() as i32; // ensure small deltas still move
+                let pointer = ui.input(|i| i.pointer.hover_pos());
+                let mut focus_click: Option<Vec<pane::Side>> = None;
+                for (path, rect) in &layout {
+                    {
+                        let term = tab.root_mut().leaf_at_mut(path).expect("leaf");
+                        let cols = (rect.width() / cw).floor().max(1.0) as usize;
+                        let rows = (rect.height() / ch).floor().max(1.0) as usize;
+                        term.resize(cols, rows);
+                        // Wheel scroll goes to the pane under the pointer.
+                        if scroll_y != 0.0 && pointer.is_some_and(|p| rect.contains(p)) {
+                            let mut lines = (scroll_y / ch).round() as i32;
+                            if lines == 0 {
+                                lines = scroll_y.signum() as i32;
+                            }
+                            term.scroll(lines);
+                        }
                     }
-                    term.scroll(lines);
+                    let term = tab.root().leaf_at(path).expect("leaf");
+                    let snap = term.grid_snapshot();
+                    let highlight = multi && path == &tab.focused;
+                    if render_grid(ui, path, *rect, term, &snap, cw, ch, &font, highlight) {
+                        focus_click = Some(path.clone());
+                    }
+                }
+                if let Some(p) = focus_click {
+                    tab.focused = p;
                 }
 
-                // Resize pty + grid to fit the available area.
-                let avail = ui.available_size();
-                let cols = (avail.x / cw).floor().max(1.0) as usize;
-                let rows = (avail.y / ch).floor().max(1.0) as usize;
-                term.resize(cols, rows);
-
-                let snap = term.grid_snapshot();
-                render_grid(ui, term, &snap, cw, ch, &font);
-
-                // Scrollbar on the right edge when there's scrollback history.
-                let (offset, history) = term.scroll_state();
-                if history > 0 {
-                    let track = area.height();
-                    let total = (history + snap.rows) as f32;
-                    let thumb_h = (snap.rows as f32 / total * track).max(24.0);
-                    let top_frac = (history - offset) as f32 / total;
-                    let thumb_y = area.top() + top_frac * track;
-                    let bar_x = area.right() - 6.0;
-
-                    let track_rect = egui::Rect::from_min_max(
-                        egui::pos2(bar_x - 2.0, area.top()),
-                        egui::pos2(area.right(), area.bottom()),
-                    );
+                // Draggable splitters between panes.
+                for (spath, dir, handle, parent) in tab.root().splitters(area) {
                     let resp = ui.interact(
-                        track_rect,
-                        ui.id().with("scrollbar"),
+                        handle,
+                        egui::Id::new(("split", &spath)),
                         egui::Sense::click_and_drag(),
                     );
-                    if (resp.dragged() || resp.clicked())
+                    let hot = resp.hovered() || resp.dragged();
+                    ui.painter().rect_filled(
+                        handle,
+                        1.0,
+                        if hot { colors::accent() } else { colors::border() },
+                    );
+                    if hot {
+                        ui.ctx().set_cursor_icon(match dir {
+                            pane::SplitDir::Row => egui::CursorIcon::ResizeHorizontal,
+                            pane::SplitDir::Column => egui::CursorIcon::ResizeVertical,
+                        });
+                    }
+                    if resp.dragged()
                         && let Some(p) = resp.interact_pointer_pos()
                     {
-                        let frac = ((p.y - area.top()) / track).clamp(0.0, 1.0);
-                        let tgt = ((1.0 - frac) * history as f32).round() as usize;
-                        term.scroll_to_offset(tgt.min(history));
+                        tab.root_mut().set_ratio(&spath, pane::ratio_from_pointer(parent, dir, p));
                     }
-                    let alpha = if resp.hovered() || resp.dragged() { 180 } else { 90 };
-                    let d = colors::dim();
-                    let col = egui::Color32::from_rgba_unmultiplied(d.r(), d.g(), d.b(), alpha);
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_size(
-                            egui::pos2(bar_x, thumb_y),
-                            egui::vec2(4.0, thumb_h),
-                        ),
-                        2.0,
-                        col,
-                    );
                 }
             });
 

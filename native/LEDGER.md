@@ -45,7 +45,7 @@ cargo test             # unit + headless integration
 | M6 | Resize + scrollback + paste + OSC52 + bracketed-paste | 🟡 code done, builds + 17 tests green, pending human verify |
 | M6.5 | Mouse text selection + Cmd+C copy | 🟡 code done, builds + 17 tests green, pending human verify |
 | M7 | Scrollback search (Cmd+F) | 🟡 code done, builds + 34 tests green, pending human verify |
-| M8 | Split panes | todo |
+| M8 | Split panes (pane tree, focus, drag-resize, per-pane pty) | 🟡 code done, builds + 46 tests green, pending human verify |
 | M9 | Shell integration (OSC 133) + exit state dot | todo |
 | M10 | First-party AI agent | todo |
 | M11 | Polish + settings GUI | todo |
@@ -210,6 +210,28 @@ cargo test             # unit + headless integration
 - Builds + 17 tests green. Toast verified via a forced screenshot; drag/word/line select + Cmd+C
   + word-nav keys are live-interaction, **pending human verify**.
 
+### M8 - split panes (`pane.rs`, `main.rs`, `ui.rs`)
+- **Pure `pane.rs`**: generic binary tree `Pane<T> { Leaf(T) | Split{dir, ratio, a, b} }` (`T =
+  PtyTerm` in the app, `u32` in tests). A leaf's identity is its `path: Vec<Side>` (A/B from the
+  root); focus is a path. Ops are **consuming + recursive** (rebuild the tree) to avoid unsafe
+  in-place surgery: `split(path,dir,new) -> (tree, Some(new_path))`, `close(path) -> (Option<tree>,
+  focus)` (collapses the parent into the sibling; `None` when the last leaf closed → close tab),
+  `set_ratio` (in-place, `at_mut`), `layout(area) -> [(path, rect)]`, `splitters(area) ->
+  [(path, dir, handle_rect, parent_rect)]`, `ratio_from_pointer`. `SplitDir::Row` = side by side,
+  `Column` = stacked. 8 unit tests (split/close/collapse/refocus/layout/clamp).
+- **`Tab` now holds `root: Option<Pane<PtyTerm>>` + `focused: Vec<Side>`** (Option so whole-tree
+  transforms can `take()` it - `Pane` isn't `Default`). Accessors `focused_term[_mut]`, `root[_mut]`.
+- **Keybinds**: Cmd+D split Row, Cmd+Shift+D split Column (new pane inherits focused cwd, gets
+  focus); Cmd+W closes the focused pane, or the tab on its last pane.
+- **Render**: `render_grid` reworked to paint ONE leaf at an arbitrary `rect` via `painter_at`
+  (was `allocate_painter`), taking the pane path as its egui `Id`, drawing a per-pane scrollbar +
+  an accent focus border (only when >1 pane). The central panel tiles `root.layout(area)`: resize
+  each pane's pty to its rect, wheel-scroll the pane under the pointer, route keys/paste/Cmd+C to
+  the focused pane, set focus on click/drag. Draggable splitters drawn in the gutters (accent on
+  hover, resize cursor). Verified via a forced 3-pane screenshot (row+column, focus border correct).
+- Limitations (deferred): no drag-to-reorder panes, no broadcast-input, no pane zoom/maximize,
+  tab bar shows only the FOCUSED pane's progress/title (not aggregated).
+
 ### M7 - scrollback search (`search.rs`, `main.rs`, `terminal.rs`)
 - **Pure `search.rs`**: `find_matches(lines: &[(i32, String)], query) -> Vec<Match{line,col,len}>`,
   ASCII-case-insensitive substring, non-overlapping, top-to-bottom. 5 unit tests. `line` is the
@@ -333,8 +355,9 @@ cargo test             # unit + headless integration
 - Tab bar look confirmed: flat tabs + per-tab colored underline + top-edge progress (Tabby-style).
 
 ## Next up
-**M8 - split panes** (v1 must-have). Tab owns a pane tree `enum Pane { Leaf(PtyTerm) |
-Split{dir, ratio, a, b} }`; recursively split the tab rect; draggable splitters; focused pane
-routes input; Cmd+D vertical / Cmd+Shift+D horizontal / Cmd+W closes focused. Hard-depends on M6
-resize (per-pane pty sizing) - done. See PLAN §4g. (Backlog: human-verify M5/M6/M6.5/M7 live -
-all code-done but unverified; M7 all-match highlight + regex toggle deferred.)
+**M9 - shell integration (OSC 133) + exit-code state dot; bell; cursor styles.** Parse OSC 133
+prompt/command marks in `osc.rs` → `TabState.last_exit`; show a running/done/fail state dot on
+the tab (separate from the manual color). Add bell (visual flash / config) and block/underline
+cursor styles (currently beam-only). See PLAN §4d/§9. Feeds M10 (the AI agent wants exit codes).
+(Backlog: human-verify M5-M8 live - all code-done but unverified. M8 deferrals: pane reorder,
+broadcast input, pane zoom, aggregated tab progress. M7: all-match highlight.)

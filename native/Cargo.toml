@@ -36,3 +36,4 @@ enum_glob_use = "allow"            # `use NamedColor::*` in a 16-arm match reads
 float_cmp = "allow"                # exact != 0.0 / defaults comparisons are intentional
 similar_names = "allow"            # bel/st, cw/ch, rows/cols are the domain vocabulary
 too_many_lines = "allow"           # the eframe render loop is legitimately long
+too_many_arguments = "allow"       # render_grid threads ui + rect + term + metrics per pane

@@ -347,20 +347,24 @@ pub(crate) fn collect_input(ui: &egui::Ui) -> Vec<u8> {
     out
 }
 
-/// Paint the terminal grid (per-cell bg + selection overlay + fg glyph + beam cursor) and
-/// drive mouse text selection: drag to select, double/triple-click to select word/line,
-/// click to clear.
+/// Paint one terminal pane inside `rect`: per-cell bg + selection overlay + glyph + cursor +
+/// a scrollbar, and drive mouse selection (drag / double / triple click) + wheel scroll. When
+/// `highlight` is set, draw a focus border. Returns `true` if the pane was clicked/dragged this
+/// frame (so the caller can focus it). `id_src` must be unique per pane (its tree path).
 pub(crate) fn render_grid(
     ui: &mut egui::Ui,
+    id_src: &[crate::pane::Side],
+    rect: egui::Rect,
     term: &PtyTerm,
     snap: &GridSnap,
     cw: f32,
     ch: f32,
     font: &egui::FontId,
-) {
-    let size = egui::vec2(cw * snap.cols as f32, ch * snap.rows as f32);
-    let (resp, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
-    let origin = resp.rect.min;
+    highlight: bool,
+) -> bool {
+    let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
+    let painter = ui.painter_at(rect);
+    let origin = rect.min;
     let hit = |p: egui::Pos2| {
         pos_to_cell(p.x - origin.x, p.y - origin.y, cw, ch, snap.cols, snap.rows, snap.top_line)
     };
@@ -392,12 +396,12 @@ pub(crate) fn render_grid(
         for c in 0..snap.cols {
             let cell = &snap.cells[r * snap.cols + c];
             let pos = origin + egui::vec2(c as f32 * cw, r as f32 * ch);
-            let rect = egui::Rect::from_min_size(pos, egui::vec2(cw, ch));
+            let cell_rect = egui::Rect::from_min_size(pos, egui::vec2(cw, ch));
             if let Some(bg) = cell.bg {
-                painter.rect_filled(rect, 0.0, bg);
+                painter.rect_filled(cell_rect, 0.0, bg);
             }
             if cell.selected {
-                painter.rect_filled(rect, 0.0, colors::selection());
+                painter.rect_filled(cell_rect, 0.0, colors::selection());
             }
             if cell.c != ' ' && cell.c != '\0' {
                 painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), cell.fg);
@@ -414,6 +418,60 @@ pub(crate) fn render_grid(
             colors::cursor(),
         );
     }
+
+    pane_scrollbar(ui, id_src, rect, term, snap.rows);
+
+    if highlight {
+        painter.rect_stroke(
+            rect.shrink(0.5),
+            0.0,
+            egui::Stroke::new(1.0, colors::accent()),
+            egui::StrokeKind::Inside,
+        );
+    }
+    resp.clicked() || resp.drag_started()
+}
+
+/// Draggable scrollback thumb on the right edge of a pane's `rect`.
+fn pane_scrollbar(
+    ui: &mut egui::Ui,
+    id_src: &[crate::pane::Side],
+    rect: egui::Rect,
+    term: &PtyTerm,
+    rows: usize,
+) {
+    let (offset, history) = term.scroll_state();
+    if history == 0 {
+        return;
+    }
+    let track = rect.height();
+    let total = (history + rows) as f32;
+    let thumb_h = (rows as f32 / total * track).max(24.0);
+    let top_frac = (history - offset) as f32 / total;
+    let thumb_y = rect.top() + top_frac * track;
+    let bar_x = rect.right() - 6.0;
+
+    let track_rect = egui::Rect::from_min_max(
+        egui::pos2(bar_x - 2.0, rect.top()),
+        egui::pos2(rect.right(), rect.bottom()),
+    );
+    let resp =
+        ui.interact(track_rect, egui::Id::new((id_src, "sb")), egui::Sense::click_and_drag());
+    if (resp.dragged() || resp.clicked())
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let frac = ((p.y - rect.top()) / track).clamp(0.0, 1.0);
+        let target = ((1.0 - frac) * history as f32).round() as usize;
+        term.scroll_to_offset(target.min(history));
+    }
+    let alpha = if resp.hovered() || resp.dragged() { 180 } else { 90 };
+    let d = colors::dim();
+    let col = egui::Color32::from_rgba_unmultiplied(d.r(), d.g(), d.b(), alpha);
+    ui.painter_at(rect).rect_filled(
+        egui::Rect::from_min_size(egui::pos2(bar_x, thumb_y), egui::vec2(4.0, thumb_h)),
+        2.0,
+        col,
+    );
 }
 
 #[cfg(test)]
