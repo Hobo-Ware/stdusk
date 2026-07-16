@@ -405,12 +405,6 @@ pub(crate) fn draw_tab(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 7.0;
-                // OSC 133 exit-state dot (running/ok/fail).
-                if let Some(dot) = cmd_dot(cmd) {
-                    let (r, _) =
-                        ui.allocate_exact_size(egui::vec2(8.0, 14.0), egui::Sense::hover());
-                    ui.painter().circle_filled(r.center(), 4.0, dot);
-                }
                 if layout.len() > 1 {
                     draw_mini_layout(ui, layout, active);
                 }
@@ -425,6 +419,10 @@ pub(crate) fn draw_tab(
     // so edge strokes (underline, progress) must be drawn on an unclipped layer.
     let dp =
         ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("tab_deco")));
+    // OSC 133 exit-state accent bar on the tab's left edge (amber=running, green=ok, red=fail).
+    if let Some(c) = cmd_dot(cmd) {
+        dp.rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())), 0.0, c);
+    }
     // Per-tab color underline (bottom edge) - only when the user set a color.
     if let Some(color) = color {
         dp.rect_filled(
