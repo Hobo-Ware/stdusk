@@ -260,9 +260,18 @@ impl Stdusk {
                                 // typed text and count all share a baseline + size.
                                 ui.style_mut().override_font_id =
                                     Some(egui::FontId::proportional(15.0));
-                                ui.label(
-                                    egui::RichText::new(icons::MAGNIFYING_GLASS)
-                                        .color(colors::dim()),
+                                // Magnifier painted centered in its box (Phosphor ink sits high in
+                                // the line box, so a plain label would float above the field).
+                                let (mrect, _) = ui.allocate_exact_size(
+                                    egui::vec2(20.0, 28.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().text(
+                                    mrect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    icons::MAGNIFYING_GLASS,
+                                    egui::FontId::proportional(16.0),
+                                    colors::dim(),
                                 );
                                 let accent = if no_results { colors::red() } else { colors::fg() };
                                 let r = ui.add(
