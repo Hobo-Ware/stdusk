@@ -238,6 +238,13 @@ cargo test             # unit + headless integration
   wrapper reversed the inner widget order - avoid it for this). **No-results feedback**: a
   non-empty query with zero matches turns the field text + count red, and a query change that
   yields nothing fires the "No results" toast (reuses the M6.5 toast).
+- **Search toggles (user: Tabby parity)**: `SearchOpts { case_sensitive, regex, whole_word }`
+  drives `find_matches`, now regex-backed (`RegexBuilder`): literal queries are `regex::escape`d,
+  whole-word wraps `\b(?:..)\b`, case flips `case_insensitive`, invalid regex -> no matches (red).
+  Find bar gained three `icon_toggle` buttons (accent-tinted when on): Aa (text-aa) case, `*`
+  (asterisk) regex, `[ ]` (brackets-square) whole-word - codepoints fetched from official CSS +
+  font-verified. Bigger input (16pt font, wider). 9 search unit tests (case/regex/whole-word/
+  invalid). 38 tests total.
 
 ### Repo guidelines + supreme-ify refactor (user ask: `.agents` + Rust best practices)
 - **Instruction files** mirror trakt-web's two-hop convention: `CLAUDE.md` (area router) →

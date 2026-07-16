@@ -17,6 +17,9 @@ pub(crate) mod icons {
     pub(crate) const MAGNIFYING_GLASS: &str = "\u{E30C}";
     pub(crate) const CARET_UP: &str = "\u{E13C}";
     pub(crate) const CARET_DOWN: &str = "\u{E136}";
+    pub(crate) const TEXT_AA: &str = "\u{E6EE}"; // case sensitivity
+    pub(crate) const ASTERISK: &str = "\u{E0AA}"; // regex
+    pub(crate) const BRACKETS_SQUARE: &str = "\u{E85E}"; // whole word
 }
 
 // ---- pure helpers (no egui state; unit-tested below) ----
@@ -170,6 +173,37 @@ pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Res
         egui::Align2::CENTER_CENTER,
         icon,
         egui::FontId::proportional(17.0),
+        color,
+    );
+    resp.on_hover_text(tip)
+}
+
+/// A toggle variant of `icon_button`: tinted accent fill + accent glyph while `active`.
+pub(crate) fn icon_toggle(
+    ui: &mut egui::Ui,
+    icon: &str,
+    active: bool,
+    tip: &str,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
+    let hovered = resp.hovered();
+    if active {
+        ui.painter().rect_filled(rect, 6.0, colors::selection());
+    } else if hovered {
+        ui.painter().rect_filled(rect, 6.0, colors::hover());
+    }
+    let color = if active {
+        colors::accent()
+    } else if hovered {
+        colors::fg()
+    } else {
+        colors::dim()
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(15.0),
         color,
     );
     resp.on_hover_text(tip)

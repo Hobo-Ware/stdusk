@@ -18,8 +18,8 @@ mod ui;
 use config::Config;
 use terminal::PtyTerm;
 use ui::{
-    apply_theme, basename, collect_input, draw_tab, draw_toast, icon_button, icons, render_grid,
-    tint, toast_alpha,
+    apply_theme, basename, collect_input, draw_tab, draw_toast, icon_button, icon_toggle, icons,
+    render_grid, tint, toast_alpha,
 };
 
 const COLS: usize = 80;
@@ -48,6 +48,7 @@ struct Search {
     matches: Vec<search::Match>,
     current: usize,
     focus: bool, // request text-field focus on the next frame (set on open / after Enter)
+    opts: search::SearchOpts, // case / regex / whole-word toggles
 }
 
 /// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
@@ -236,33 +237,36 @@ impl Stdusk {
         egui::Panel::top("findbar")
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 8)))
             .show(ui, |ui| {
-                // A compact rounded pill pushed to the right edge - floats like Tabby's find bar.
-                const PILL_W: f32 = 440.0;
+                // A rounded pill pushed to the right edge - floats like Tabby's find bar.
+                const PILL_W: f32 = 620.0;
                 ui.horizontal(|ui| {
                     ui.add_space((ui.available_width() - PILL_W).max(0.0));
                     egui::Frame::new()
                         .fill(colors::elevated())
                         .stroke(egui::Stroke::new(1.0, colors::border()))
-                        .corner_radius(10)
+                        .corner_radius(12)
                         .shadow(egui::epaint::Shadow {
-                            offset: [0, 3],
-                            blur: 12,
+                            offset: [0, 4],
+                            blur: 16,
                             spread: 0,
-                            color: egui::Color32::from_black_alpha(90),
+                            color: egui::Color32::from_black_alpha(100),
                         })
-                        .inner_margin(egui::Margin::symmetric(10, 5))
+                        .inner_margin(egui::Margin::symmetric(12, 8))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
+                                ui.spacing_mut().item_spacing.x = 7.0;
                                 ui.visuals_mut().extreme_bg_color = colors::bg(); // field bg = theme
                                 ui.label(
                                     egui::RichText::new(icons::MAGNIFYING_GLASS)
+                                        .size(17.0)
                                         .color(colors::dim()),
                                 );
                                 let accent = if no_results { colors::red() } else { colors::fg() };
                                 let r = ui.add(
                                     egui::TextEdit::singleline(&mut st.query)
-                                        .desired_width(220.0)
+                                        .desired_width(300.0)
+                                        .font(egui::FontId::proportional(16.0))
+                                        .margin(egui::Margin::symmetric(8, 6))
                                         .text_color(accent)
                                         .hint_text("Find"),
                                 );
@@ -285,6 +289,41 @@ impl Stdusk {
                                         .color(count_color)
                                         .monospace(),
                                 );
+                                // Case / regex / whole-word toggles (Tabby parity) - each flips
+                                // its option and re-runs the search.
+                                if icon_toggle(
+                                    ui,
+                                    icons::TEXT_AA,
+                                    st.opts.case_sensitive,
+                                    "Case sensitive",
+                                )
+                                .clicked()
+                                {
+                                    st.opts.case_sensitive = !st.opts.case_sensitive;
+                                    recompute = true;
+                                }
+                                if icon_toggle(
+                                    ui,
+                                    icons::ASTERISK,
+                                    st.opts.regex,
+                                    "Regular expression",
+                                )
+                                .clicked()
+                                {
+                                    st.opts.regex = !st.opts.regex;
+                                    recompute = true;
+                                }
+                                if icon_toggle(
+                                    ui,
+                                    icons::BRACKETS_SQUARE,
+                                    st.opts.whole_word,
+                                    "Whole word",
+                                )
+                                .clicked()
+                                {
+                                    st.opts.whole_word = !st.opts.whole_word;
+                                    recompute = true;
+                                }
                                 if icon_button(ui, icons::CARET_UP, "Previous (Shift+Enter)")
                                     .clicked()
                                 {
@@ -306,7 +345,7 @@ impl Stdusk {
 
         let term = &self.tabs[self.active].term;
         if recompute {
-            st.matches = search::find_matches(&term.buffer_lines(), &st.query);
+            st.matches = search::find_matches(&term.buffer_lines(), &st.query, st.opts);
             st.current = 0;
         } else if step != 0 && !st.matches.is_empty() {
             let len = st.matches.len() as i32;
@@ -572,6 +611,7 @@ impl eframe::App for Stdusk {
                         matches: Vec::new(),
                         current: 0,
                         focus: true,
+                        opts: search::SearchOpts::default(),
                     });
                 }
             }
