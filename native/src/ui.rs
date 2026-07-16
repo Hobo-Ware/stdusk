@@ -74,6 +74,7 @@ pub(crate) fn key_to_bytes(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<
         Key::Backspace if mods.alt => b"\x1b\x7f".to_vec(), // delete previous word
         Key::Backspace if mods.command => vec![0x15],       // Ctrl-U: delete to line start
         Key::Backspace => vec![0x7f],
+        Key::Tab if mods.shift => b"\x1b[Z".to_vec(), // back-tab (CSI Z) - apps cycle on this
         Key::Tab => vec![b'\t'],
         Key::Escape => vec![0x1b],
         Key::ArrowUp => b"\x1b[A".to_vec(),
@@ -723,6 +724,13 @@ mod tests {
             Some(b"\x1b\x7f".to_vec())
         );
         assert_eq!(key_to_bytes(Key::Backspace, mods(false, false, true)), Some(vec![0x15]));
+    }
+
+    #[test]
+    fn shift_tab_is_back_tab() {
+        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        assert_eq!(key_to_bytes(Key::Tab, shift), Some(b"\x1b[Z".to_vec())); // apps cycle on this
+        assert_eq!(key_to_bytes(Key::Tab, Modifiers::default()), Some(vec![b'\t'])); // plain tab
     }
 
     #[test]
