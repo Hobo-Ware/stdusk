@@ -256,16 +256,18 @@ impl Stdusk {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 7.0;
                                 ui.visuals_mut().extreme_bg_color = colors::bg(); // field bg = theme
+                                // One uniform font for the whole pill so the magnifier, hint text,
+                                // typed text and count all share a baseline + size.
+                                ui.style_mut().override_font_id =
+                                    Some(egui::FontId::proportional(15.0));
                                 ui.label(
                                     egui::RichText::new(icons::MAGNIFYING_GLASS)
-                                        .size(17.0)
                                         .color(colors::dim()),
                                 );
                                 let accent = if no_results { colors::red() } else { colors::fg() };
                                 let r = ui.add(
                                     egui::TextEdit::singleline(&mut st.query)
                                         .desired_width(300.0)
-                                        .font(egui::FontId::proportional(16.0))
                                         .margin(egui::Margin::symmetric(8, 6))
                                         .text_color(accent)
                                         .hint_text("Find"),
