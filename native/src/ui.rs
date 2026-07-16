@@ -351,16 +351,6 @@ fn progress_bar(p: Progress) -> Option<(f32, egui::Color32)> {
     Some((frac, color))
 }
 
-/// Tab exit-state dot color from OSC 133 (`None` = idle, no dot).
-fn cmd_dot(state: CmdState) -> Option<egui::Color32> {
-    match state {
-        CmdState::Idle => None,
-        CmdState::Running => Some(colors::yellow()),
-        CmdState::Ok => Some(colors::green()),
-        CmdState::Fail => Some(colors::red()),
-    }
-}
-
 /// A tiny glyph on the tab that previews the pane split layout (nested rectangles). `rects` are
 /// the leaf rects of `Pane::miniature()` in a unit square; drawn only when there's >1 pane.
 fn draw_mini_layout(ui: &mut egui::Ui, rects: &[egui::Rect], active: bool) {
@@ -419,15 +409,36 @@ pub(crate) fn draw_tab(
     // so edge strokes (underline, progress) must be drawn on an unclipped layer.
     let dp =
         ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("tab_deco")));
-    // OSC 133 exit-state accent bar on the tab's left edge (amber=running, green=ok, red=fail).
-    // Short + vertically centered with rounded ends, so it clears the bottom color underline.
-    if let Some(c) = cmd_dot(cmd) {
+    // OSC 133 exit state on the tab's left edge (short, centered, clears the bottom underline):
+    // nothing when idle, an animated indeterminate marquee while a command runs, a static line
+    // for ok (green) / fail (red).
+    {
         let h = 16.0_f32.min(rect.height() - 8.0);
-        let bar = egui::Rect::from_min_size(
+        let track = egui::Rect::from_min_size(
             egui::pos2(rect.left() + 1.0, rect.center().y - h / 2.0),
             egui::vec2(3.0, h),
         );
-        dp.rect_filled(bar, 1.5, c);
+        match cmd {
+            CmdState::Idle => {}
+            CmdState::Ok => {
+                dp.rect_filled(track, 1.5, colors::green());
+            }
+            CmdState::Fail => {
+                dp.rect_filled(track, 1.5, colors::red());
+            }
+            CmdState::Running => {
+                // Dim full-height track + a bright segment easing up and down.
+                dp.rect_filled(track, 1.5, colors::accent().gamma_multiply(0.3));
+                let seg_h = 6.0_f32.min(h);
+                let travel = (h - seg_h).max(0.0);
+                let phase = 0.5 - 0.5 * (ui.input(|i| i.time) * 3.0).cos();
+                let y = track.top() + phase as f32 * travel;
+                let seg =
+                    egui::Rect::from_min_size(egui::pos2(track.left(), y), egui::vec2(3.0, seg_h));
+                dp.rect_filled(seg, 1.5, colors::accent());
+                ui.ctx().request_repaint(); // keep the marquee animating while running
+            }
+        }
     }
     // Per-tab color underline (bottom edge) - only when the user set a color.
     if let Some(color) = color {
