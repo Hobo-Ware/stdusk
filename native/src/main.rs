@@ -14,6 +14,7 @@ mod osc;
 mod pane;
 mod progress;
 mod search;
+mod shell;
 mod terminal;
 mod ui;
 use config::Config;
@@ -52,12 +53,20 @@ impl Tab {
     }
 }
 
-fn spawn_tab(ctx: &egui::Context, detect_progress: bool, cwd: Option<String>) -> Tab {
+fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
+    let term = PtyTerm::spawn(
+        COLS,
+        ROWS,
+        ctx.clone(),
+        cfg.terminal.detect_progress,
+        cwd,
+        cfg.terminal.shell_integration,
+    );
     Tab {
         title: "zsh".into(),
         color: None,
         renamed: false,
-        root: Some(pane::Pane::leaf(PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect_progress, cwd))),
+        root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
     }
 }
@@ -206,15 +215,14 @@ impl Stdusk {
             }
         });
 
-        let detect = cfg.terminal.detect_progress;
-        let mut tabs = vec![spawn_tab(&cc.egui_ctx, detect, None)];
+        let mut tabs = vec![spawn_tab(&cfg, &cc.egui_ctx, None)];
         let mut active = 0;
         let mut sized = false;
 
         // Visual-test harness: populate representative tabs and skip monitor sizing.
         if screenshot.is_some() {
             for _ in 0..3 {
-                tabs.push(spawn_tab(&cc.egui_ctx, detect, None));
+                tabs.push(spawn_tab(&cfg, &cc.egui_ctx, None));
             }
             let titles =
                 ["auth-session", "smart-lists-really-long-name", "cocaine", "deconversion-monitor"];
@@ -247,8 +255,8 @@ impl Stdusk {
 
     fn new_tab(&mut self, ctx: &egui::Context) {
         let cwd = self.tabs.get(self.active).and_then(|t| t.focused_term().cwd());
-        let detect = self.cfg.terminal.detect_progress;
-        self.tabs.push(spawn_tab(ctx, detect, cwd));
+        let tab = spawn_tab(&self.cfg, ctx, cwd);
+        self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
     }
 
@@ -257,8 +265,8 @@ impl Stdusk {
             self.tabs.remove(i);
         }
         if self.tabs.is_empty() {
-            let detect = self.cfg.terminal.detect_progress;
-            self.tabs.push(spawn_tab(ctx, detect, None));
+            let tab = spawn_tab(&self.cfg, ctx, None);
+            self.tabs.push(tab);
         }
         self.active = self.active.min(self.tabs.len() - 1);
     }
@@ -719,8 +727,14 @@ impl eframe::App for Stdusk {
         }
         if let Some(dir) = kb_split {
             let cwd = self.tabs[self.active].focused_term().cwd();
-            let detect = self.cfg.terminal.detect_progress;
-            let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect, cwd);
+            let new = PtyTerm::spawn(
+                COLS,
+                ROWS,
+                ctx.clone(),
+                self.cfg.terminal.detect_progress,
+                cwd,
+                self.cfg.terminal.shell_integration,
+            );
             let tab = &mut self.tabs[self.active];
             let root = tab.root.take().expect("root");
             let (root, focus) = root.split(&tab.focused, dir, new, false);
@@ -939,8 +953,14 @@ impl eframe::App for Stdusk {
             }
             Some(PaneAction::Split(p, dir, new_first)) => {
                 let cwd = self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::cwd);
-                let detect = self.cfg.terminal.detect_progress;
-                let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect, cwd);
+                let new = PtyTerm::spawn(
+                    COLS,
+                    ROWS,
+                    ctx.clone(),
+                    self.cfg.terminal.detect_progress,
+                    cwd,
+                    self.cfg.terminal.shell_integration,
+                );
                 let tab = &mut self.tabs[self.active];
                 let root = tab.root.take().expect("root");
                 let (root, focus) = root.split(&p, dir, new, new_first);

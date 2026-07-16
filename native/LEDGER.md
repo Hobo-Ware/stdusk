@@ -46,7 +46,7 @@ cargo test             # unit + headless integration
 | M6.5 | Mouse text selection + Cmd+C copy | 🟡 code done, builds + 17 tests green, pending human verify |
 | M7 | Scrollback search (Cmd+F) | 🟡 code done, builds + 34 tests green, pending human verify |
 | M8 | Split panes (pane tree, focus, drag-resize, per-pane pty) | 🟡 code done, builds + 46 tests green, pending human verify |
-| M9 | Shell integration (OSC 133) + exit dot; bell; cursor styles | 🟡 OSC 133 dot done (49 tests); bell + cursor styles remain |
+| M9 | Shell integration (OSC 133) + exit dot; bell; cursor styles | ✅ done (53 tests): dot, auto-injected shell hooks, bell flash, cursor styles |
 | M10 | First-party AI agent | todo |
 | M11 | Polish + settings GUI | todo |
 
@@ -219,7 +219,20 @@ cargo test             # unit + headless integration
   6 OSC-133 parse cases tested.
 - **NOTE: needs the shell to emit OSC 133.** zsh/bash don't by default; degrades gracefully (no
   dot). TODO: ship an opt-in shell-integration snippet (precmd/preexec hooks) + auto-source it.
-- **Remaining M9**: bell (visual flash / config), cursor styles (block/underline; beam-only now).
+- **Shell integration auto-inject** (`shell.rs`, done) - so the dot works without user setup.
+  `integrate(cmd, shell)`: zsh → set `ZDOTDIR` to `~/.config/stdusk/shell/` (its `.zshenv`/`.zshrc`
+  source the user's real `$STDUSK_REAL_ZDOTDIR` config, then add `preexec`/`precmd` OSC 133 hooks);
+  bash → `--rcfile` our `bashrc` (sources `~/.bashrc` + a `PROMPT_COMMAND` hook); other shells
+  untouched. Config `terminal.shell_integration` (default true). 2 tests (shell-kind detection,
+  scripts emit 133 + source real rc).
+- **Cursor styles** (done) - config `terminal.cursor` = block(default)/underline/beam via tested
+  `ui::cursor_style`; `render_grid` draws each (block redraws the glyph in bg). 1 test.
+- **Bell** (done) - alacritty `Event::Bell` → `EventProxy` flags shared `TabState.bell`; UI flashes
+  a brief translucent overlay. Config `terminal.bell` = visual(default)/off.
+- **Also fixed this milestone**: Shift+Tab → back-tab `\x1b[Z` (`key_to_bytes`, +test); broad
+  monochrome font fallbacks (macOS Arial Unicode + Apple Symbols) so arrows/box-drawing/powerline
+  render instead of tofu. **Known limit**: SMP color emoji (😀💰) can't render - egui rasterizes
+  monochrome glyph outlines only.
 
 ### M8 - split panes (`pane.rs`, `main.rs`, `ui.rs`)
 - **Pure `pane.rs`**: generic binary tree `Pane<T> { Leaf(T) | Split{dir, ratio, a, b} }` (`T =

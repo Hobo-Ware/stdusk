@@ -107,6 +107,7 @@ impl PtyTerm {
         ctx: egui::Context,
         detect_progress: bool,
         cwd: Option<String>,
+        shell_integration: bool,
     ) -> Self {
         let pty = native_pty_system();
         let pair = pty
@@ -119,9 +120,12 @@ impl PtyTerm {
             .expect("openpty");
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let mut cmd = CommandBuilder::new(shell);
+        let mut cmd = CommandBuilder::new(&shell);
         if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
             cmd.cwd(dir);
+        }
+        if shell_integration {
+            crate::shell::integrate(&mut cmd, &shell);
         }
         let _child = pair.slave.spawn_command(cmd).expect("spawn shell");
         drop(pair.slave);
