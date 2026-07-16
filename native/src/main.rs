@@ -19,12 +19,14 @@ mod ui;
 use config::Config;
 use terminal::PtyTerm;
 use ui::{
-    apply_theme, basename, collect_input, draw_tab, draw_toast, icon_button, icon_toggle, icons,
-    render_grid, tint, toast_alpha,
+    ICON_BTN_W, apply_theme, basename, collect_input, draw_tab, draw_toast, icon_button,
+    icon_toggle, icons, render_grid, tint, toast_alpha,
 };
 
 const COLS: usize = 80;
 const ROWS: usize = 24;
+/// Fixed tab-bar row height - keeps every control centered on the same line (no drift).
+const TABBAR_ROW_H: f32 = 34.0;
 
 struct Tab {
     title: String,
@@ -623,52 +625,51 @@ impl eframe::App for Stdusk {
                     .inner_margin(egui::Margin::symmetric(8, 6)),
             )
             .show(ui, |ui| {
+                // ONE left-to-right, center-aligned row for every control (tabs + icons). Nesting
+                // opposing layouts is what kept misaligning the gear, so don't: the gear is pushed
+                // to the right edge with a computed spacer instead. Fixed row height keeps every
+                // item centered on the same line regardless of tab content.
                 ui.horizontal(|ui| {
-                    // Gear pinned to the far right; everything else flows from the left.
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(4.0);
-                        if icon_button(ui, icons::GEAR, "Settings (config.toml)").clicked()
-                            && let Some(p) = config::ensure_and_path()
-                        {
-                            let _ = std::process::Command::new("open").arg(p).spawn();
+                    ui.set_min_height(TABBAR_ROW_H);
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    for (i, tab) in self.tabs.iter().enumerate() {
+                        let active = i == self.active;
+                        let (resp, close) = draw_tab(
+                            ui,
+                            i + 1,
+                            &tab.title,
+                            active,
+                            tab.color,
+                            tab.focused_term().progress(),
+                            &tab.root().miniature(),
+                        );
+                        if close {
+                            action = Some(TabAction::Close(i));
+                        } else if resp.clicked() {
+                            clicked = Some(i);
                         }
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            // Tabs.
-                            for (i, tab) in self.tabs.iter().enumerate() {
-                                let active = i == self.active;
-                                let (resp, close) = draw_tab(
-                                    ui,
-                                    i + 1,
-                                    &tab.title,
-                                    active,
-                                    tab.color,
-                                    tab.focused_term().progress(),
-                                    &tab.root().miniature(),
-                                );
-                                if close {
-                                    action = Some(TabAction::Close(i));
-                                } else if resp.clicked() {
-                                    clicked = Some(i);
-                                }
-                                resp.context_menu(|ui| tab_menu(ui, i, &mut action));
+                        resp.context_menu(|ui| tab_menu(ui, i, &mut action));
+                    }
+                    ui.add_space(6.0);
+                    if icon_button(ui, icons::PLUS, "New tab").clicked() {
+                        action = Some(TabAction::New);
+                    }
+                    let mgr = icon_button(ui, icons::APP_WINDOW, "Tabs");
+                    egui::Popup::menu(&mgr).show(|ui| {
+                        ui.set_min_width(200.0);
+                        for (i, tab) in self.tabs.iter().enumerate() {
+                            if ui.button(format!("{}   {}", i + 1, tab.title)).clicked() {
+                                clicked = Some(i);
                             }
-                            // New tab + tab manager, right after the tabs.
-                            ui.add_space(6.0);
-                            if icon_button(ui, icons::PLUS, "New tab").clicked() {
-                                action = Some(TabAction::New);
-                            }
-                            let mgr = icon_button(ui, icons::APP_WINDOW, "Tabs");
-                            egui::Popup::menu(&mgr).show(|ui| {
-                                ui.set_min_width(200.0);
-                                for (i, tab) in self.tabs.iter().enumerate() {
-                                    if ui.button(format!("{}   {}", i + 1, tab.title)).clicked() {
-                                        clicked = Some(i);
-                                    }
-                                }
-                            });
-                        });
+                        }
                     });
+                    // Gear pinned to the right edge (spacer, not a nested layout).
+                    ui.add_space((ui.available_width() - ICON_BTN_W).max(0.0));
+                    if icon_button(ui, icons::GEAR, "Settings (config.toml)").clicked()
+                        && let Some(p) = config::ensure_and_path()
+                    {
+                        let _ = std::process::Command::new("open").arg(p).spawn();
+                    }
                 });
             });
 

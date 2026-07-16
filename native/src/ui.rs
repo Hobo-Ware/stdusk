@@ -159,10 +159,15 @@ pub(crate) fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(v);
 }
 
+/// Tab-bar icon-button size (shared so the tab bar can right-align the gear by a spacer).
+pub(crate) const ICON_BTN_W: f32 = 32.0;
+const ICON_BTN_H: f32 = 30.0;
+
 /// A fixed-size Phosphor-icon button with hover feedback. Returns the Response (so callers
 /// can anchor a popup or read `.clicked()`).
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(32.0, 30.0), egui::Sense::click());
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ICON_BTN_W, ICON_BTN_H), egui::Sense::click());
     let hovered = resp.hovered();
     if hovered {
         ui.painter().rect_filled(rect, 6.0, colors::hover());

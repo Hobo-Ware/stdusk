@@ -91,6 +91,17 @@ only for the thin slice that truly needs a widget tree (focus moving on tab swit
   Cmd+C/V arrive as `Event::Copy`/`Event::Paste`, NOT key presses - watch the events.
 - **Theming:** parse config once into a `Theme`, apply with `set_visuals`; don't re-parse
   per frame. Keep ANSI palette + chrome colors in one module so they stay consistent.
+- **Toolbar alignment (learned the hard way).** A row of controls (tab bar) is ONE
+  `ui.horizontal` = a single `left_to_right(Align::Center)` layout with a fixed
+  `set_min_height`. **Never nest opposing layouts** (a `right_to_left` wrapping a
+  `left_to_right`) to pin something to the right - the two layouts' vertical centres drift
+  apart whenever a child's height changes, and the right-pinned item (the gear) misaligns.
+  Right-pin by a computed spacer instead: `ui.add_space((ui.available_width() - W).max(0.0))`.
+  Keep control sizes as shared consts (`ICON_BTN_W`) so the spacer math can't rot.
+- **Center glyphs by painting, not layout.** Phosphor ink sits high in the line box, so a
+  bare `ui.label(icon)` floats. Paint icons at `rect.center()` with `Align2::CENTER_CENTER`
+  in an `allocate_exact_size` box (see `icon_button`), and force a uniform pill font with
+  `style.override_font_id` rather than per-widget `.size()`/`.font()`.
 
 ## Checklist for any UI change
 
@@ -100,3 +111,5 @@ only for the thin slice that truly needs a widget tree (focus moving on tab swit
 - [ ] Overflow → foreground layer, not an inflated rect.
 - [ ] Animation/IO → `request_repaint_after` + `input().time`, never `std::time`.
 - [ ] No per-cell/per-frame allocation on the hot path.
+- [ ] Toolbar = one center-aligned row + fixed height; right-pin via spacer, never nested
+      opposing layouts; icons painted centered (not `ui.label`).
