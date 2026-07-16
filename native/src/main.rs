@@ -20,7 +20,7 @@ use config::Config;
 use terminal::PtyTerm;
 use ui::{
     ICON_BTN_W, apply_theme, basename, collect_input, draw_tab, draw_toast, icon_button,
-    icon_toggle, icons, render_grid, tint, toast_alpha,
+    icon_toggle, icons, render_grid, style_menu, tint, toast_alpha,
 };
 
 const COLS: usize = 80;
@@ -100,6 +100,7 @@ fn pane_menu(
     cwd: Option<&str>,
     action: &mut Option<PaneAction>,
 ) {
+    style_menu(ui);
     ui.add_enabled_ui(has_selection, |ui| {
         if ui.button("Copy").clicked() {
             *action = Some(PaneAction::Copy(path.to_vec()));
@@ -113,6 +114,7 @@ fn pane_menu(
     ui.separator();
     ui.menu_button("Split", |ui| {
         use pane::SplitDir::{Column, Row};
+        style_menu(ui);
         if ui.button("Right").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Row, false));
         }
@@ -480,6 +482,7 @@ fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
 
 /// Right-click tab context menu. Sets `action`; egui auto-closes the menu on any button click.
 fn tab_menu(ui: &mut egui::Ui, i: usize, action: &mut Option<TabAction>) {
+    style_menu(ui);
     if ui.button("New tab").clicked() {
         *action = Some(TabAction::New);
     }
@@ -487,6 +490,7 @@ fn tab_menu(ui: &mut egui::Ui, i: usize, action: &mut Option<TabAction>) {
         *action = Some(TabAction::Rename(i));
     }
     ui.menu_button("Color", |ui| {
+        style_menu(ui);
         if ui.button("No color").clicked() {
             *action = Some(TabAction::SetColor(i, None));
         }
@@ -656,7 +660,7 @@ impl eframe::App for Stdusk {
                     }
                     let mgr = icon_button(ui, icons::APP_WINDOW, "Tabs");
                     egui::Popup::menu(&mgr).show(|ui| {
-                        ui.set_min_width(200.0);
+                        style_menu(ui);
                         for (i, tab) in self.tabs.iter().enumerate() {
                             if ui.button(format!("{}   {}", i + 1, tab.title)).clicked() {
                                 clicked = Some(i);

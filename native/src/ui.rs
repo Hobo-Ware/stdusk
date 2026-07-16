@@ -159,6 +159,15 @@ pub(crate) fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(v);
 }
 
+/// Give a context menu / popup room to breathe (wider, roomier rows). Call at the top of every
+/// menu closure AND its submenus so they stay consistent.
+pub(crate) fn style_menu(ui: &mut egui::Ui) {
+    ui.set_min_width(210.0);
+    let s = ui.spacing_mut();
+    s.button_padding = egui::vec2(12.0, 7.0);
+    s.item_spacing.y = 3.0;
+}
+
 /// Tab-bar icon-button size (shared so the tab bar can right-align the gear by a spacer).
 pub(crate) const ICON_BTN_W: f32 = 32.0;
 const ICON_BTN_H: f32 = 30.0;
