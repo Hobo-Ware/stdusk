@@ -349,8 +349,8 @@ pub(crate) fn collect_input(ui: &egui::Ui) -> Vec<u8> {
 
 /// Paint one terminal pane inside `rect`: per-cell bg + selection overlay + glyph + cursor +
 /// a scrollbar, and drive mouse selection (drag / double / triple click) + wheel scroll. When
-/// `highlight` is set, draw a focus border. Returns `true` if the pane was clicked/dragged this
-/// frame (so the caller can focus it). `id_src` must be unique per pane (its tree path).
+/// `highlight` is set, draw a focus border. Returns the pane's `Response` (so the caller can
+/// focus on click/drag + attach a context menu). `id_src` must be unique per pane (its path).
 pub(crate) fn render_grid(
     ui: &mut egui::Ui,
     id_src: &[crate::pane::Side],
@@ -361,7 +361,7 @@ pub(crate) fn render_grid(
     ch: f32,
     font: &egui::FontId,
     highlight: bool,
-) -> bool {
+) -> egui::Response {
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     let origin = rect.min;
@@ -429,7 +429,7 @@ pub(crate) fn render_grid(
             egui::StrokeKind::Inside,
         );
     }
-    resp.clicked() || resp.drag_started()
+    resp
 }
 
 /// Draggable scrollback thumb on the right edge of a pane's `rect`.

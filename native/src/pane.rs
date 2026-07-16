@@ -96,38 +96,40 @@ impl<T> Pane<T> {
         }
     }
 
-    /// Split the leaf at `path` into `[old | new]` with `dir`. Returns the rebuilt tree and the
-    /// path to the new leaf (to focus), or `None` when `path` doesn't point at a leaf.
+    /// Split the leaf at `path` with `dir`. `new_first` places the new pane before the old
+    /// (left/up) rather than after (right/down). Returns the rebuilt tree and the path to the
+    /// new leaf (to focus), or `None` when `path` doesn't point at a leaf.
     pub(crate) fn split(
         self,
         path: &[Side],
         dir: SplitDir,
         new: T,
+        new_first: bool,
     ) -> (Pane<T>, Option<Vec<Side>>) {
         match path.split_first() {
             None => match self {
                 Pane::Leaf(t) => {
-                    let node = Pane::Split {
-                        dir,
-                        ratio: 0.5,
-                        a: Box::new(Pane::Leaf(t)),
-                        b: Box::new(Pane::Leaf(new)),
+                    let (a, b, focus) = if new_first {
+                        (Pane::Leaf(new), Pane::Leaf(t), Side::A)
+                    } else {
+                        (Pane::Leaf(t), Pane::Leaf(new), Side::B)
                     };
-                    (node, Some(vec![Side::B]))
+                    let node = Pane::Split { dir, ratio: 0.5, a: Box::new(a), b: Box::new(b) };
+                    (node, Some(vec![focus]))
                 }
                 split @ Pane::Split { .. } => (split, None),
             },
             Some((&s, rest)) => match self {
                 Pane::Split { dir: d, ratio, a, b } => match s {
                     Side::A => {
-                        let (na, f) = a.split(rest, dir, new);
+                        let (na, f) = a.split(rest, dir, new, new_first);
                         (
                             Pane::Split { dir: d, ratio, a: Box::new(na), b },
                             f.map(|p| prepend(Side::A, p)),
                         )
                     }
                     Side::B => {
-                        let (nb, f) = b.split(rest, dir, new);
+                        let (nb, f) = b.split(rest, dir, new, new_first);
                         (
                             Pane::Split { dir: d, ratio, a, b: Box::new(nb) },
                             f.map(|p| prepend(Side::B, p)),
@@ -295,7 +297,7 @@ mod tests {
 
     #[test]
     fn split_root_leaf_focuses_new() {
-        let (tree, focus) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2);
+        let (tree, focus) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false);
         assert_eq!(focus, Some(vec![Side::B]));
         assert_eq!(tree.leaf_count(), 2);
         assert_eq!(tree.leaf_at(&[Side::A]), Some(&1));
@@ -304,8 +306,8 @@ mod tests {
 
     #[test]
     fn split_nested_leaf() {
-        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2); // [A]=1 [B]=2
-        let (tree, focus) = tree.split(&[Side::B], SplitDir::Column, 3); // split the 2
+        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false); // [A]=1 [B]=2
+        let (tree, focus) = tree.split(&[Side::B], SplitDir::Column, 3, false); // split the 2
         assert_eq!(focus, Some(vec![Side::B, Side::B]));
         assert_eq!(tree.leaf_at(&[Side::A]), Some(&1));
         assert_eq!(tree.leaf_at(&[Side::B, Side::A]), Some(&2));
@@ -313,16 +315,24 @@ mod tests {
     }
 
     #[test]
+    fn split_new_first_places_new_before_old() {
+        let (tree, focus) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, true);
+        assert_eq!(focus, Some(vec![Side::A])); // new pane is on the A side
+        assert_eq!(tree.leaf_at(&[Side::A]), Some(&2));
+        assert_eq!(tree.leaf_at(&[Side::B]), Some(&1));
+    }
+
+    #[test]
     fn cannot_split_a_split_node() {
-        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2);
-        let (tree, focus) = tree.split(&[], SplitDir::Row, 9); // root is a split now
+        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false);
+        let (tree, focus) = tree.split(&[], SplitDir::Row, 9, false); // root is a split now
         assert_eq!(focus, None);
         assert_eq!(tree.leaf_count(), 2); // unchanged
     }
 
     #[test]
     fn close_collapses_to_sibling() {
-        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2);
+        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false);
         let (tree, focus) = tree.close(&[Side::B]); // close the 2
         let tree = tree.unwrap();
         assert!(matches!(tree, Pane::Leaf(_)));
@@ -333,8 +343,8 @@ mod tests {
     #[test]
     fn close_nested_keeps_rest_and_refocuses() {
         // [A]=1, [B/A]=2, [B/B]=3 ; close 2 -> B collapses to 3 at path [B]
-        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2);
-        let (tree, _) = tree.split(&[Side::B], SplitDir::Column, 3);
+        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false);
+        let (tree, _) = tree.split(&[Side::B], SplitDir::Column, 3, false);
         let (tree, focus) = tree.close(&[Side::B, Side::A]);
         let tree = tree.unwrap();
         assert_eq!(tree.leaf_count(), 2);
@@ -352,7 +362,7 @@ mod tests {
 
     #[test]
     fn layout_row_splits_width_with_gutter() {
-        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2); // ratio 0.5
+        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false); // ratio 0.5
         let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 40.0));
         let l = tree.layout(area);
         let a = l.iter().find(|(p, _)| p == &vec![Side::A]).unwrap().1;

@@ -80,6 +80,59 @@ enum TabAction {
     Close(usize),
 }
 
+/// Deferred pane action from the right-click menu, applied after the central panel. Each
+/// carries the target pane's path.
+enum PaneAction {
+    Copy(Vec<pane::Side>),
+    CopyPath(Vec<pane::Side>),
+    Split(Vec<pane::Side>, pane::SplitDir, bool), // (path, dir, new_first)
+    Close(Vec<pane::Side>),
+    NewTab,
+}
+
+/// Right-click menu for a terminal pane. Sets `action`; egui auto-closes on a button click.
+fn pane_menu(
+    ui: &mut egui::Ui,
+    path: &[pane::Side],
+    has_selection: bool,
+    cwd: Option<&str>,
+    action: &mut Option<PaneAction>,
+) {
+    ui.add_enabled_ui(has_selection, |ui| {
+        if ui.button("Copy").clicked() {
+            *action = Some(PaneAction::Copy(path.to_vec()));
+        }
+    });
+    ui.add_enabled_ui(cwd.is_some(), |ui| {
+        if ui.button("Copy current path").clicked() {
+            *action = Some(PaneAction::CopyPath(path.to_vec()));
+        }
+    });
+    ui.separator();
+    ui.menu_button("Split", |ui| {
+        use pane::SplitDir::{Column, Row};
+        if ui.button("Right").clicked() {
+            *action = Some(PaneAction::Split(path.to_vec(), Row, false));
+        }
+        if ui.button("Down").clicked() {
+            *action = Some(PaneAction::Split(path.to_vec(), Column, false));
+        }
+        if ui.button("Left").clicked() {
+            *action = Some(PaneAction::Split(path.to_vec(), Row, true));
+        }
+        if ui.button("Up").clicked() {
+            *action = Some(PaneAction::Split(path.to_vec(), Column, true));
+        }
+    });
+    ui.separator();
+    if ui.button("New tab").clicked() {
+        *action = Some(PaneAction::NewTab);
+    }
+    if ui.button("Close pane").clicked() {
+        *action = Some(PaneAction::Close(path.to_vec()));
+    }
+}
+
 struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
@@ -644,7 +697,7 @@ impl eframe::App for Stdusk {
             let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect, cwd);
             let tab = &mut self.tabs[self.active];
             let root = tab.root.take().expect("root");
-            let (root, focus) = root.split(&tab.focused, dir, new);
+            let (root, focus) = root.split(&tab.focused, dir, new, false);
             tab.root = Some(root);
             if let Some(f) = focus {
                 tab.focused = f;
@@ -710,6 +763,7 @@ impl eframe::App for Stdusk {
 
         let now = ctx.input(|i| i.time);
         let mut copied = false; // set inside the central panel when Cmd+C copies a selection
+        let mut pane_action: Option<PaneAction> = None; // from the pane right-click menu
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
@@ -782,9 +836,15 @@ impl eframe::App for Stdusk {
                     let term = tab.root().leaf_at(path).expect("leaf");
                     let snap = term.grid_snapshot();
                     let highlight = multi && path == &tab.focused;
-                    if render_grid(ui, path, *rect, term, &snap, cw, ch, &font, highlight) {
+                    let has_sel = term.selection_text().is_some();
+                    let cwd = term.cwd();
+                    let resp = render_grid(ui, path, *rect, term, &snap, cw, ch, &font, highlight);
+                    if resp.clicked() || resp.drag_started() {
                         focus_click = Some(path.clone());
                     }
+                    resp.context_menu(|ui| {
+                        pane_menu(ui, path, has_sel, cwd.as_deref(), &mut pane_action);
+                    });
                 }
                 if let Some(p) = focus_click {
                     tab.focused = p;
@@ -816,6 +876,52 @@ impl eframe::App for Stdusk {
                     }
                 }
             });
+
+        // Apply the deferred pane action (menu), now that the panel borrow is released.
+        match pane_action {
+            Some(PaneAction::Copy(p)) => {
+                if let Some(txt) =
+                    self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::selection_text)
+                {
+                    ctx.copy_text(txt);
+                    copied = true;
+                }
+            }
+            Some(PaneAction::CopyPath(p)) => {
+                if let Some(path) = self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::cwd)
+                {
+                    ctx.copy_text(path);
+                    self.toast = Some(("Copied path".into(), now + 1.4));
+                }
+            }
+            Some(PaneAction::Split(p, dir, new_first)) => {
+                let cwd = self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::cwd);
+                let detect = self.cfg.terminal.detect_progress;
+                let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), detect, cwd);
+                let tab = &mut self.tabs[self.active];
+                let root = tab.root.take().expect("root");
+                let (root, focus) = root.split(&p, dir, new, new_first);
+                tab.root = Some(root);
+                if let Some(f) = focus {
+                    tab.focused = f;
+                }
+            }
+            Some(PaneAction::Close(p)) => {
+                let tab = &mut self.tabs[self.active];
+                if tab.root().leaf_count() > 1 {
+                    let root = tab.root.take().expect("root");
+                    let (root, focus) = root.close(&p);
+                    tab.root = root;
+                    if let Some(f) = focus {
+                        tab.focused = f;
+                    }
+                } else {
+                    self.close_tab(self.active, &ctx);
+                }
+            }
+            Some(PaneAction::NewTab) => self.new_tab(&ctx),
+            None => {}
+        }
 
         // Transient "Copied" toast at the bottom-center, fading out.
         if copied {

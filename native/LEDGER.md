@@ -229,6 +229,14 @@ cargo test             # unit + headless integration
   each pane's pty to its rect, wheel-scroll the pane under the pointer, route keys/paste/Cmd+C to
   the focused pane, set focus on click/drag. Draggable splitters drawn in the gutters (accent on
   hover, resize cursor). Verified via a forced 3-pane screenshot (row+column, focus border correct).
+- **Right-click pane menu** (user ask, useful subset of Tabby's): Copy (enabled with a selection),
+  Copy current path (cwd), Split Right/Down/Left/Up, New tab, Close pane. Built via
+  `resp.context_menu` → a `PaneAction` enum collected then applied after the panel (deferred, like
+  `TabAction`). Left/Up use `Pane::split(.., new_first=true)` (new pane on the A side). Dropped
+  Tabby items with no infra: profiles, notify-when-done/activity (needs OSC 133), focus-all/
+  broadcast, export, switch-profile; Paste omitted (egui can't read the clipboard synchronously -
+  Cmd+V still works). Menu is an egui popup so it doesn't show in the screenshot harness (like the
+  tab menu) - pending live verify.
 - Limitations (deferred): no drag-to-reorder panes, no broadcast-input, no pane zoom/maximize,
   tab bar shows only the FOCUSED pane's progress/title (not aggregated).
 
