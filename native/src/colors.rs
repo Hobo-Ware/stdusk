@@ -123,10 +123,23 @@ pub(crate) fn selection() -> Color32 {
     let a = accent();
     Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 90)
 }
-/// Swatches offered by the right-click Color menu.
-pub(crate) fn tab_colors() -> [Color32; 6] {
-    let a = &theme().ansi;
-    [a[1], a[4], a[3], a[5], a[2], a[6]]
+/// Swatches offered by the right-click Color menu - a curated vivid palette (2 rows of 6),
+/// theme-independent so tab underlines read cleanly on any background.
+pub(crate) fn tab_colors() -> [Color32; 12] {
+    [
+        rgb(0xe0, 0x6c, 0x75), // red
+        rgb(0xff, 0x9e, 0x64), // orange
+        rgb(0xe5, 0xc0, 0x7b), // amber
+        rgb(0xf1, 0xfa, 0x8c), // yellow
+        rgb(0x9e, 0xce, 0x6a), // green
+        rgb(0x50, 0xfa, 0x7b), // mint
+        rgb(0x56, 0xb6, 0xc2), // teal
+        rgb(0x7d, 0xcf, 0xff), // sky
+        rgb(0x61, 0xaf, 0xef), // blue
+        rgb(0x7a, 0xa2, 0xf7), // indigo
+        rgb(0xc6, 0x78, 0xdd), // purple
+        rgb(0xff, 0x79, 0xc6), // pink
+    ]
 }
 
 fn shade(c: Color32, factor: f32) -> Color32 {

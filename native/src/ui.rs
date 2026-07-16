@@ -159,6 +159,17 @@ pub(crate) fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(v);
 }
 
+/// A filled-circle color swatch for the tab Color menu. Hover draws a ring; returns the Response.
+pub(crate) fn color_swatch(ui: &mut egui::Ui, color: egui::Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::click());
+    let center = rect.center();
+    if resp.hovered() {
+        ui.painter().circle_stroke(center, 10.0, egui::Stroke::new(1.5, colors::fg()));
+    }
+    ui.painter().circle_filled(center, 8.0, color);
+    resp
+}
+
 /// Give a context menu / popup room to breathe (wider, roomier rows). Call at the top of every
 /// menu closure AND its submenus so they stay consistent.
 pub(crate) fn style_menu(ui: &mut egui::Ui) {

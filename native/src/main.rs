@@ -19,8 +19,8 @@ mod ui;
 use config::Config;
 use terminal::PtyTerm;
 use ui::{
-    ICON_BTN_W, apply_theme, basename, collect_input, draw_tab, draw_toast, icon_button,
-    icon_toggle, icons, render_grid, style_menu, tint, toast_alpha,
+    ICON_BTN_W, apply_theme, basename, collect_input, color_swatch, draw_tab, draw_toast,
+    icon_button, icon_toggle, icons, render_grid, style_menu, tint, toast_alpha,
 };
 
 const COLS: usize = 80;
@@ -494,13 +494,18 @@ fn tab_menu(ui: &mut egui::Ui, i: usize, action: &mut Option<TabAction>) {
         if ui.button("No color").clicked() {
             *action = Some(TabAction::SetColor(i, None));
         }
-        ui.horizontal(|ui| {
-            for col in colors::tab_colors() {
-                if ui.button(egui::RichText::new("⬤").color(col)).clicked() {
-                    *action = Some(TabAction::SetColor(i, Some(col)));
+        ui.add_space(4.0);
+        // Filled-circle swatches, 2 rows of 6.
+        for row in colors::tab_colors().chunks(6) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for &col in row {
+                    if color_swatch(ui, col).clicked() {
+                        *action = Some(TabAction::SetColor(i, Some(col)));
+                    }
                 }
-            }
-        });
+            });
+        }
     });
     ui.separator();
     if ui.button("Move left").clicked() {
