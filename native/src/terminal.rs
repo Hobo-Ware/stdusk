@@ -21,14 +21,25 @@ use crate::colors;
 use crate::osc::{OscEvent, OscScanner, ShellEvent};
 use crate::progress::{Progress, ProgressScanner};
 
-/// Last-command state from OSC 133 shell integration, shown as the tab's state dot.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+/// Last-command state from OSC 133 shell integration, shown as the tab's left-edge indicator.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) enum CmdState {
     #[default]
-    Idle, // no command run yet (no dot)
+    Idle, // no command run / cancelled (no indicator)
     Running,
     Ok,
     Fail,
+}
+
+/// Map an OSC 133 exit code to a tab state. A signal termination (128+n, e.g. 130 = Ctrl+C /
+/// SIGINT, 143 = SIGTERM) means the user cancelled - that's not an error, so clear the indicator
+/// instead of flagging red.
+pub(crate) fn cmd_from_exit(code: Option<i32>) -> CmdState {
+    match code.unwrap_or(0) {
+        0 => CmdState::Ok,
+        129..=159 => CmdState::Idle,
+        _ => CmdState::Fail,
+    }
 }
 
 /// One styled cell for the renderer. `bg == None` means the terminal default (transparent).
@@ -181,11 +192,7 @@ impl PtyTerm {
                                         cmd_update = Some(CmdState::Running);
                                     }
                                     ShellEvent::CommandEnd(code) => {
-                                        cmd_update = Some(if code.unwrap_or(0) == 0 {
-                                            CmdState::Ok
-                                        } else {
-                                            CmdState::Fail
-                                        });
+                                        cmd_update = Some(cmd_from_exit(code));
                                     }
                                     // PromptStart: keep the last result visible at the prompt.
                                     ShellEvent::PromptStart => {}
@@ -399,5 +406,20 @@ impl PtyTerm {
         let (_, history) = self.scroll_state();
         let target = (-line).clamp(0, history as i32) as usize;
         self.scroll_to_offset(target);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CmdState, cmd_from_exit};
+
+    #[test]
+    fn exit_code_to_state() {
+        assert_eq!(cmd_from_exit(Some(0)), CmdState::Ok);
+        assert_eq!(cmd_from_exit(None), CmdState::Ok);
+        assert_eq!(cmd_from_exit(Some(1)), CmdState::Fail);
+        assert_eq!(cmd_from_exit(Some(127)), CmdState::Fail);
+        assert_eq!(cmd_from_exit(Some(130)), CmdState::Idle); // Ctrl+C (SIGINT)
+        assert_eq!(cmd_from_exit(Some(143)), CmdState::Idle); // SIGTERM
     }
 }
