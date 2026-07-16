@@ -393,19 +393,23 @@ pub(crate) fn render_grid(
         term.clear_selection();
     }
 
+    // Unfocused panes fade their CONTENT (Tabby-style) by scaling its alpha down, leaving the
+    // blank cells transparent at the window's global opacity - so the glass stays uniform and
+    // only the content recedes (no opaque scrim that would change see-through).
+    let fade = |c: egui::Color32| if dimmed { c.gamma_multiply(0.5) } else { c };
     for r in 0..snap.rows {
         for c in 0..snap.cols {
             let cell = &snap.cells[r * snap.cols + c];
             let pos = origin + egui::vec2(c as f32 * cw, r as f32 * ch);
             let cell_rect = egui::Rect::from_min_size(pos, egui::vec2(cw, ch));
             if let Some(bg) = cell.bg {
-                painter.rect_filled(cell_rect, 0.0, bg);
+                painter.rect_filled(cell_rect, 0.0, fade(bg));
             }
             if cell.selected {
-                painter.rect_filled(cell_rect, 0.0, colors::selection());
+                painter.rect_filled(cell_rect, 0.0, fade(colors::selection()));
             }
             if cell.c != ' ' && cell.c != '\0' {
-                painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), cell.fg);
+                painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), fade(cell.fg));
             }
         }
     }
@@ -416,21 +420,11 @@ pub(crate) fn render_grid(
         painter.rect_filled(
             egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)),
             0.0,
-            colors::cursor(),
+            fade(colors::cursor()),
         );
     }
 
     pane_scrollbar(ui, id_src, rect, term, snap.rows);
-
-    // Inactive panes dim toward the background (Tabby-style), instead of bordering the active one.
-    if dimmed {
-        let b = colors::bg();
-        painter.rect_filled(
-            rect,
-            0.0,
-            egui::Color32::from_rgba_unmultiplied(b.r(), b.g(), b.b(), 115),
-        );
-    }
     resp
 }
 

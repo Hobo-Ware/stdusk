@@ -225,8 +225,9 @@ cargo test             # unit + headless integration
   focus); Cmd+W closes the focused pane, or the tab on its last pane.
 - **Render**: `render_grid` reworked to paint ONE leaf at an arbitrary `rect` via `painter_at`
   (was `allocate_painter`), taking the pane path as its egui `Id`, drawing a per-pane scrollbar.
-  Focus is shown Tabby-style by **dimming the UNFOCUSED panes** (a translucent bg scrim, `dimmed`
-  arg) rather than bordering the focused one. The central panel tiles `root.layout(area)`: resize
+  Focus is shown Tabby-style by **fading the UNFOCUSED panes' content** (`dimmed` arg →
+  `Color32::gamma_multiply(0.5)` on each glyph/bg/cursor), NOT an opaque scrim: blank cells stay
+  transparent at the window's global opacity, so the glass reads uniform and only content recedes. The central panel tiles `root.layout(area)`: resize
   each pane's pty to its rect, wheel-scroll the pane under the pointer, route keys/paste/Cmd+C to
   the focused pane, set focus on click/drag. Draggable splitters drawn in the gutters (accent on
   hover, resize cursor). Verified via a forced 3-pane screenshot (row+column, focus border correct).
