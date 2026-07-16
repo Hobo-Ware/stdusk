@@ -230,9 +230,11 @@ cargo test             # unit + headless integration
 - **Bell** (done) - alacritty `Event::Bell` → `EventProxy` flags shared `TabState.bell`; UI flashes
   a brief translucent overlay. Config `terminal.bell` = visual(default)/off.
 - **Also fixed this milestone**: Shift+Tab → back-tab `\x1b[Z` (`key_to_bytes`, +test); broad
-  monochrome font fallbacks (macOS Arial Unicode + Apple Symbols) so arrows/box-drawing/powerline
-  render instead of tofu. **Known limit**: SMP color emoji (😀💰) can't render - egui rasterizes
-  monochrome glyph outlines only.
+  monochrome font fallbacks: vendored full **NotoEmoji-Regular** (assets/, monochrome glyf - covers
+  SMP emoji 😀💰 the egui-bundled subset misses) + macOS Arial Unicode + Apple Symbols for
+  arrows/box-drawing/powerline. All appended to both font families. **Known limit**: COLOR emoji
+  still can't render (egui rasterizes monochrome outlines only); emoji show as B/W - like Tabby's
+  monochrome fallback, good enough.
 
 ### M8 - split panes (`pane.rs`, `main.rs`, `ui.rs`)
 - **Pure `pane.rs`**: generic binary tree `Pane<T> { Leaf(T) | Split{dir, ratio, a, b} }` (`T =

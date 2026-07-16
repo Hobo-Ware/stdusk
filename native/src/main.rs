@@ -174,6 +174,18 @@ impl Stdusk {
         if let Some(keys) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
             keys.insert(1, "phosphor".to_owned());
         }
+        // Full monochrome Noto Emoji (vendored) - egui's bundled emoji font is a subset that
+        // misses most SMP emoji (😀 💰 ...), so append this to both families to fill the gap.
+        // Monochrome (glyf outlines) so egui can rasterize it; color emoji still won't render.
+        fonts.font_data.insert(
+            "noto-emoji".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf")).into(),
+        );
+        for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            if let Some(keys) = fonts.families.get_mut(&fam) {
+                keys.push("noto-emoji".to_owned());
+            }
+        }
         // Broad monochrome fallbacks (macOS) for arrows / box-drawing / powerline / misc symbols
         // the bundled fonts miss - appended as lowest priority so the primary fonts win. Loaded
         // best-effort; absent files (other OSes) are simply skipped. NOTE: SMP color emoji
