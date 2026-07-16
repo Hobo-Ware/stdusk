@@ -182,6 +182,56 @@ pub(crate) fn color_swatch(
     resp
 }
 
+// ---- design-system primitives (use these; don't hand-roll surfaces/inputs/buttons) ----
+
+/// The standard floating-overlay surface: elevated fill, hairline border, rounded corners, soft
+/// shadow. Use for every popover/dialog (find bar, rename) so they read identically.
+pub(crate) fn overlay_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(colors::elevated())
+        .stroke(egui::Stroke::new(1.0, colors::border()))
+        .corner_radius(12)
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 4],
+            blur: 16,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(100),
+        })
+        .inner_margin(egui::Margin::symmetric(12, 8))
+}
+
+/// The standard single-line text input: uniform 15pt font, theme-colored field bg, consistent
+/// inner padding. `color` tints the typed text (e.g. red for no-results). Returns the Response.
+pub(crate) fn text_field(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    color: egui::Color32,
+) -> egui::Response {
+    ui.style_mut().override_font_id = Some(egui::FontId::proportional(15.0));
+    ui.visuals_mut().extreme_bg_color = colors::bg();
+    ui.add(
+        egui::TextEdit::singleline(text)
+            .desired_width(width)
+            .margin(egui::Margin::symmetric(8, 6))
+            .text_color(color)
+            .hint_text(hint),
+    )
+}
+
+/// The standard action button (dialog OK/Cancel etc.): consistent padding; `primary` fills with
+/// the accent so the default action stands out. Returns the Response.
+pub(crate) fn action_button(ui: &mut egui::Ui, label: &str, primary: bool) -> egui::Response {
+    ui.spacing_mut().button_padding = egui::vec2(12.0, 6.0);
+    let text = egui::RichText::new(label).color(if primary { colors::bg() } else { colors::fg() });
+    let mut btn = egui::Button::new(text).corner_radius(7);
+    if primary {
+        btn = btn.fill(colors::accent());
+    }
+    ui.add(btn)
+}
+
 /// Give a context menu / popup room to breathe (wider, roomier rows). Call at the top of every
 /// menu closure AND its submenus so they stay consistent.
 pub(crate) fn style_menu(ui: &mut egui::Ui) {

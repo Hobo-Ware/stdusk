@@ -266,20 +266,25 @@ impl Stdusk {
         let mut commit = false;
         let mut cancel = false;
         egui::Window::new("Rename tab")
+            .title_bar(false)
             .collapsible(false)
             .resizable(false)
+            .frame(ui::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                let r = ui.text_edit_singleline(&mut buf);
+                ui.label(egui::RichText::new("Rename tab").color(colors::dim()));
+                ui.add_space(6.0);
+                let r = ui::text_field(ui, &mut buf, "Tab name", 220.0, colors::fg());
                 r.request_focus();
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     commit = true;
                 }
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
+                    if ui::action_button(ui, "Rename", true).clicked() {
                         commit = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui::action_button(ui, "Cancel", false).clicked() {
                         cancel = true;
                     }
                 });
@@ -317,113 +322,88 @@ impl Stdusk {
                 const PILL_W: f32 = 620.0;
                 ui.horizontal(|ui| {
                     ui.add_space((ui.available_width() - PILL_W).max(0.0));
-                    egui::Frame::new()
-                        .fill(colors::elevated())
-                        .stroke(egui::Stroke::new(1.0, colors::border()))
-                        .corner_radius(12)
-                        .shadow(egui::epaint::Shadow {
-                            offset: [0, 4],
-                            blur: 16,
-                            spread: 0,
-                            color: egui::Color32::from_black_alpha(100),
-                        })
-                        .inner_margin(egui::Margin::symmetric(12, 8))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 7.0;
-                                ui.visuals_mut().extreme_bg_color = colors::bg(); // field bg = theme
-                                // One uniform font for the whole pill so the magnifier, hint text,
-                                // typed text and count all share a baseline + size.
-                                ui.style_mut().override_font_id =
-                                    Some(egui::FontId::proportional(15.0));
-                                // Magnifier painted centered in its box (Phosphor ink sits high in
-                                // the line box, so a plain label would float above the field).
-                                let (mrect, _) = ui.allocate_exact_size(
-                                    egui::vec2(20.0, 28.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().text(
-                                    mrect.center(),
-                                    egui::Align2::CENTER_CENTER,
-                                    icons::MAGNIFYING_GLASS,
-                                    egui::FontId::proportional(16.0),
-                                    colors::dim(),
-                                );
-                                let accent = if no_results { colors::red() } else { colors::fg() };
-                                let r = ui.add(
-                                    egui::TextEdit::singleline(&mut st.query)
-                                        .desired_width(300.0)
-                                        .margin(egui::Margin::symmetric(8, 6))
-                                        .text_color(accent)
-                                        .hint_text("Find"),
-                                );
-                                if st.focus {
-                                    r.request_focus();
-                                    st.focus = false;
-                                }
-                                if r.changed() {
-                                    recompute = true;
-                                }
-                                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                    step = if ui.input(|i| i.modifiers.shift) { -1 } else { 1 };
-                                    st.focus = true; // keep focus for repeated Enter
-                                }
-                                let count = if st.matches.is_empty() { 0 } else { st.current + 1 };
-                                let count_color =
-                                    if no_results { colors::red() } else { colors::dim() };
-                                ui.label(
-                                    egui::RichText::new(format!("{count}/{}", st.matches.len()))
-                                        .color(count_color)
-                                        .monospace(),
-                                );
-                                // Case / regex / whole-word toggles (Tabby parity) - each flips
-                                // its option and re-runs the search.
-                                if icon_toggle(
-                                    ui,
-                                    icons::TEXT_AA,
-                                    st.opts.case_sensitive,
-                                    "Case sensitive",
-                                )
+                    ui::overlay_frame().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 7.0;
+                            ui.visuals_mut().extreme_bg_color = colors::bg(); // field bg = theme
+                            // One uniform font for the whole pill so the magnifier, hint text,
+                            // typed text and count all share a baseline + size.
+                            ui.style_mut().override_font_id =
+                                Some(egui::FontId::proportional(15.0));
+                            // Magnifier painted centered in its box (Phosphor ink sits high in
+                            // the line box, so a plain label would float above the field).
+                            let (mrect, _) = ui
+                                .allocate_exact_size(egui::vec2(20.0, 28.0), egui::Sense::hover());
+                            ui.painter().text(
+                                mrect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                icons::MAGNIFYING_GLASS,
+                                egui::FontId::proportional(16.0),
+                                colors::dim(),
+                            );
+                            let accent = if no_results { colors::red() } else { colors::fg() };
+                            let r = ui::text_field(ui, &mut st.query, "Find", 300.0, accent);
+                            if st.focus {
+                                r.request_focus();
+                                st.focus = false;
+                            }
+                            if r.changed() {
+                                recompute = true;
+                            }
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                step = if ui.input(|i| i.modifiers.shift) { -1 } else { 1 };
+                                st.focus = true; // keep focus for repeated Enter
+                            }
+                            let count = if st.matches.is_empty() { 0 } else { st.current + 1 };
+                            let count_color =
+                                if no_results { colors::red() } else { colors::dim() };
+                            ui.label(
+                                egui::RichText::new(format!("{count}/{}", st.matches.len()))
+                                    .color(count_color)
+                                    .monospace(),
+                            );
+                            // Case / regex / whole-word toggles (Tabby parity) - each flips
+                            // its option and re-runs the search.
+                            if icon_toggle(
+                                ui,
+                                icons::TEXT_AA,
+                                st.opts.case_sensitive,
+                                "Case sensitive",
+                            )
+                            .clicked()
+                            {
+                                st.opts.case_sensitive = !st.opts.case_sensitive;
+                                recompute = true;
+                            }
+                            if icon_toggle(ui, icons::ASTERISK, st.opts.regex, "Regular expression")
                                 .clicked()
-                                {
-                                    st.opts.case_sensitive = !st.opts.case_sensitive;
-                                    recompute = true;
-                                }
-                                if icon_toggle(
-                                    ui,
-                                    icons::ASTERISK,
-                                    st.opts.regex,
-                                    "Regular expression",
-                                )
-                                .clicked()
-                                {
-                                    st.opts.regex = !st.opts.regex;
-                                    recompute = true;
-                                }
-                                if icon_toggle(
-                                    ui,
-                                    icons::BRACKETS_SQUARE,
-                                    st.opts.whole_word,
-                                    "Whole word",
-                                )
-                                .clicked()
-                                {
-                                    st.opts.whole_word = !st.opts.whole_word;
-                                    recompute = true;
-                                }
-                                if icon_button(ui, icons::CARET_UP, "Previous (Shift+Enter)")
-                                    .clicked()
-                                {
-                                    step = -1;
-                                }
-                                if icon_button(ui, icons::CARET_DOWN, "Next (Enter)").clicked() {
-                                    step = 1;
-                                }
-                                if icon_button(ui, icons::X, "Close (Esc)").clicked() {
-                                    close = true;
-                                }
-                            });
+                            {
+                                st.opts.regex = !st.opts.regex;
+                                recompute = true;
+                            }
+                            if icon_toggle(
+                                ui,
+                                icons::BRACKETS_SQUARE,
+                                st.opts.whole_word,
+                                "Whole word",
+                            )
+                            .clicked()
+                            {
+                                st.opts.whole_word = !st.opts.whole_word;
+                                recompute = true;
+                            }
+                            if icon_button(ui, icons::CARET_UP, "Previous (Shift+Enter)").clicked()
+                            {
+                                step = -1;
+                            }
+                            if icon_button(ui, icons::CARET_DOWN, "Next (Enter)").clicked() {
+                                step = 1;
+                            }
+                            if icon_button(ui, icons::X, "Close (Esc)").clicked() {
+                                close = true;
+                            }
                         });
+                    });
                 });
             });
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -779,7 +759,9 @@ impl eframe::App for Stdusk {
             ctx.copy_text(text);
         }
 
-        let search_open = self.search.is_some(); // gate pty input while the find bar is open
+        // A text field (find bar or rename dialog) owns the keyboard: don't forward keys to the
+        // pty and don't let the terminal steal egui focus back while one is open.
+        let input_captured = self.search.is_some() || self.renaming.is_some();
         self.find_panel(ui);
 
         let now = ctx.input(|i| i.time);
@@ -808,7 +790,7 @@ impl eframe::App for Stdusk {
                 }
 
                 // Keystrokes + paste -> focused pane (unless the find bar owns the keyboard).
-                if !search_open {
+                if !input_captured {
                     let input = collect_input(ui);
                     if !input.is_empty() {
                         let t = tab.focused_term_mut();
@@ -865,7 +847,7 @@ impl eframe::App for Stdusk {
                     }
                     // Keep egui keyboard focus on the active terminal, or a typed Space/Enter
                     // would activate a focused tab-bar button (e.g. the gear opening config.toml).
-                    if !search_open && path == &tab.focused {
+                    if !input_captured && path == &tab.focused {
                         resp.request_focus();
                     }
                     resp.context_menu(|ui| {

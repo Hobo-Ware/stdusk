@@ -332,6 +332,15 @@ cargo test             # unit + headless integration
 - Icon glyphs optically centered with a +1px y nudge (Phosphor ink sits high in the line box).
 
 ## Gotchas / facts learned (don't rediscover these)
+- **Design system in `ui.rs`**: surfaces/inputs/buttons come from shared primitives -
+  `overlay_frame()`, `text_field()`, `action_button()`, `icon_button`/`icon_toggle`,
+  `color_swatch`, `style_menu`. Never hand-roll `Frame`/`TextEdit`/`Button` styling; two call
+  sites of the same thing MUST share the helper (find bar + rename use the same input+surface).
+  Rule + list in `.agents/rules/ui.md` §0.
+- **A focused egui text field vs the terminal fighting for focus**: the terminal pane calls
+  `request_focus()` every frame, so ANY open text field (find bar OR rename) must gate BOTH pty
+  input and that focus call - `let input_captured = self.search.is_some() || self.renaming.is_some()`.
+  Missing the rename case let the shell steal focus from the rename input.
 - **Tab bar = ONE `left_to_right(Center)` row + fixed `set_min_height`; right-pin the gear with
   a spacer (`available_width - ICON_BTN_W`), never a nested `right_to_left`.** Nested opposing
   layouts drift vertically whenever a child's height changes (this misaligned the gear 3x). Full

@@ -16,6 +16,31 @@ Note the 0.35 API this crate uses (differs from older egui docs/examples):
 `egui::Panel::top("id").show(ui, ..)` + `egui::CentralPanel` (NOT `TopBottomPanel::show(ctx)`);
 `Frame::new()`, `.corner_radius(..)`, `Margin::symmetric(i8,i8)`.
 
+## 0. Design system (shared components - USE THESE, don't hand-roll)
+
+Every surface/input/button must come from a shared primitive in `ui.rs`, so the whole app reads
+as one consistent system. **If you're about to style a `Frame`/`TextEdit`/`Button` inline, stop
+and use (or extend) the primitive instead.** When two places need the same thing (the find bar
+and the rename dialog are the same input + surface), they MUST call the same helper - never
+re-style a second copy by hand (that's how the rename dialog drifted ugly).
+
+Current primitives (`ui.rs`):
+
+- `overlay_frame() -> Frame` - the floating surface for every popover/dialog (find bar, rename):
+  elevated fill, hairline border, `corner_radius 12`, soft shadow, `Margin::symmetric(12,8)`.
+- `text_field(ui, &mut String, hint, width, color) -> Response` - the one text input: uniform
+  15pt font, theme-colored field bg, `Margin::symmetric(8,6)`. `color` tints typed text.
+- `action_button(ui, label, primary) -> Response` - dialog buttons; `primary` fills accent.
+- `icon_button(ui, icon, tip)` / `icon_toggle(ui, icon, active, tip)` - tab-bar/toolbar icons
+  (fixed `ICON_BTN_W`, glyph painted centered).
+- `color_swatch(ui, color, selected)` - filled-circle color picker swatch.
+- `style_menu(ui)` - context-menu/popup padding + min width; call at the top of every menu AND
+  submenu.
+
+**DO** add a new primitive here (with a doc comment) the first time a second call site needs a
+styled widget; **DON'T** copy-paste egui styling. Keep sizes/paddings as the single source of
+truth (consts or the helper body) so tweaks are one-liners and can't diverge.
+
 ## 1. State architecture (no god-struct)
 
 - **DO** classify every field: **persistent** (tabs, scrollback, config), **derived**
@@ -113,3 +138,6 @@ only for the thin slice that truly needs a widget tree (focus moving on tab swit
 - [ ] No per-cell/per-frame allocation on the hot path.
 - [ ] Toolbar = one center-aligned row + fixed height; right-pin via spacer, never nested
       opposing layouts; icons painted centered (not `ui.label`).
+- [ ] Surfaces/inputs/buttons come from a `ui.rs` design-system primitive (`overlay_frame`,
+      `text_field`, `action_button`, …) - no hand-rolled `Frame`/`TextEdit`/`Button` styling; a
+      text field that captures the keyboard gates pty input + focus (`input_captured`).
