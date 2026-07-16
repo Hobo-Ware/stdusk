@@ -324,6 +324,11 @@ cargo test             # unit + headless integration
 - Icon glyphs optically centered with a +1px y nudge (Phosphor ink sits high in the line box).
 
 ## Gotchas / facts learned (don't rediscover these)
+- **egui buttons activate on Space/Enter when they hold keyboard focus.** The terminal grid
+  isn't a normal focusable widget, so focus sat on a tab-bar button and a typed space/enter
+  (`cd ~`↵) "clicked" it - the gear then ran `open config.toml`. Fix: the focused terminal pane
+  calls `resp.request_focus()` each frame (when the find bar isn't open) so keystrokes can't
+  reach chrome buttons. Any new focusable chrome must not break this.
 - **Repo conventions live in `.agents/rules/`** - read via `CLAUDE.md`/`AGENTS.md`. Before
   touching UI read `ui.md`; terminal/parsers `terminal.md`; quake/hotkey `platform.md`.
 - **CI gate is clippy `-D warnings`** (pedantic escalates in CI, warns locally). Keep

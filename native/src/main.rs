@@ -842,6 +842,11 @@ impl eframe::App for Stdusk {
                     if resp.clicked() || resp.drag_started() {
                         focus_click = Some(path.clone());
                     }
+                    // Keep egui keyboard focus on the active terminal, or a typed Space/Enter
+                    // would activate a focused tab-bar button (e.g. the gear opening config.toml).
+                    if !search_open && path == &tab.focused {
+                        resp.request_focus();
+                    }
                     resp.context_menu(|ui| {
                         pane_menu(ui, path, has_sel, cwd.as_deref(), &mut pane_action);
                     });
