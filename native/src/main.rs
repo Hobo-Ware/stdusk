@@ -167,6 +167,7 @@ struct Stdusk {
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
     flash: f64,        // bell visual-flash expiry (egui time); 0 = none
     zoom: f32,         // font-size multiplier (Cmd +/-/0)
+    theme_name: String, // currently-applied theme (to detect OS light/dark changes)
     sys: sysinfo::System, // process table for CLI-awareness scans
     next_cli_scan: f64, // egui time of the next throttled procwatch scan
     tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
@@ -264,6 +265,7 @@ impl Stdusk {
         // Menu-bar status item is the accessory app's presence + control; skip it in the
         // screenshot harness and when disabled.
         let tray = (cfg.quake.menu_bar_icon && screenshot.is_none()).then(tray::build).flatten();
+        let theme_name = cfg.appearance.theme.clone();
 
         Self {
             tabs,
@@ -279,6 +281,7 @@ impl Stdusk {
             toast: None,
             flash: 0.0,
             zoom: 1.0,
+            theme_name,
             sys: sysinfo::System::new(),
             next_cli_scan: 0.0,
             tray,
@@ -636,6 +639,25 @@ impl eframe::App for Stdusk {
         // EFRAME_SCREENSHOT_TO at pass 2) fires, then it saves the PNG and exits.
         if self.screenshot.is_some() {
             ctx.request_repaint();
+        }
+
+        // Follow the OS light/dark appearance (or the manual theme when follow_system is off).
+        // Re-inits colors + egui visuals only when the resolved theme actually changes.
+        if self.screenshot.is_none() {
+            let want = if self.cfg.appearance.follow_system {
+                match ctx.input(|i| i.raw.system_theme) {
+                    Some(egui::Theme::Light) => &self.cfg.appearance.theme_light,
+                    _ => &self.cfg.appearance.theme_dark,
+                }
+            } else {
+                &self.cfg.appearance.theme
+            };
+            if *want != self.theme_name {
+                colors::set(colors::by_name(want));
+                apply_theme(&ctx);
+                self.theme_name = want.clone();
+                ctx.request_repaint();
+            }
         }
 
         // Auto-title unrenamed tabs from their cwd (basename).

@@ -3,10 +3,10 @@
 //! the active theme, so swapping themes recolors the whole app.
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use eframe::egui::Color32;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, RwLock};
 
 /// A full theme: default bg/fg/cursor + the 16 ANSI colors. UI-chrome colors are derived.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(crate) struct Theme {
     pub(crate) bg: Color32,
     pub(crate) fg: Color32,
@@ -14,14 +14,22 @@ pub(crate) struct Theme {
     pub(crate) ansi: [Color32; 16],
 }
 
-static THEME: OnceLock<Theme> = OnceLock::new();
+// Swappable at runtime (e.g. follow-OS light/dark), so read/write behind a lock. `Theme` is `Copy`
+// and tiny, so accessors copy it out - reads never hold the lock across work.
+static THEME: LazyLock<RwLock<Theme>> = LazyLock::new(|| RwLock::new(one_half_dark()));
 
+/// Set the active theme at startup.
 pub(crate) fn init(theme: Theme) {
-    let _ = THEME.set(theme);
+    set(theme);
 }
 
-fn theme() -> &'static Theme {
-    THEME.get_or_init(one_half_dark)
+/// Swap the active theme (recolors the whole app on the next repaint).
+pub(crate) fn set(theme: Theme) {
+    *THEME.write().unwrap() = theme;
+}
+
+fn theme() -> Theme {
+    *THEME.read().unwrap()
 }
 
 // ---- terminal cell mapping ----
@@ -40,7 +48,7 @@ pub(crate) fn to_color32(c: Color) -> Color32 {
 
 fn named(n: NamedColor) -> Color32 {
     use NamedColor::*;
-    let a = &theme().ansi;
+    let a = theme().ansi;
     match n {
         Black => a[0],
         Red => a[1],
@@ -104,14 +112,20 @@ pub(crate) fn green() -> Color32 {
 pub(crate) fn yellow() -> Color32 {
     theme().ansi[3]
 }
+/// True when the theme background is dark (drives the direction of the derived chrome shades, so
+/// the tab strip / active tab / borders read correctly on both light and dark themes).
+fn is_dark() -> bool {
+    let c = theme().bg;
+    0.299 * f32::from(c.r()) + 0.587 * f32::from(c.g()) + 0.114 * f32::from(c.b()) < 128.0
+}
 pub(crate) fn elevated() -> Color32 {
-    shade(theme().bg, 1.28) // active-tab bg, lighter than the bar
+    shade(theme().bg, if is_dark() { 1.28 } else { 0.90 }) // active-tab bg, set off from the bar
 }
 pub(crate) fn titlebar() -> Color32 {
-    shade(theme().bg, 0.72) // tab-bar strip, darker than the body for separation
+    shade(theme().bg, if is_dark() { 0.72 } else { 0.93 }) // tab-bar strip, separated from the body
 }
 pub(crate) fn border() -> Color32 {
-    shade(theme().bg, 1.6) // hairline divider
+    shade(theme().bg, if is_dark() { 1.6 } else { 0.78 }) // hairline divider
 }
 /// Subtle hover-highlight fill for icon buttons.
 pub(crate) fn hover() -> Color32 {
@@ -179,6 +193,32 @@ pub(crate) fn one_half_dark() -> Theme {
     }
 }
 
+pub(crate) fn one_half_light() -> Theme {
+    Theme {
+        bg: rgb(0xfa, 0xfa, 0xfa),
+        fg: rgb(0x38, 0x3a, 0x42),
+        cursor: rgb(0x01, 0x84, 0xbc),
+        ansi: [
+            rgb(0x38, 0x3a, 0x42),
+            rgb(0xe4, 0x56, 0x49),
+            rgb(0x50, 0xa1, 0x4f),
+            rgb(0xc1, 0x84, 0x01),
+            rgb(0x01, 0x84, 0xbc),
+            rgb(0xa6, 0x26, 0xa4),
+            rgb(0x09, 0x97, 0xb3),
+            rgb(0xfa, 0xfa, 0xfa),
+            rgb(0x4f, 0x52, 0x5e),
+            rgb(0xe4, 0x56, 0x49),
+            rgb(0x50, 0xa1, 0x4f),
+            rgb(0xc1, 0x84, 0x01),
+            rgb(0x01, 0x84, 0xbc),
+            rgb(0xa6, 0x26, 0xa4),
+            rgb(0x09, 0x97, 0xb3),
+            rgb(0xff, 0xff, 0xff),
+        ],
+    }
+}
+
 pub(crate) fn dracula() -> Theme {
     Theme {
         bg: rgb(0x28, 0x2a, 0x36),
@@ -236,6 +276,7 @@ pub(crate) fn by_name(name: &str) -> Theme {
     match name.to_ascii_lowercase().replace([' ', '_'], "-").as_str() {
         "dracula" => dracula(),
         "tokyo-night" | "tokyonight" => tokyo_night(),
+        "one-half-light" | "onehalflight" | "light" => one_half_light(),
         _ => one_half_dark(),
     }
 }

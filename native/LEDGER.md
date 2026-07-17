@@ -464,6 +464,19 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## M14 - follow-OS light/dark theme (`colors.rs`, `config.rs`, `main.rs`)
+- The theme is now swappable at runtime: `colors` holds it in a `LazyLock<RwLock<Theme>>` (was a
+  set-once `OnceLock`); `Theme` is `Copy` so accessors copy it out without holding the lock.
+  `colors::set(theme)` swaps it.
+- **Adaptive chrome**: `elevated`/`titlebar`/`border` now branch on `is_dark()` (bg luminance) so
+  the tab strip / active tab / dividers read correctly on light themes too (the old shade factors
+  were dark-only). Added a `one-half-light` built-in.
+- **Follow-OS**: config `appearance.follow_system` (default true) + `theme_light`/`theme_dark`.
+  `ui()` reads `input.raw.system_theme` each frame and, when the resolved theme name changes,
+  calls `colors::set` + `apply_theme` + repaint. `follow_system = false` uses `appearance.theme`.
+  Verified the light theme renders with correct chrome via a forced screenshot.
+- Still single static theme (no XRDB-191 import) - that's the next theme slice.
+
 ## M13 - input polish + links-on-hover (`main.rs`, `terminal.rs`, `ui.rs`, `config.rs`)
 - **Font zoom**: Cmd+=/Cmd+-/Cmd+0 adjust a runtime `Stdusk.zoom` multiplier (0.5-3.0); the grid
   font = `font_size * zoom`, cell metrics + pty resize follow automatically.

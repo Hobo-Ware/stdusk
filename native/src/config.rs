@@ -16,9 +16,12 @@ pub(crate) struct Config {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub(crate) struct Appearance {
-    pub(crate) theme: String,
+    pub(crate) theme: String, // used when follow_system = false
     pub(crate) opacity: f32,
     pub(crate) font_size: f32,
+    pub(crate) follow_system: bool, // pick theme_light/theme_dark by the OS appearance
+    pub(crate) theme_light: String,
+    pub(crate) theme_dark: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,7 +54,14 @@ pub(crate) struct Terminal {
 
 impl Default for Appearance {
     fn default() -> Self {
-        Self { theme: "one-half-dark".into(), opacity: 0.85, font_size: 13.0 }
+        Self {
+            theme: "one-half-dark".into(),
+            opacity: 0.85,
+            font_size: 13.0,
+            follow_system: true,
+            theme_light: "one-half-light".into(),
+            theme_dark: "one-half-dark".into(),
+        }
     }
 }
 impl Default for Quake {

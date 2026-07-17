@@ -64,7 +64,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Bold-in-bright-colors | ⬜ | cheap |
 | Minimum contrast ratio (auto-contrast) | ⬜ | |
 | Palette generate / harmonious | ⬜ | niche |
-| Light color scheme + follow-OS light/dark | ⬜ | single scheme now |
+| Light color scheme + follow-OS light/dark | ✅ | `appearance.follow_system` + `theme_light`/`theme_dark`; adaptive chrome; `one-half-light` added |
 | Background: image / vibrancy / blur | ⬜ | opacity only |
 | Configurable scrollback lines (25k default) | 🟡 | fixed ~10k, not configurable |
 | Wide-char / Unicode 11 widths | 🟡 | verify CJK/emoji cell widths |
@@ -117,7 +117,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 ## Themes / color schemes
 | Feature | State | Notes |
 |---|---|---|
-| Built-in themes | 🟡 | 3 (Tabby community pack has **191** XRDB schemes) |
+| Built-in themes | 🟡 | 4 (one-half dark/light, dracula, tokyo-night); Tabby community pack has **191** XRDB schemes |
 | Import color schemes (XRDB/iTerm/base16) | ⬜ | parse into a theme; 191 XRDB files available to port |
 | Custom color schemes in config | 🟡 | theme by name only |
 
