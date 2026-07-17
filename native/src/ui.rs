@@ -534,6 +534,7 @@ pub(crate) fn render_grid(
     font: &egui::FontId,
     cursor: CursorStyle,
     dimmed: bool,
+    links: bool,
 ) -> egui::Response {
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -541,6 +542,34 @@ pub(crate) fn render_grid(
     let hit = |p: egui::Pos2| {
         pos_to_cell(p.x - origin.x, p.y - origin.y, cw, ch, snap.cols, snap.rows, snap.top_line)
     };
+
+    // Clickable links: with the command modifier held, underline the link under the pointer and
+    // open it on click. Kept off the selection path so plain drags still select text.
+    let mut link_underline: Option<(f32, f32, f32)> = None; // (x0, x1, y)
+    if links
+        && ui.input(|i| i.modifiers.command)
+        && let Some(p) = ui.input(|i| i.pointer.hover_pos())
+        && rect.contains(p)
+    {
+        let row = (((p.y - origin.y) / ch) as usize).min(snap.rows.saturating_sub(1));
+        let row_text: String = (0..snap.cols).map(|c| snap.cells[row * snap.cols + c].c).collect();
+        let col = (((p.x - origin.x) / cw) as usize).min(snap.cols.saturating_sub(1));
+        if let Some(link) = crate::links::find_in_row(&row_text)
+            .into_iter()
+            .find(|l| col >= l.start && col < l.start + l.len)
+        {
+            link_underline = Some((
+                origin.x + link.start as f32 * cw,
+                origin.x + (link.start + link.len) as f32 * cw,
+                origin.y + (row as f32 + 1.0) * ch - 1.5,
+            ));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            if resp.clicked() {
+                let text: String = row_text.chars().skip(link.start).take(link.len).collect();
+                crate::links::open(&text, link.kind, term.cwd().as_deref());
+            }
+        }
+    }
     if resp.triple_clicked() {
         if let Some(p) = resp.interact_pointer_pos() {
             let (line, col, _) = hit(p);
@@ -584,6 +613,11 @@ pub(crate) fn render_grid(
                 painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), fade(cell.fg));
             }
         }
+    }
+
+    // Underline the hovered (command-held) link.
+    if let Some((x0, x1, y)) = link_underline {
+        painter.hline(x0..=x1, y, egui::Stroke::new(1.0, fade(colors::accent())));
     }
 
     // Cursor (block/underline/beam); hidden while scrolled into history.

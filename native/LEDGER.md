@@ -464,6 +464,14 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## M11 - clickable links (`links.rs`, `ui.rs`, `config.rs`)
+- Cmd+click URLs (`https?/ftp/file://`) and file paths (absolute/`~`/relative) to open them via
+  `open`. Cmd-hover underlines the link + shows the pointing-hand cursor. `links::find_in_row`
+  (pure, per-row, char-col spans; URLs beat overlapping paths; trailing punctuation trimmed) +
+  `resolve_target` (`~`/cwd expansion) are unit-tested (6 tests); `render_grid` gained a `links`
+  arg + hit-tests the hovered row. Config `terminal.clickable_links` (default true). IP-only
+  literals (no scheme) not yet detected.
+
 ## Post-0.1.0 fixes
 - **Menu-bar (tray) icon** (`tray.rs`, `tray-icon` crate): an accessory app has no Dock icon, so
   this is stdusk's presence + control - a monochrome template icon (`assets/stdusk-tray.png`,

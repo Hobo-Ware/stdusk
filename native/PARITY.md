@@ -96,7 +96,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 ## Links
 | Feature | State | Notes |
 |---|---|---|
-| Clickable links (URL/IP/file paths, modifier-click) | ⬜ | **was M2.5, never built** - high-value, cwd-relative + `~` expansion, `open` crate |
+| Clickable links (URL + file paths, Cmd+click) | ✅ | `terminal.clickable_links`; Cmd-hover underlines, opens via `open`, cwd-relative + `~`. IP-only (no scheme) still ⬜ |
 
 ## Command palette / discoverability
 | Feature | State | Notes |

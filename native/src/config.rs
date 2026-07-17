@@ -35,6 +35,8 @@ pub(crate) struct Quake {
     pub(crate) menu_bar_icon: bool,
 }
 
+// Independent user toggles, not a mode - a state machine would be more code, not less.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub(crate) struct Terminal {
@@ -43,6 +45,7 @@ pub(crate) struct Terminal {
     pub(crate) shell_integration: bool, // inject OSC 133 hooks into the spawned shell
     pub(crate) bell: String,            // "visual" | "off"
     pub(crate) detect_clis: bool,       // badge tabs running a known AI CLI (claude/gemini/...)
+    pub(crate) clickable_links: bool,   // Cmd+click URLs / file paths to open them
 }
 
 impl Default for Appearance {
@@ -69,6 +72,7 @@ impl Default for Terminal {
             shell_integration: true,
             bell: "visual".into(),
             detect_clis: true,
+            clickable_links: true,
         }
     }
 }

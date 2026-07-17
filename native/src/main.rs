@@ -10,6 +10,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 mod colors;
 mod config;
+mod links;
 mod osc;
 mod pane;
 mod procwatch;
@@ -890,6 +891,7 @@ impl eframe::App for Stdusk {
                 let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
                 let (cw, ch) = (m.size().x, m.size().y);
                 let cursor = ui::cursor_style(&self.cfg.terminal.cursor);
+                let clickable_links = self.cfg.terminal.clickable_links;
 
                 let tab = &mut self.tabs[self.active];
 
@@ -953,8 +955,19 @@ impl eframe::App for Stdusk {
                     let dimmed = multi && path != &tab.focused;
                     let has_sel = term.selection_text().is_some();
                     let cwd = term.cwd();
-                    let resp =
-                        render_grid(ui, path, *rect, term, &snap, cw, ch, &font, cursor, dimmed);
+                    let resp = render_grid(
+                        ui,
+                        path,
+                        *rect,
+                        term,
+                        &snap,
+                        cw,
+                        ch,
+                        &font,
+                        cursor,
+                        dimmed,
+                        clickable_links,
+                    );
                     if bell_on && term.take_bell() {
                         bell_rang = true;
                     }
