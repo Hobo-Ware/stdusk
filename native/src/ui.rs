@@ -419,10 +419,8 @@ pub(crate) fn draw_tab(
             egui::vec2(3.0, h),
         );
         match cmd {
-            CmdState::Idle => {}
-            CmdState::Ok => {
-                dp.rect_filled(track, 1.5, colors::green());
-            }
+            // Idle and Ok show nothing - success is the default, only problems get an indicator.
+            CmdState::Idle | CmdState::Ok => {}
             CmdState::Fail => {
                 dp.rect_filled(track, 1.5, colors::red());
             }
