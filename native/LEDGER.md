@@ -464,6 +464,11 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
 ## Next up
+- **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
+  audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
+  clickable links (M2.5 debt), keyboard pane nav/resize/maximize, input polish (select-all/clear/
+  font-zoom/copy-on-select/middle-click/scroll hotkeys), color-scheme import (191 XRDB schemes),
+  tab power features, session restore, settings GUI.
 - **Cut future releases**: bump `native/Cargo.toml` version, tag `stdusk-v<x>`, push; then copy the
   release's generated `stdusk.rb` into the tap's `Formula/stdusk.rb` (consider automating the tap
   push with a PAT). `.app` is unsigned/un-notarized - fine via brew formula (no Gatekeeper

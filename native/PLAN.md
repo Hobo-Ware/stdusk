@@ -345,6 +345,11 @@ resize are solid first.
 
 ## 9. Missing features / future work (annotated inventory)
 
+> **See [PARITY.md](./PARITY.md)** for the comprehensive, source-scanned Tabby-vs-stdusk gap list
+> (every hotkey, config key, context-menu item, and settings option, with keep/defer/drop
+> disposition and a suggested M11-M17 milestone order). The table below is the original high-level
+> disposition; PARITY.md supersedes it as the living to-do.
+
 Full Tabby surface, with disposition. `DROP` = never; `DEFER` = post-v1; `FUTURE` = nice idea.
 
 | Tabby / terminal feature | Disposition | Rationale |
