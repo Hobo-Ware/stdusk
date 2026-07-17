@@ -3774,13 +3774,15 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stdusk"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "alacritty_terminal",
  "base64",
  "eframe",
  "egui",
  "global-hotkey",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "portable-pty",
  "proptest",
  "regex",

@@ -154,6 +154,7 @@ fn pane_menu(
     }
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent app-state flags, not a mode
 struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
@@ -161,14 +162,15 @@ struct Stdusk {
     _hotkey: GlobalHotKeyManager, // kept alive so the registration persists
     toggle: Arc<AtomicBool>,      // set by the hotkey thread, consumed in ui()
     visible: bool,
+    dock_shown: bool, // last-applied Dock-icon state (dynamic dock_when_visible mode)
     was_focused: bool, // gained focus since last show (so blur can hide)
-    sized: bool,       // applied quake sizing once the monitor size was known
+    sized: bool,      // applied quake sizing once the monitor size was known
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
-    flash: f64,        // bell visual-flash expiry (egui time); 0 = none
-    zoom: f32,         // font-size multiplier (Cmd +/-/0)
+    flash: f64,       // bell visual-flash expiry (egui time); 0 = none
+    zoom: f32,        // font-size multiplier (Cmd +/-/0)
     theme_name: String, // currently-applied theme (to detect OS light/dark changes)
     sys: sysinfo::System, // process table for CLI-awareness scans
     next_cli_scan: f64, // egui time of the next throttled procwatch scan
@@ -276,6 +278,7 @@ impl Stdusk {
             _hotkey: mgr,
             toggle,
             visible: true,
+            dock_shown: true, // launches regular (dynamic mode) / irrelevant otherwise
             was_focused: false, // arm hide-on-blur only after the first focus gain
             sized,
             renaming: None,
@@ -314,6 +317,18 @@ impl Stdusk {
             self.tabs.push(tab);
         }
         self.active = self.active.min(self.tabs.len() - 1);
+    }
+
+    /// In the dynamic `dock_when_visible` mode, keep the Dock icon (+ menu bar) in sync with the
+    /// window's visibility. Only touches the activation policy when it actually changes.
+    fn sync_dock(&mut self) {
+        if self.cfg.quake.hide_from_dock
+            && self.cfg.quake.dock_when_visible
+            && self.visible != self.dock_shown
+        {
+            set_dock_icon(self.visible);
+            self.dock_shown = self.visible;
+        }
     }
 
     /// Reopen the most recently closed tab (in its old cwd), if any.
@@ -531,6 +546,24 @@ impl Stdusk {
 /// hotkey handler never fires again. Instead we park the window mostly below the screen,
 /// leaving a ~2px sliver on-screen so it stays un-occluded and the run loop keeps delivering
 /// the hotkey. A proper native hide (NSPanel orderOut) is a polish item.
+/// Show/hide the Dock icon (+ menu bar) at runtime by flipping the macOS activation policy.
+/// Used only in the dynamic `dock_when_visible` mode. No-op off macOS.
+#[cfg(target_os = "macos")]
+fn set_dock_icon(visible: bool) {
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        let policy = if visible {
+            NSApplicationActivationPolicy::Regular
+        } else {
+            NSApplicationActivationPolicy::Accessory
+        };
+        app.setActivationPolicy(policy);
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn set_dock_icon(_visible: bool) {}
+
 fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
     if visible {
@@ -654,6 +687,7 @@ impl eframe::App for Stdusk {
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(120));
             }
+            self.sync_dock();
         }
 
         // Screenshot harness: keep repainting so eframe's built-in capture (triggered by
@@ -1327,10 +1361,13 @@ fn main() -> eframe::Result<()> {
         viewport,
         ..Default::default()
     };
-    // Quake default: run as a macOS accessory app - no Dock icon, no app-switcher/menu-bar entry.
-    // It just drops from the top edge on the hotkey. `quake.hide_from_dock = false` opts back into
-    // a normal Dock app.
-    if cfg.quake.hide_from_dock {
+    // Dock/menu-bar presence on macOS:
+    //   hide_from_dock && !dock_when_visible (default): launch as a pure accessory app - no Dock
+    //     icon and (per Apple) no menu bar of its own; it just drops from the top on the hotkey.
+    //   hide_from_dock && dock_when_visible: launch regular, then flip to accessory whenever the
+    //     window is hidden (see `set_dock_icon`) - Dock icon + real menu bar only while visible.
+    //   !hide_from_dock: a normal Dock app.
+    if cfg.quake.hide_from_dock && !cfg.quake.dock_when_visible {
         options.event_loop_builder = Some(Box::new(|builder| {
             #[cfg(target_os = "macos")]
             {

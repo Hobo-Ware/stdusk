@@ -24,6 +24,7 @@ pub(crate) struct Appearance {
     pub(crate) theme_dark: String,
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent quake toggles, not a mode
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub(crate) struct Quake {
@@ -36,6 +37,10 @@ pub(crate) struct Quake {
     /// Show a menu-bar (status) icon with a Show/Hide + Quit menu. The accessory app's main entry
     /// point + presence indicator; set false to hide it.
     pub(crate) menu_bar_icon: bool,
+    /// (With hide_from_dock) show the Dock icon + a real menu bar *while the window is visible*,
+    /// flipping back to accessory when it's hidden. Off by default (pure accessory - no Dock, and
+    /// the menu bar belongs to whatever other app is frontmost).
+    pub(crate) dock_when_visible: bool,
 }
 
 // Independent user toggles, not a mode - a state machine would be more code, not less.
@@ -72,6 +77,7 @@ impl Default for Quake {
             hide_on_focus_loss: true,
             hide_from_dock: true,
             menu_bar_icon: true,
+            dock_when_visible: false,
         }
     }
 }

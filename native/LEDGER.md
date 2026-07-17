@@ -464,6 +464,17 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## Dock/menu-bar modes (`main.rs`, `config.rs`) - macOS
+- macOS has no "menu bar without a Dock icon" static mode: accessory = neither, regular = both.
+  So pure accessory (our default) means the visible menu bar belongs to whatever other regular app
+  is frontmost (looks like "Tabby" when Tabby is running) - cosmetic, not stdusk's.
+- New opt-in `quake.dock_when_visible` (default false): with `hide_from_dock`, launch **regular**
+  and flip to **accessory** whenever the window is hidden, so the Dock icon + a real "stdusk" menu
+  bar appear only while visible. Runtime flip via `set_dock_icon` -> `NSApplication.
+  setActivationPolicy` (objc2-app-kit 0.3, **safe** binding - no `unsafe`; needs the
+  `NSRunningApplication` feature). Synced once/frame on change (`sync_dock`, `dock_shown` guard).
+  Default off keeps the current pure-accessory behavior.
+
 ## M12b - keyboard pane resize (`pane.rs`, `main.rs`)
 - Cmd+Ctrl+arrows resize the focused pane (Right/Down grow, Left/Up shrink). `Pane::resize_focused`
   (pure, tested) walks to the nearest ancestor split matching the axis and nudges its ratio,
