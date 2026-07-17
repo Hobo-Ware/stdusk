@@ -426,6 +426,8 @@ pub(crate) fn draw_tab(
             CmdState::Fail => {
                 dp.rect_filled(track, 1.5, colors::red());
             }
+            // Skip the running marquee when a %-progress bar is already showing activity.
+            CmdState::Running if progress_fraction(progress).is_some() => {}
             CmdState::Running => {
                 // Dim full-height track + a bright segment easing up and down.
                 dp.rect_filled(track, 1.5, colors::accent().gamma_multiply(0.3));
