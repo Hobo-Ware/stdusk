@@ -5,8 +5,9 @@ resume without rediscovering them. **Every agent updates this file after each wo
 or milestone.** Keep it truthful - if a test is red or a step was skipped, say so.
 
 - Project: a native Rust quake terminal with a real GUI tab bar + first-party AI agent.
-- Repo: `Hobo-Ware/stdusk` (a hard fork of Eugeny/tabby - Electron Tabby lives on `master`
-  as reference; the Rust rewrite lives on branch `rust`, crate in `native/`).
+- Repo: `Hobo-Ware/stdusk` (a hard fork of Eugeny/tabby). The Rust rewrite is the default `main`
+  branch, crate in `native/`. The forked Electron Tabby source stays in-tree (the `tabby-*` dirs)
+  + upstream at Eugeny/tabby as the reference implementation.
 - Full design: [PLAN.md](./PLAN.md). This ledger is the *state*; the plan is the *intent*.
 
 ## Visual testing (use this before asking the user about UI!)
@@ -353,7 +354,7 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
 - **Tooling**: `rustfmt.toml` (edition 2024, max_width 100); `Cargo.toml [lints]` deny
   `clippy::all` + warn `pedantic` with a justified allow-list; `unsafe_code = "deny"` (one
   local `#[allow]` on the edition-2024 `set_var`); `proptest` dev-dep; CI at
-  `.github/workflows/native.yml` (fmt/clippy -D warnings/test on the `rust` branch).
+  `.github/workflows/native.yml` (fmt/clippy -D warnings/test on the `main` branch).
 - **`ui.rs` extracted** from `main.rs` (was ~960 lines, mega-file): all pure helpers now live
   there and are unit-tested - `pos_to_cell` (mouse→grid), `ellipsize`, `key_to_bytes`
   (the whole keyboard table, incl. the modifier-arrow logic that had shipped a bug),
@@ -443,7 +444,7 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
 - Quake uses `global-hotkey` (Carbon) - no macOS Accessibility grant (the skhd route was a
   dead end; Ghostty can't do native tabs in its quick terminal; kitty looked too plain).
 - First-party AI agent is the "better than Tabby" differentiator (§4i).
-- Electron Tabby stays on `master` untouched as the reference implementation.
+- Electron Tabby source stays in-tree (the `tabby-*` dirs) untouched as the reference implementation.
 - **Functional-first**: deep UX/visual polish (spacing, animations, quake drop anim, tab
   separators, font tuning) is deferred to a dedicated pass (~M11). Ship behavior, then beauty.
 - Tab bar look confirmed: flat tabs + per-tab colored underline + top-edge progress (Tabby-style).

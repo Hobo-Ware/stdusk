@@ -2,7 +2,7 @@ name: native (rust)
 
 on:
   push:
-    branches: [rust]
+    branches: [main]
     paths: ['native/**', '.github/workflows/native.yml']
   pull_request:
     paths: ['native/**', '.github/workflows/native.yml']

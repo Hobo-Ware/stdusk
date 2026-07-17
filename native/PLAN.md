@@ -338,7 +338,7 @@ resize are solid first.
 - CJK/wide-glyph + emoji cell-width handling deferred to M2/M6.
 
 ## 8. Current status
-- Repo `Hobo-Ware/stdusk`, branch `rust`, crate in `native/`. Electron Tabby on `master` as reference.
+- Repo `Hobo-Ware/stdusk`, default branch `main`, crate in `native/`. Forked Electron Tabby source stays in-tree (`tabby-*` dirs) + upstream Eugeny/tabby as reference.
 - M0 + M1 implemented + compiling (eframe/egui 0.35, alacritty_terminal 0.26, portable-pty 0.9).
 
 ---

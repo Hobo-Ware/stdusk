@@ -60,7 +60,7 @@ Rust 2024 edition. Architecture and roadmap in [`native/PLAN.md`](./native/PLAN.
 
 ## Lineage
 
-stdusk is a hard fork of [Tabby](https://github.com/Eugeny/tabby) (MIT). The original Electron app lives untouched on the `master` branch as a reference; the Rust rewrite is the `rust` branch, in `native/`. Credit where it's due - Tabby nailed the vibe, we chased the efficiency.
+stdusk is a hard fork of [Tabby](https://github.com/Eugeny/tabby) (MIT). The Rust rewrite lives in `native/` on the default `main` branch; the original Electron Tabby source stays in-tree (the `tabby-*` dirs) and upstream at [Eugeny/tabby](https://github.com/Eugeny/tabby) as a reference. Credit where it's due - Tabby nailed the vibe, we chased the efficiency.
 
 ## License
 

@@ -15,7 +15,7 @@ This is the developer-facing doc. For the pitch, see the [repo README](../README
 
 ## Why
 
-The forked-from Electron Tabby (kept in this repo's `master` branch as reference)
+The forked-from Electron Tabby (kept in-tree in the `tabby-*` dirs as reference)
 nails sexy + quake but pays for it in RAM. Text-grid emulators are efficient but
 render tabs as text, so they never look like a GUI. stdusk aims for both:
 
