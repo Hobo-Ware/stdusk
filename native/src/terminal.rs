@@ -136,9 +136,8 @@ impl PtyTerm {
         if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
             cmd.cwd(dir);
         }
-        if shell_integration {
-            crate::shell::integrate(&mut cmd, &shell);
-        }
+        // Spawn login+interactive (so PATH-setting profile files run) + optional OSC 133 hooks.
+        crate::shell::configure(&mut cmd, &shell, shell_integration);
         let child = pair.slave.spawn_command(cmd).expect("spawn shell");
         let shell_pid = child.process_id();
         drop(child); // pid is stable; the pty keeps the shell alive, so we don't hold the handle
