@@ -464,6 +464,16 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## M15 - tab power features (`main.rs`)
+- **Next/prev tab cycle**: Ctrl+Tab / Ctrl+Shift+Tab (wraps via `rem_euclid`). Ctrl+Tab already
+  returns no pty bytes (ctrl_letter(Tab)=None), so it's free.
+- **Reopen closed tab**: Cmd+Shift+T. `close_tab` pushes the tab's cwd onto a `closed` stack (cap
+  20); `reopen_tab` pops + spawns a tab in that cwd. Cmd+T (no shift) stays new-tab.
+- **Duplicate tab**: context-menu "Duplicate" (`TabAction::Duplicate`) - new tab in the source
+  tab's cwd.
+- Still TODO in the tab group: move-tab hotkeys (arrow combos clash with terminal line-nav),
+  tabs 10-20, pin, notify-when-done.
+
 ## M14 - follow-OS light/dark theme (`colors.rs`, `config.rs`, `main.rs`)
 - The theme is now swappable at runtime: `colors` holds it in a `LazyLock<RwLock<Theme>>` (was a
   set-once `OnceLock`); `Theme` is `Copy` so accessors copy it out without holding the lock.

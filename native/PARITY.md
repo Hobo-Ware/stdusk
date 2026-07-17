@@ -24,11 +24,11 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Feature | State | Notes |
 |---|---|---|
 | New / close / switch (1-9) / reorder / rename / color | ✅ | reorder+rename via menu/dbl-click |
-| `next-tab` / `previous-tab` cycle hotkey | ⬜ | Ctrl-Tab style; have index jump only |
+| `next-tab` / `previous-tab` cycle hotkey | ✅ | Ctrl+Tab / Ctrl+Shift+Tab (wraps) |
 | `move-tab-left/right` hotkey | 🟡 | menu only, no hotkey |
 | Tab jump 10-20 (`tab-10`..`tab-20`) | ⬜ | have 1-9 |
-| `duplicate-tab` (clone incl. cwd) | ⬜ | |
-| `reopen-tab` (reopen last closed) | ⬜ | needs closed-tab stack |
+| `duplicate-tab` (clone incl. cwd) | ✅ | context-menu "Duplicate" |
+| `reopen-tab` (reopen last closed) | ✅ | Cmd+Shift+T; closed-cwd stack (cap 20) |
 | `toggle-last-tab` (alt-tab between two) | ⬜ | |
 | `pin-tab` (pin, guard close) | ⬜ | |
 | `restart-tab` (respawn shell) | ⬜ | |

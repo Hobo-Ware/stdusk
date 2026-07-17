@@ -91,6 +91,7 @@ struct Search {
 /// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
 enum TabAction {
     New,
+    Duplicate(usize),
     Rename(usize),
     SetColor(usize, Option<egui::Color32>),
     MoveLeft(usize),
@@ -164,6 +165,7 @@ struct Stdusk {
     sized: bool,       // applied quake sizing once the monitor size was known
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
+    closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
     flash: f64,        // bell visual-flash expiry (egui time); 0 = none
     zoom: f32,         // font-size multiplier (Cmd +/-/0)
@@ -278,6 +280,7 @@ impl Stdusk {
             sized,
             renaming: None,
             search: None,
+            closed: Vec::new(),
             toast: None,
             flash: 0.0,
             zoom: 1.0,
@@ -297,7 +300,13 @@ impl Stdusk {
     }
 
     fn close_tab(&mut self, i: usize, ctx: &egui::Context) {
-        if i < self.tabs.len() {
+        if let Some(tab) = self.tabs.get(i) {
+            if let Some(cwd) = tab.focused_term().cwd() {
+                self.closed.push(cwd); // remember for reopen (Cmd+Shift+T)
+                if self.closed.len() > 20 {
+                    self.closed.remove(0);
+                }
+            }
             self.tabs.remove(i);
         }
         if self.tabs.is_empty() {
@@ -305,6 +314,15 @@ impl Stdusk {
             self.tabs.push(tab);
         }
         self.active = self.active.min(self.tabs.len() - 1);
+    }
+
+    /// Reopen the most recently closed tab (in its old cwd), if any.
+    fn reopen_tab(&mut self, ctx: &egui::Context) {
+        if let Some(cwd) = self.closed.pop() {
+            let tab = spawn_tab(&self.cfg, ctx, Some(cwd));
+            self.tabs.push(tab);
+            self.active = self.tabs.len() - 1;
+        }
     }
 
     fn move_tab(&mut self, i: usize, dir: i32) {
@@ -539,6 +557,9 @@ fn tab_menu(
     if ui.button("New tab").clicked() {
         *action = Some(TabAction::New);
     }
+    if ui.button("Duplicate").clicked() {
+        *action = Some(TabAction::Duplicate(i));
+    }
     if ui.button("Rename…").clicked() {
         *action = Some(TabAction::Rename(i));
     }
@@ -705,7 +726,12 @@ impl eframe::App for Stdusk {
         let mut kb_clear = false; // Cmd+K
         let mut kb_zoom: Option<i8> = None; // Cmd +/= (1), Cmd - (-1), Cmd 0 (0 = reset)
         let mut kb_scroll_pages: Option<i32> = None; // Shift+PageUp/Down: -1 up, +1 down
+        let mut kb_tab_cycle: Option<i32> = None; // Ctrl+Tab next (+1) / Ctrl+Shift+Tab prev (-1)
+        let mut kb_reopen = false; // Cmd+Shift+T: reopen last closed tab
         ctx.input(|i| {
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
+                kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
+            }
             if i.modifiers.shift {
                 if i.key_pressed(egui::Key::PageUp) {
                     kb_scroll_pages = Some(-1);
@@ -754,7 +780,11 @@ impl eframe::App for Stdusk {
                     }
                 }
                 if i.key_pressed(T) {
-                    kb_new = true;
+                    if i.modifiers.shift {
+                        kb_reopen = true; // Cmd+Shift+T
+                    } else {
+                        kb_new = true; // Cmd+T
+                    }
                 }
                 if i.key_pressed(W) {
                     kb_close = true;
@@ -867,6 +897,13 @@ impl eframe::App for Stdusk {
         {
             self.active = n;
         }
+        if let Some(d) = kb_tab_cycle {
+            let len = self.tabs.len() as i32;
+            self.active = (self.active as i32 + d).rem_euclid(len) as usize;
+        }
+        if kb_reopen {
+            self.reopen_tab(&ctx);
+        }
         if kb_new {
             action = Some(TabAction::New);
         }
@@ -944,6 +981,12 @@ impl eframe::App for Stdusk {
         }
         match action {
             Some(TabAction::New) => self.new_tab(&ctx),
+            Some(TabAction::Duplicate(i)) => {
+                let cwd = self.tabs.get(i).and_then(|t| t.focused_term().cwd());
+                let tab = spawn_tab(&self.cfg, &ctx, cwd);
+                self.tabs.push(tab);
+                self.active = self.tabs.len() - 1;
+            }
             Some(TabAction::Rename(i)) => {
                 if let Some(t) = self.tabs.get(i) {
                     self.renaming = Some((i, t.title.clone(), true));
