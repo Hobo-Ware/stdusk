@@ -467,9 +467,15 @@ pub(crate) fn draw_tab(
             pcolor,
         );
     }
-    // Close x, revealed on the active or hovered tab, with its own hover feedback.
+    // Interact the whole tab FIRST so the close-x (registered after, hence on top) wins its own
+    // clicks. Previously the tab's click was registered last and stole the x's click, so clicking
+    // the x just focused the tab instead of closing it.
+    let tab_resp = inner.response.interact(egui::Sense::click());
+    // Close x: shown on the active tab, or whenever the pointer is anywhere over the tab. Use
+    // `contains_pointer` (true across the whole tab rect, incl. the x) rather than `hovered` so
+    // moving onto the x doesn't drop the tab's hover state and make the x flicker.
     let mut close = false;
-    if active || inner.response.hovered() {
+    if active || tab_resp.contains_pointer() {
         let x_rect = egui::Rect::from_min_size(
             egui::pos2(rect.right() - 22.0, rect.center().y - 9.0),
             egui::vec2(18.0, 18.0),
@@ -490,7 +496,7 @@ pub(crate) fn draw_tab(
             close = true;
         }
     }
-    (inner.response.interact(egui::Sense::click()), close)
+    (tab_resp, close)
 }
 
 /// Translate this frame's key/text events into bytes for the pty.

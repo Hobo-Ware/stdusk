@@ -126,6 +126,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 |---|---|---|
 | Top-edge drop, global hotkey, hide-on-blur, height % | ✅ | |
 | Accessory app (no Dock icon / tray, quake default) | ✅ | `quake.hide_from_dock`; ActivationPolicy::Accessory |
+| Menu-bar (tray) icon + Show/Hide/Quit menu | ✅ | `quake.menu_bar_icon`; tray-icon crate (Tabby `hideTray` parity) |
 | Light/dark/tinted-adaptive app icon (macOS 26) | ⬜ | needs Icon Composer `.icon`; static .icns now |
 | Dock edge (top/bottom/left/right) | ⬜ | top only |
 | Display/screen selection (`dockScreen`) | ⬜ | current monitor only |

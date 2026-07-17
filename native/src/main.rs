@@ -17,6 +17,7 @@ mod progress;
 mod search;
 mod shell;
 mod terminal;
+mod tray;
 mod ui;
 use config::Config;
 use terminal::PtyTerm;
@@ -164,6 +165,7 @@ struct Stdusk {
     flash: f64,        // bell visual-flash expiry (egui time); 0 = none
     sys: sysinfo::System, // process table for CLI-awareness scans
     next_cli_scan: f64, // egui time of the next throttled procwatch scan
+    tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
     screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
 }
 
@@ -255,6 +257,10 @@ impl Stdusk {
             sized = true;
         }
 
+        // Menu-bar status item is the accessory app's presence + control; skip it in the
+        // screenshot harness and when disabled.
+        let tray = (cfg.quake.menu_bar_icon && screenshot.is_none()).then(tray::build).flatten();
+
         Self {
             tabs,
             active,
@@ -270,6 +276,7 @@ impl Stdusk {
             flash: 0.0,
             sys: sysinfo::System::new(),
             next_cli_scan: 0.0,
+            tray,
             screenshot,
         }
     }
@@ -589,6 +596,21 @@ impl eframe::App for Stdusk {
                 apply_visibility(&ctx, self.visible, height_pct);
                 if self.visible {
                     self.was_focused = false;
+                }
+            }
+
+            // Menu-bar item: Show/Hide toggles the window, Quit exits.
+            if let Some(tray) = &self.tray {
+                let (show, quit) = tray::poll(tray);
+                if quit {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if show {
+                    self.visible = !self.visible;
+                    apply_visibility(&ctx, self.visible, height_pct);
+                    if self.visible {
+                        self.was_focused = false;
+                    }
                 }
             }
             // Hide on focus loss (after we've gained focus since showing), if enabled.

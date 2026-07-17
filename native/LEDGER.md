@@ -465,6 +465,21 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
 ## Post-0.1.0 fixes
+- **Menu-bar (tray) icon** (`tray.rs`, `tray-icon` crate): an accessory app has no Dock icon, so
+  this is stdusk's presence + control - a monochrome template icon (`assets/stdusk-tray.png`,
+  macOS auto-tints) with a Show/Hide + Quit menu. `MenuEvent::receiver()` polled each frame (same
+  pattern as the global hotkey). Config `quake.menu_bar_icon` (default true). Built in
+  `Stdusk::new` (graceful `None` on failure); if it ever doesn't appear, move creation to the
+  first `ui()` frame (after the event loop is fully resumed).
+- **Login-shell PATH fix** (`shell.rs`): GUI apps get launchd's minimal PATH, so a non-login shell
+  skipped `/etc/zprofile` (path_helper) + `~/.zprofile` (brew) -> `starship` etc. "command not
+  found". Now spawn login+interactive (`-l -i`) like Terminal.app, and the ZDOTDIR integration
+  bridges the FULL startup set (.zshenv/.zprofile/.zlogin/.zshrc), not just .zshenv/.zshrc.
+  Reproduced the exact error under a minimal PATH + verified the fix.
+- **Close-x on tabs** (`ui.rs` `draw_tab`): clicking the x on a non-active tab focused it instead
+  of closing, and the x flickered. Cause: the tab's click interaction was registered AFTER the x,
+  so it stole the click. Fix: interact the tab FIRST (x, registered later, is on top and wins its
+  clicks) and gate the x on `contains_pointer()` (stable across the whole tab rect) not `hovered()`.
 - **Distribution = Homebrew cask, not formula** (user: "we need it to be findable"). A formula
   keeps the `.app` in the Cellar, so Spotlight/Launchpad never see it. The tap now ships
   `Casks/stdusk.rb`: `app "stdusk.app"` -> `/Applications` (Spotlight-findable) + `binary` stanza

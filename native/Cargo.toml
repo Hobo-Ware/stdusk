@@ -1,6 +1,6 @@
 [package]
 name = "stdusk"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 
 [dependencies]
@@ -14,6 +14,7 @@ regex = "1.13.0"
 serde = { version = "1.0.228", features = ["derive"] }
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 toml = "1.1.3"
+tray-icon = "0.24.1"
 winit = "0.30" # macOS activation policy (accessory app) via eframe's event_loop_builder hook
 
 [dev-dependencies]

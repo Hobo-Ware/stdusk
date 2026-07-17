@@ -11,6 +11,7 @@ hotkey = "Ctrl+Grave"     # e.g. "F13", "Cmd+Grave", "F12", "Ctrl+Shift+T"
 height_pct = 0.5          # fraction of screen height when dropped down
 hide_on_focus_loss = true
 hide_from_dock = true     # accessory app: no Dock icon / app-switcher entry, just drops from the top
+menu_bar_icon = true      # show a menu-bar (status) icon with a Show/Hide + Quit menu
 
 [terminal]
 detect_progress = true    # scrape N% from output into the tab progress bar (Tabby-style)

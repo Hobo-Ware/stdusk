@@ -30,6 +30,9 @@ pub(crate) struct Quake {
     /// Run as a macOS accessory app: no Dock icon, no app-switcher/menu-bar entry - it just drops
     /// from the top on the hotkey (the quake default). Set false to appear as a normal Dock app.
     pub(crate) hide_from_dock: bool,
+    /// Show a menu-bar (status) icon with a Show/Hide + Quit menu. The accessory app's main entry
+    /// point + presence indicator; set false to hide it.
+    pub(crate) menu_bar_icon: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,6 +57,7 @@ impl Default for Quake {
             height_pct: 0.5,
             hide_on_focus_loss: true,
             hide_from_dock: true,
+            menu_bar_icon: true,
         }
     }
 }
