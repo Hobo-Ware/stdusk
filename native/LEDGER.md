@@ -448,16 +448,26 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   separators, font tuning) is deferred to a dedicated pass (~M11). Ship behavior, then beauty.
 - Tab bar look confirmed: flat tabs + per-tab colored underline + top-edge progress (Tabby-style).
 
+## 0.1.0 shipped (2026-07-17)
+**stdusk 0.1.0 is released and brew-installable.** `brew install hobo-ware/tap/stdusk` verified
+end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--version` = 0.1.0).
+- **Brand icon**: dusk-sun-over-shell-prompt mark -> app-icon tile (`native/assets/stdusk-icon.png`),
+  window icon (eframe `with_icon`), README logo (`stdusk-logo.png`), `.icns` for the `.app` bundle.
+- **README**: root `README.md` (rust branch) rewritten in the Hobo-Ware voice ("the machine speaks
+  back" / "tools for the discerning degenerate"); `native/README.md` refreshed to dev doc.
+- **Release pipeline**: `.github/workflows/native-release.yml` on a `stdusk-v*` tag builds a
+  universal (arm64+x86_64 lipo) binary, wraps it in `stdusk.app` (icns + Info.plist), zips via
+  `ditto`, cuts the GitHub Release, and generates the Homebrew formula with the real sha256.
+- **Tap**: `Hobo-Ware/homebrew-tap` created, `Formula/stdusk.rb` live.
+- **Gotcha (fixed)**: Homebrew strips the single top-level dir in the zip and descends into
+  `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
+  `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
+
 ## Next up
-**0.1.0 release checkpoint (user ask).** M10 (CLI awareness) code-complete; ship stdusk 0.1.0
-brew-ready:
-1. Integrate the user-provided brand icon (macOS app icon + README hero).
-2. Redesign the README in the Hobo-Ware voice (github.com/Hobo-Ware - "Tools for the discerning
-   degenerate"; noir/cyberpunk/Revachol, self-aware irreverence). Root README.md on rust + native/README.md.
-3. Release pipeline (DONE, scaffolded): `.github/workflows/native-release.yml` builds a universal
-   macOS binary on a `stdusk-v*` tag + cuts the GitHub Release + generates the Homebrew formula
-   (`native/packaging/`). Tag `stdusk-v0.1.0` (Tabby owns `v1.0.x`).
-4. Create the `Hobo-Ware/homebrew-tap` repo + drop the formula so `brew install hobo-ware/tap/stdusk` works.
-**Blocker**: need the brand icon file on disk (a pasted image isn't a path).
-(Backlog: live-verify M5-M9 + M10 badge detection. M8 deferrals: pane reorder, broadcast input,
-pane zoom, aggregated tab progress. M7: all-match highlight. egui_kittest harness for UI regressions.)
+- **Cut future releases**: bump `native/Cargo.toml` version, tag `stdusk-v<x>`, push; then copy the
+  release's generated `stdusk.rb` into the tap's `Formula/stdusk.rb` (consider automating the tap
+  push with a PAT). `.app` is unsigned/un-notarized - fine via brew formula (no Gatekeeper
+  quarantine); a signed bundle is a later polish item.
+- **Live-verify**: M5-M9 interactions, M10 CLI-badge detection against real claude/gemini/etc.
+- Backlog: M8 (pane reorder, broadcast input, pane zoom, aggregated tab progress), M7 all-match
+  highlight, egui_kittest harness for UI regressions, M11 settings GUI.
