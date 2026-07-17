@@ -75,9 +75,9 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Copy / paste / bracketed paste / OSC 52 | ✅ | |
 | Intelligent Ctrl-C (copy if selection else SIGINT) | 🟡 | Ctrl-C = SIGINT; Cmd-C copies. verify |
 | Natural editing keys (home/end/word/line) | ✅ | |
-| `select-all` (Cmd-A) | ⬜ | |
-| `clear` (Cmd-K) | ⬜ | |
-| Font zoom (`zoom-in/out/reset`) | ⬜ | |
+| `select-all` (Cmd-A) | ✅ | selects whole buffer; Cmd-C copies |
+| `clear` (Cmd-K) | ✅ | sends Ctrl-L (shell clear); scrollback-wipe still ⬜ |
+| Font zoom (`zoom-in/out/reset`) | ✅ | Cmd +/-/0 (runtime `zoom` multiplier) |
 | Copy-on-select | ⬜ | config option |
 | Middle-click paste | ⬜ | |
 | Copy-as-HTML (rich clipboard) | ⬜ | niche |
@@ -91,12 +91,12 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Feature | State | Notes |
 |---|---|---|
 | Wheel scroll + scrollbar | ✅ | |
-| Scroll hotkeys (to-top/bottom, page, line) | ⬜ | wheel only |
+| Scroll hotkeys | 🟡 | Shift+PageUp/Down (page); to-top/bottom + line steps still ⬜ |
 
 ## Links
 | Feature | State | Notes |
 |---|---|---|
-| Clickable links (URL + file paths, Cmd+click) | ✅ | `terminal.clickable_links`; Cmd-hover underlines, opens via `open`, cwd-relative + `~`. IP-only (no scheme) still ⬜ |
+| Clickable links (URL + file paths) | ✅ | `clickable_links` + `link_modifier` (default "none" = hover, Tabby-style); opens via `open`, cwd-relative + `~`. IP-only (no scheme) still ⬜ |
 
 ## Command palette / discoverability
 | Feature | State | Notes |

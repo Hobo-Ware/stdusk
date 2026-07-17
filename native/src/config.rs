@@ -45,7 +45,8 @@ pub(crate) struct Terminal {
     pub(crate) shell_integration: bool, // inject OSC 133 hooks into the spawned shell
     pub(crate) bell: String,            // "visual" | "off"
     pub(crate) detect_clis: bool,       // badge tabs running a known AI CLI (claude/gemini/...)
-    pub(crate) clickable_links: bool,   // Cmd+click URLs / file paths to open them
+    pub(crate) clickable_links: bool,   // open URLs / file paths on click
+    pub(crate) link_modifier: String,   // "none" (hover) | "cmd" | "ctrl" | "alt" | "shift"
 }
 
 impl Default for Appearance {
@@ -73,6 +74,7 @@ impl Default for Terminal {
             bell: "visual".into(),
             detect_clis: true,
             clickable_links: true,
+            link_modifier: "none".into(),
         }
     }
 }

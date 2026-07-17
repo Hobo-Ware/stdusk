@@ -19,4 +19,5 @@ cursor = "block"          # cursor shape: "block" | "underline" | "beam"
 shell_integration = true  # inject OSC 133 hooks so a failed command marks its tab
 bell = "visual"           # BEL handling: "visual" (screen flash) | "off"
 detect_clis = true        # badge tabs that are running a known AI CLI (claude/codex/gemini/...)
-clickable_links = true    # Cmd+click URLs and file paths in the terminal to open them
+clickable_links = true    # open URLs and file paths in the terminal on click
+link_modifier = "none"    # modifier to activate links: "none" (hover) | "cmd" | "ctrl" | "alt" | "shift"

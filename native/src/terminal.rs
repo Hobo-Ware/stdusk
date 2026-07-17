@@ -376,6 +376,25 @@ impl PtyTerm {
         self.term.lock().selection = None;
     }
 
+    /// Select the entire buffer (scrollback + screen), for Cmd+A then copy.
+    pub(crate) fn select_all(&self) {
+        let mut t = self.term.lock();
+        let (top, bot) = {
+            let g = t.grid();
+            (g.topmost_line().0, g.bottommost_line().0)
+        };
+        let start = Point::new(Line(top), Column(0));
+        let end = Point::new(Line(bot), Column(self.cols.saturating_sub(1)));
+        let mut sel = Selection::new(SelectionType::Simple, start, Side::Left);
+        sel.update(end, Side::Right);
+        t.selection = Some(sel);
+    }
+
+    /// Visible row count (for page scrolling).
+    pub(crate) fn rows(&self) -> usize {
+        self.rows
+    }
+
     /// Selected text (for Cmd+C), or None when there's no non-empty selection.
     pub(crate) fn selection_text(&self) -> Option<String> {
         self.term.lock().selection_to_string().filter(|s| !s.is_empty())

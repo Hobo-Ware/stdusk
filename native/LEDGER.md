@@ -464,6 +464,18 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## M13 - input polish + links-on-hover (`main.rs`, `terminal.rs`, `ui.rs`, `config.rs`)
+- **Font zoom**: Cmd+=/Cmd+-/Cmd+0 adjust a runtime `Stdusk.zoom` multiplier (0.5-3.0); the grid
+  font = `font_size * zoom`, cell metrics + pty resize follow automatically.
+- **Cmd+A select-all** (`PtyTerm::select_all`, whole buffer) then Cmd+C copies.
+- **Cmd+K clear**: sends Ctrl-L (shell clear). A true scrollback-wipe is still TODO.
+- **Shift+PageUp/Down**: scroll the viewport by a page (`PtyTerm::rows`).
+- All gated on no text modal (find/rename) owning the keyboard, except zoom (harmless).
+- **Links on hover by default** (user: Tabby reacts on hover, no modifier): new config
+  `terminal.link_modifier` ("none" default = plain hover/click; else cmd/ctrl/alt/shift). Caller
+  computes `link_active` via `ui::link_modifier_held` (tested) and passes it to `render_grid`
+  (which dropped its hardcoded Cmd check).
+
 ## M12 - keyboard pane nav + maximize (`pane.rs`, `main.rs`, `ui.rs`)
 - **Directional focus**: Cmd+Alt+arrows move focus to the neighbor pane. `pane::neighbor(layout,
   from, Dir)` (pure, tested) picks the nearest pane whose center is in the direction + whose

@@ -163,6 +163,18 @@ pub(crate) fn cursor_style(s: &str) -> CursorStyle {
     }
 }
 
+/// Is the configured link-activation modifier satisfied? `"none"` (or unknown) means links react
+/// on plain hover/click (Tabby default); otherwise the named modifier must be held.
+pub(crate) fn link_modifier_held(mods: egui::Modifiers, setting: &str) -> bool {
+    match setting.to_ascii_lowercase().as_str() {
+        "cmd" | "command" | "super" | "meta" => mods.command,
+        "ctrl" | "control" => mods.ctrl,
+        "alt" | "option" | "opt" => mods.alt,
+        "shift" => mods.shift,
+        _ => true, // "none" / unrecognized: no modifier required
+    }
+}
+
 // ---- egui drawing widgets (thin; not unit-tested) ----
 
 /// Apply window opacity to a fill color (straight alpha).
@@ -540,7 +552,7 @@ pub(crate) fn render_grid(
     font: &egui::FontId,
     cursor: CursorStyle,
     dimmed: bool,
-    links: bool,
+    link_active: bool,
 ) -> egui::Response {
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -549,11 +561,11 @@ pub(crate) fn render_grid(
         pos_to_cell(p.x - origin.x, p.y - origin.y, cw, ch, snap.cols, snap.rows, snap.top_line)
     };
 
-    // Clickable links: with the command modifier held, underline the link under the pointer and
-    // open it on click. Kept off the selection path so plain drags still select text.
+    // Clickable links: when active (enabled + configured modifier held, or no modifier), underline
+    // the link under the pointer and open it on click. Kept off the selection path so plain drags
+    // still select text.
     let mut link_underline: Option<(f32, f32, f32)> = None; // (x0, x1, y)
-    if links
-        && ui.input(|i| i.modifiers.command)
+    if link_active
         && let Some(p) = ui.input(|i| i.pointer.hover_pos())
         && rect.contains(p)
     {
@@ -790,6 +802,18 @@ mod tests {
             Some(b"\x1b\x7f".to_vec())
         );
         assert_eq!(key_to_bytes(Key::Backspace, mods(false, false, true)), Some(vec![0x15]));
+    }
+
+    #[test]
+    fn link_modifier_matching() {
+        let none = Modifiers::default();
+        let cmd = mods(false, false, true);
+        assert!(link_modifier_held(none, "none")); // plain hover default
+        assert!(link_modifier_held(none, "")); // unknown -> no modifier needed
+        assert!(!link_modifier_held(none, "cmd")); // cmd required but not held
+        assert!(link_modifier_held(cmd, "cmd"));
+        assert!(link_modifier_held(mods(true, false, false), "ctrl"));
+        assert!(!link_modifier_held(cmd, "alt"));
     }
 
     #[test]

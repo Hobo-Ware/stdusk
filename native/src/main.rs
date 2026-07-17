@@ -166,6 +166,7 @@ struct Stdusk {
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
     flash: f64,        // bell visual-flash expiry (egui time); 0 = none
+    zoom: f32,         // font-size multiplier (Cmd +/-/0)
     sys: sysinfo::System, // process table for CLI-awareness scans
     next_cli_scan: f64, // egui time of the next throttled procwatch scan
     tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
@@ -277,6 +278,7 @@ impl Stdusk {
             search: None,
             toast: None,
             flash: 0.0,
+            zoom: 1.0,
             sys: sysinfo::System::new(),
             next_cli_scan: 0.0,
             tray,
@@ -677,12 +679,39 @@ impl eframe::App for Stdusk {
         let mut kb_switch: Option<usize> = None;
         let mut kb_pane_dir: Option<pane::Dir> = None; // Cmd+Alt+arrow: focus the neighbor pane
         let mut kb_maximize = false; // Cmd+Alt+Enter: toggle zooming the focused pane
+        let mut kb_select_all = false; // Cmd+A
+        let mut kb_clear = false; // Cmd+K
+        let mut kb_zoom: Option<i8> = None; // Cmd +/= (1), Cmd - (-1), Cmd 0 (0 = reset)
+        let mut kb_scroll_pages: Option<i32> = None; // Shift+PageUp/Down: -1 up, +1 down
         ctx.input(|i| {
+            if i.modifiers.shift {
+                if i.key_pressed(egui::Key::PageUp) {
+                    kb_scroll_pages = Some(-1);
+                }
+                if i.key_pressed(egui::Key::PageDown) {
+                    kb_scroll_pages = Some(1);
+                }
+            }
             if i.modifiers.command {
                 use egui::Key::{
-                    ArrowDown, ArrowLeft, ArrowRight, ArrowUp, D, Enter, F, Num1, Num2, Num3, Num4,
-                    Num5, Num6, Num7, Num8, Num9, T, W,
+                    A, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, D, Enter, Equals, F, K, Minus,
+                    Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, Plus, T, W,
                 };
+                if i.key_pressed(A) {
+                    kb_select_all = true;
+                }
+                if i.key_pressed(K) {
+                    kb_clear = true;
+                }
+                if i.key_pressed(Plus) || i.key_pressed(Equals) {
+                    kb_zoom = Some(1);
+                }
+                if i.key_pressed(Minus) {
+                    kb_zoom = Some(-1);
+                }
+                if i.key_pressed(Num0) {
+                    kb_zoom = Some(0);
+                }
                 // Cmd+Alt: pane navigation / maximize (kept separate from the terminal's own
                 // Cmd/Alt+arrow line/word motion, which key_to_bytes reserves against Cmd+Alt).
                 if i.modifiers.alt {
@@ -869,6 +898,28 @@ impl eframe::App for Stdusk {
                 }
             }
         }
+        // Font zoom (harmless anytime). Reset (0), in (1), out (-1); clamped.
+        if let Some(z) = kb_zoom {
+            self.zoom = match z {
+                0 => 1.0,
+                1 => (self.zoom * 1.1).min(3.0),
+                _ => (self.zoom / 1.1).max(0.5),
+            };
+        }
+        // Terminal input keybinds - suppressed while a text modal (find/rename) owns the keyboard.
+        if self.search.is_none() && self.renaming.is_none() {
+            if kb_select_all {
+                self.tabs[self.active].focused_term().select_all();
+            }
+            if kb_clear {
+                self.tabs[self.active].focused_term_mut().send(b"\x0c"); // Ctrl-L: clear
+            }
+            if let Some(dir) = kb_scroll_pages {
+                let t = self.tabs[self.active].focused_term();
+                let page = t.rows().saturating_sub(1) as i32;
+                t.scroll(-dir * page); // PageUp (-1) scrolls up into history
+            }
+        }
         match action {
             Some(TabAction::New) => self.new_tab(&ctx),
             Some(TabAction::Rename(i)) => {
@@ -917,11 +968,17 @@ impl eframe::App for Stdusk {
             )
             .show(ui, |ui| {
                 let area = ui.max_rect();
-                let font = egui::FontId::monospace(self.cfg.appearance.font_size);
+                let font = egui::FontId::monospace(self.cfg.appearance.font_size * self.zoom);
                 let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
                 let (cw, ch) = (m.size().x, m.size().y);
                 let cursor = ui::cursor_style(&self.cfg.terminal.cursor);
-                let clickable_links = self.cfg.terminal.clickable_links;
+                // Links are "active" (underline on hover, open on click) when enabled and the
+                // configured modifier is held - default modifier "none" means plain hover, Tabby-style.
+                let link_active = self.cfg.terminal.clickable_links
+                    && ui::link_modifier_held(
+                        ui.input(|i| i.modifiers),
+                        &self.cfg.terminal.link_modifier,
+                    );
 
                 let tab = &mut self.tabs[self.active];
 
@@ -1008,7 +1065,7 @@ impl eframe::App for Stdusk {
                         &font,
                         cursor,
                         dimmed,
-                        clickable_links,
+                        link_active,
                     );
                     if bell_on && term.take_bell() {
                         bell_rang = true;
