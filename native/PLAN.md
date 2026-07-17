@@ -9,7 +9,7 @@ North-star features, ranked:
 2. Quake drop-down (global hotkey, top edge)
 3. Theming (config-driven palette, opacity, blur, font)
 4. Cool tabs + tab management + per-tab color coding
-5. **First-party AI agent** (read the terminal, propose + run commands with approval) - the "better than Tabby" bet
+5. **Ambient AI-CLI awareness** (badge tabs running claude/codex/gemini/... ) - the "better than Tabby" bet. (Originally a first-party chat agent - dropped: the CLIs' own UX is already supreme; awareness beats duplication. See §4i.)
 6. Sane default local-shell experience (colors, cursor, resize, scrollback, copy/paste, splits, search)
 
 Decisions locked with the user: split panes **v1**, scrollback search **v1**. Quake hotkey is
@@ -40,7 +40,7 @@ to `F13` (or anything) in config.
 | cwd tracking (OSC 7 / 1337) | **LOW-HANGING (M1.5)** | scanner already parses OSC; see §10 |
 | clipboard write (OSC 52) | **LOW-HANGING (M6)** | scanner handles it; see §10 |
 | shell-integration exit codes (OSC 133) | **KEEP (M9)** | feeds state dot + AI agent |
-| **First-party AI agent** | **NEW (M10)** | not in Tabby; the differentiator, see §4i |
+| **Ambient AI-CLI awareness** | **NEW (M10)** | not in Tabby; badge tabs running claude/gemini/... - the differentiator, see §4i |
 | Settings GUI | **DEFER** | config file first, egui panel later |
 | SSH client + profiles | **DROP** | use `ssh` in the shell |
 | Serial / Telnet | **DROP** | |
@@ -203,10 +203,17 @@ Ship built-in themes (OneHalfDark default). Hot-reload via `notify` (M4.5, nice-
   highlight cells; Enter/Shift+Enter cycle + scroll offset to match; case-insensitive +
   regex toggle.
 
-### 4i. First-party AI agent (M10) - the "better than Tabby" bet
-Built-in, not a plugin. A side panel (egui) where an agent reads the terminal and helps:
-explain the last error, translate natural language → a command, or run an agentic
-loop (run → observe → fix) behind a permission gate.
+### 4i. Ambient AI-CLI awareness (M10) - the "better than Tabby" bet
+**Shipped as CLI-awareness badges, not a chat agent.** `procwatch.rs` scans the process tree
+under each tab's shell (~1 Hz, sysinfo) and, when it finds a known AI CLI running (claude, codex,
+gemini, copilot, aider, cursor, ollama), the tab shows a small brand-colored pill. So at a glance
+you know "I've got a claude going in tab 3". No API key, no network, no permission gate - it just
+reflects what you're already running. Config `terminal.detect_clis`.
+
+**Dropped design (kept for context):** a first-party chat agent (reqwest → Anthropic Messages
+API, tool-use loop, egui side panel) was built (commit a7e1af82) then removed. It duplicated the
+CLIs' own excellent UX and added noise; the user's actual intent behind "agent support" was
+awareness of running CLIs, which the badges deliver. The original chat-agent design followed:
 
 **Client:** there is **no official Anthropic Rust SDK**, so raw HTTP via `reqwest` against
 `POST https://api.anthropic.com/v1/messages` (headers `x-api-key`, `anthropic-version:
@@ -311,7 +318,7 @@ get for free because we build on well-tested crates + the wider ecosystem:
 | **M7** | Scrollback search (Cmd+F) | find/highlight/cycle | |
 | **M8** | Split panes (pane tree, focus, drag-resize, per-pane pty) | split/close/navigate; each pane sizes | |
 | **M9** | Shell integration (OSC 133) → exit-code state dot; bell; cursor styles | dot flips on exit; checklist green | |
-| **M10** | **First-party AI agent** (reqwest client, tool-use loop, permission gate) | explain-error + nl→command + gated run verified | |
+| **M10** | **Ambient AI-CLI awareness** (procwatch: badge tabs running claude/gemini/...) | known CLI in a tab -> brand badge; detection unit-tested | |
 | **M11** | Polish + Settings GUI panel | checklist green | |
 
 Dependency notes: M1.5 depends only on M1 (prioritized). M8 (splits) **hard-depends on M6**

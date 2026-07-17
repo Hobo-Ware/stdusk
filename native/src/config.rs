@@ -36,6 +36,7 @@ pub(crate) struct Terminal {
     pub(crate) cursor: String,          // "block" | "underline" | "beam"
     pub(crate) shell_integration: bool, // inject OSC 133 hooks into the spawned shell
     pub(crate) bell: String,            // "visual" | "off"
+    pub(crate) detect_clis: bool,       // badge tabs running a known AI CLI (claude/gemini/...)
 }
 
 impl Default for Appearance {
@@ -55,6 +56,7 @@ impl Default for Terminal {
             cursor: "block".into(),
             shell_integration: true,
             bell: "visual".into(),
+            detect_clis: true,
         }
     }
 }

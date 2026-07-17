@@ -109,6 +109,7 @@ pub(crate) struct PtyTerm {
     state: Arc<Mutex<TabState>>,
     cols: usize,
     rows: usize,
+    shell_pid: Option<u32>, // for CLI-awareness process scanning (procwatch)
 }
 
 impl PtyTerm {
@@ -138,7 +139,9 @@ impl PtyTerm {
         if shell_integration {
             crate::shell::integrate(&mut cmd, &shell);
         }
-        let _child = pair.slave.spawn_command(cmd).expect("spawn shell");
+        let child = pair.slave.spawn_command(cmd).expect("spawn shell");
+        let shell_pid = child.process_id();
+        drop(child); // pid is stable; the pty keeps the shell alive, so we don't hold the handle
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().expect("reader");
@@ -218,7 +221,12 @@ impl PtyTerm {
             }
         });
 
-        Self { term, writer, master: pair.master, state, cols, rows }
+        Self { term, writer, master: pair.master, state, cols, rows, shell_pid }
+    }
+
+    /// PID of the tab's shell process - the root for CLI-awareness descendant scans.
+    pub(crate) fn shell_pid(&self) -> Option<u32> {
+        self.shell_pid
     }
 
     pub(crate) fn send(&mut self, bytes: &[u8]) {

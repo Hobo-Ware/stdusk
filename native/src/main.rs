@@ -12,6 +12,7 @@ mod colors;
 mod config;
 mod osc;
 mod pane;
+mod procwatch;
 mod progress;
 mod search;
 mod shell;
@@ -35,6 +36,7 @@ struct Tab {
     renamed: bool,                // once renamed, stop auto-titling from cwd
     root: Option<pane::Pane<PtyTerm>>, // Option so whole-tree transforms can `take()` it
     focused: Vec<pane::Side>,     // path to the focused leaf (its identity)
+    cli: Option<procwatch::Cli>,  // a known AI CLI detected running in the tab (badge)
 }
 
 impl Tab {
@@ -68,6 +70,7 @@ fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
         renamed: false,
         root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
+        cli: None,
     }
 }
 
@@ -159,6 +162,8 @@ struct Stdusk {
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
     flash: f64,        // bell visual-flash expiry (egui time); 0 = none
+    sys: sysinfo::System, // process table for CLI-awareness scans
+    next_cli_scan: f64, // egui time of the next throttled procwatch scan
     screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
 }
 
@@ -244,6 +249,8 @@ impl Stdusk {
             }
             tabs[0].color = Some(colors::tab_colors()[0]); // red
             tabs[3].color = Some(colors::tab_colors()[4]); // green
+            tabs[0].cli = Some(procwatch::Cli::Claude); // demo the CLI-awareness badge
+            tabs[2].cli = Some(procwatch::Cli::Gemini);
             active = 1;
             sized = true;
         }
@@ -261,6 +268,8 @@ impl Stdusk {
             search: None,
             toast: None,
             flash: 0.0,
+            sys: sysinfo::System::new(),
+            next_cli_scan: 0.0,
             screenshot,
         }
     }
@@ -611,6 +620,28 @@ impl eframe::App for Stdusk {
             }
         }
 
+        // CLI awareness: ~1 Hz, refresh the process table and badge each tab with any known AI CLI
+        // running in it (scanned across all of the tab's panes). Skipped in the screenshot harness
+        // (it sets demo badges directly).
+        if self.cfg.terminal.detect_clis && self.screenshot.is_none() {
+            let now = ctx.input(|i| i.time);
+            if now >= self.next_cli_scan {
+                self.next_cli_scan = now + 1.0;
+                self.sys.refresh_processes_specifics(
+                    sysinfo::ProcessesToUpdate::All,
+                    true,
+                    sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
+                );
+                for tab in &mut self.tabs {
+                    let pids: Vec<u32> =
+                        tab.root().leaves().iter().filter_map(|t| t.shell_pid()).collect();
+                    tab.cli = pids.iter().find_map(|&pid| procwatch::scan(&self.sys, pid));
+                }
+                // Keep the cadence ticking even when the window is otherwise idle.
+                ctx.request_repaint_after(std::time::Duration::from_millis(1100));
+            }
+        }
+
         // Browser-style keybinds: Cmd+T new, Cmd+W close focused pane/tab, Cmd+1..9 switch,
         // Cmd+D split side-by-side, Cmd+Shift+D split stacked.
         let mut kb_new = false;
@@ -683,6 +714,7 @@ impl eframe::App for Stdusk {
                             tab.focused_term().progress(),
                             tab.focused_term().cmd_state(),
                             &tab.root().miniature(),
+                            tab.cli,
                         );
                         if close {
                             action = Some(TabAction::Close(i));
@@ -1029,12 +1061,20 @@ impl eframe::App for Stdusk {
 }
 
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+
+    // `--version` / `-V`: print and exit before touching the display (used by the brew test and
+    // handy for scripts). No window is created.
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("stdusk {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let cfg = Config::load();
     colors::init(colors::by_name(&cfg.appearance.theme));
 
     // `--screenshot PATH`: populate demo tabs, render, save the PNG, and exit. Uses eframe's
     // built-in glow-backend capture via EFRAME_SCREENSHOT_TO.
-    let args: Vec<String> = std::env::args().collect();
     let screenshot =
         args.iter().position(|a| a == "--screenshot").and_then(|i| args.get(i + 1).cloned());
     if let Some(path) = &screenshot {

@@ -46,9 +46,14 @@ cargo test             # unit + headless integration
 | M6.5 | Mouse text selection + Cmd+C copy | 🟡 code done, builds + 17 tests green, pending human verify |
 | M7 | Scrollback search (Cmd+F) | 🟡 code done, builds + 34 tests green, pending human verify |
 | M8 | Split panes (pane tree, focus, drag-resize, per-pane pty) | 🟡 code done, builds + 46 tests green, pending human verify |
-| M9 | Shell integration (OSC 133) + exit dot; bell; cursor styles | ✅ done (53 tests): dot, auto-injected shell hooks, bell flash, cursor styles |
-| M10 | First-party AI agent | todo |
+| M9 | Shell integration (OSC 133) + exit dot; bell; cursor styles | ✅ done: auto-injected shell hooks, bell flash, cursor styles (running/ok tab indicators later dropped as noise - see M10) |
+| M10 | Ambient CLI awareness (tab badges for claude/gemini/...) | 🟡 code done, builds + 60 tests green + clippy clean, badges screenshot-verified; live detection pending human verify |
 | M11 | Polish + settings GUI | todo |
+
+**M10 pivot (user):** the original M10 "first-party AI chat agent" was built then **dropped** -
+a chat panel duplicated the CLIs' own supreme UX and served no purpose. What the user actually
+wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. Commit a7e1af82
+(the chat agent) was reset out of history; M10 is now the CLI-awareness badge feature below.
 
 ## Done details
 ### M0 - chrome (`src/main.rs`)
@@ -236,6 +241,35 @@ cargo test             # unit + headless integration
   still can't render (egui rasterizes monochrome outlines only); emoji show as B/W - like Tabby's
   monochrome fallback, good enough.
 
+### M10 - ambient CLI awareness (`procwatch.rs`, `main.rs`, `ui.rs`, `terminal.rs`, `pane.rs`)
+- **Goal**: at a glance, know which tabs are running an AI CLI (claude / codex / gemini / copilot
+  / aider / cursor / ollama). Each such tab shows a small brand-colored pill (e.g. clay "claude",
+  blue "gemini") next to its title. NOT a chat agent - that was the dropped a7e1af82.
+- **`procwatch.rs` (pure + adapter)**: `Cli` enum (label + brand color); `detect(&[Proc], root)`
+  walks the process tree from a tab's shell pid and returns the highest-priority known CLI among
+  its **descendants** (never classifies the shell/root itself). `classify(name, cmd)` scans path
+  segments of the process name + every argv entry, extension-stripped, matching a `TABLE` of
+  `(Cli, primary, aliases)` where a segment counts if it `== primary`, starts with `primary-`/
+  `primary_` (so the `claude-code` node package dir matches), or hits an alias (`gh-copilot`,
+  `cursor-agent`). This catches node/python CLIs whose process name is `node`/`python` but whose
+  argv path contains the tool. `scan(&System, root)` is the thin sysinfo bridge. 6 unit tests.
+- **sysinfo 0.38** (`default-features=false, features=["system"]`). API: `refresh_processes_specifics(
+  ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet))`,
+  `sys.processes()` -> `HashMap<Pid, Process>`, `Process::{name,cmd,pid,parent}`, `Pid::as_u32`.
+  cmd (argv) is NOT in the default refresh - must opt in with `with_cmd`, else node CLIs are invisible.
+- **Wiring**: `PtyTerm::shell_pid()` (captured from the spawned child's `process_id()`). `Pane::leaves()`
+  aggregates a tab's panes. `Stdusk` holds one `sysinfo::System` + `next_cli_scan: f64`; `ui()` refreshes
+  + rescans every tab **~1 Hz** (throttled on `input().time`, `request_repaint_after(1100ms)` to keep
+  the cadence when idle; skipped in the screenshot harness). One refresh serves all tabs. `Tab.cli:
+  Option<Cli>` -> `draw_tab` -> `draw_cli_badge` (tinted fill + brand-color label + hover tip).
+  Config `terminal.detect_clis` (default true).
+- **Tab exit-state indicator cut to just Fail** (user: the running/ok marquee lit up for any idle
+  REPL - e.g. an open Claude CLI - = pure noise). `draw_tab` draws nothing for idle/running/ok and
+  only a very subtle short dim-red left-edge line for `CmdState::Fail`. Progress reporting (the
+  top-edge %-bar) stays the primary activity signal; OSC 133 is still parsed. Marquee + its
+  per-frame `request_repaint` are gone.
+- **`--version`/`-V`** flag prints and exits before creating a window (brew test + scripting).
+
 ### M8 - split panes (`pane.rs`, `main.rs`, `ui.rs`)
 - **Pure `pane.rs`**: generic binary tree `Pane<T> { Leaf(T) | Split{dir, ratio, a, b} }` (`T =
   PtyTerm` in the app, `u32` in tests). A leaf's identity is its `path: Vec<Side>` (A/B from the
@@ -415,9 +449,15 @@ cargo test             # unit + headless integration
 - Tab bar look confirmed: flat tabs + per-tab colored underline + top-edge progress (Tabby-style).
 
 ## Next up
-**M9 - shell integration (OSC 133) + exit-code state dot; bell; cursor styles.** Parse OSC 133
-prompt/command marks in `osc.rs` → `TabState.last_exit`; show a running/done/fail state dot on
-the tab (separate from the manual color). Add bell (visual flash / config) and block/underline
-cursor styles (currently beam-only). See PLAN §4d/§9. Feeds M10 (the AI agent wants exit codes).
-(Backlog: human-verify M5-M8 live - all code-done but unverified. M8 deferrals: pane reorder,
-broadcast input, pane zoom, aggregated tab progress. M7: all-match highlight.)
+**0.1.0 release checkpoint (user ask).** M10 (CLI awareness) code-complete; ship stdusk 0.1.0
+brew-ready:
+1. Integrate the user-provided brand icon (macOS app icon + README hero).
+2. Redesign the README in the Hobo-Ware voice (github.com/Hobo-Ware - "Tools for the discerning
+   degenerate"; noir/cyberpunk/Revachol, self-aware irreverence). Root README.md on rust + native/README.md.
+3. Release pipeline (DONE, scaffolded): `.github/workflows/native-release.yml` builds a universal
+   macOS binary on a `stdusk-v*` tag + cuts the GitHub Release + generates the Homebrew formula
+   (`native/packaging/`). Tag `stdusk-v0.1.0` (Tabby owns `v1.0.x`).
+4. Create the `Hobo-Ware/homebrew-tap` repo + drop the formula so `brew install hobo-ware/tap/stdusk` works.
+**Blocker**: need the brand icon file on disk (a pasted image isn't a path).
+(Backlog: live-verify M5-M9 + M10 badge detection. M8 deferrals: pane reorder, broadcast input,
+pane zoom, aggregated tab progress. M7: all-match highlight. egui_kittest harness for UI regressions.)

@@ -367,6 +367,26 @@ fn draw_mini_layout(ui: &mut egui::Ui, rects: &[egui::Rect], active: bool) {
     }
 }
 
+/// A small brand-colored pill naming a known AI CLI running in the tab (Claude / Gemini / ...).
+fn draw_cli_badge(ui: &mut egui::Ui, cli: crate::procwatch::Cli) {
+    let col = cli.color();
+    let label = cli.label();
+    let font = egui::FontId::proportional(10.0);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), col);
+    let (rect, resp) =
+        ui.allocate_exact_size(galley.size() + egui::vec2(10.0, 4.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 4.0, col.gamma_multiply(0.18)); // tinted fill
+    p.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, col.gamma_multiply(0.55)),
+        egui::StrokeKind::Inside,
+    );
+    p.text(rect.center(), egui::Align2::CENTER_CENTER, label, font, col);
+    resp.on_hover_text(format!("{label} is running in this tab"));
+}
+
 /// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline, a
 /// split-layout preview glyph, and progress as a thin bar on the TOP edge. Returns (click
 /// response, close-clicked). `layout` = `Pane::miniature()` leaf rects (glyph shown when >1).
@@ -379,6 +399,7 @@ pub(crate) fn draw_tab(
     progress: Progress,
     cmd: CmdState,
     layout: &[egui::Rect],
+    cli: Option<crate::procwatch::Cli>,
 ) -> (egui::Response, bool) {
     let (shown, truncated) = ellipsize(title, 14);
     let fg = if active { colors::fg() } else { colors::dim() };
@@ -402,6 +423,9 @@ pub(crate) fn draw_tab(
                 if truncated {
                     lbl.on_hover_text(title);
                 }
+                if let Some(cli) = cli {
+                    draw_cli_badge(ui, cli);
+                }
             });
         });
     let rect = inner.response.rect;
@@ -409,36 +433,17 @@ pub(crate) fn draw_tab(
     // so edge strokes (underline, progress) must be drawn on an unclipped layer.
     let dp =
         ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("tab_deco")));
-    // OSC 133 exit state on the tab's left edge (short, centered, clears the bottom underline):
-    // nothing when idle, an animated indeterminate marquee while a command runs, a static line
-    // for ok (green) / fail (red).
-    {
-        let h = 16.0_f32.min(rect.height() - 8.0);
+    // OSC 133 exit state on the tab's left edge: only a failed command gets a signal, and a very
+    // subtle one. Progress reporting (the top-edge %-bar) is the primary "something is happening"
+    // cue; a per-command running/success indicator was pure noise (it lit up for any idle REPL
+    // like an open Claude CLI), so idle / running / ok all draw nothing.
+    if cmd == CmdState::Fail {
+        let h = 12.0_f32.min(rect.height() - 10.0);
         let track = egui::Rect::from_min_size(
             egui::pos2(rect.left() + 1.0, rect.center().y - h / 2.0),
-            egui::vec2(3.0, h),
+            egui::vec2(2.0, h),
         );
-        match cmd {
-            // Idle and Ok show nothing - success is the default, only problems get an indicator.
-            CmdState::Idle | CmdState::Ok => {}
-            CmdState::Fail => {
-                dp.rect_filled(track, 1.5, colors::red());
-            }
-            // Skip the running marquee when a %-progress bar is already showing activity.
-            CmdState::Running if progress_fraction(progress).is_some() => {}
-            CmdState::Running => {
-                // Dim full-height track + a bright segment easing up and down.
-                dp.rect_filled(track, 1.5, colors::accent().gamma_multiply(0.3));
-                let seg_h = 6.0_f32.min(h);
-                let travel = (h - seg_h).max(0.0);
-                let phase = 0.5 - 0.5 * (ui.input(|i| i.time) * 3.0).cos();
-                let y = track.top() + phase as f32 * travel;
-                let seg =
-                    egui::Rect::from_min_size(egui::pos2(track.left(), y), egui::vec2(3.0, seg_h));
-                dp.rect_filled(seg, 1.5, colors::accent());
-                ui.ctx().request_repaint(); // keep the marquee animating while running
-            }
-        }
+        dp.rect_filled(track, 1.0, colors::red().gamma_multiply(0.8));
     }
     // Per-tab color underline (bottom edge) - only when the user set a color.
     if let Some(color) = color {

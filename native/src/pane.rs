@@ -43,6 +43,18 @@ impl<T> Pane<T> {
         }
     }
 
+    /// Every leaf value, left-to-right (for tab-wide aggregation like CLI-awareness badges).
+    pub(crate) fn leaves(&self) -> Vec<&T> {
+        match self {
+            Pane::Leaf(t) => vec![t],
+            Pane::Split { a, b, .. } => {
+                let mut v = a.leaves();
+                v.extend(b.leaves());
+                v
+            }
+        }
+    }
+
     /// Path to the first (all-`A`) leaf - the focus target after a collapse.
     pub(crate) fn first_leaf_path(&self) -> Vec<Side> {
         let mut path = Vec::new();
