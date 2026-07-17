@@ -1099,11 +1099,25 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(Arc::new(icon));
     }
 
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow, // __screenshot capture requires the glow backend
         viewport,
         ..Default::default()
     };
+    // Quake default: run as a macOS accessory app - no Dock icon, no app-switcher/menu-bar entry.
+    // It just drops from the top edge on the hotkey. `quake.hide_from_dock = false` opts back into
+    // a normal Dock app.
+    if cfg.quake.hide_from_dock {
+        options.event_loop_builder = Some(Box::new(|builder| {
+            #[cfg(target_os = "macos")]
+            {
+                use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+                builder.with_activation_policy(ActivationPolicy::Accessory);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = builder;
+        }));
+    }
     eframe::run_native(
         "stdusk",
         options,

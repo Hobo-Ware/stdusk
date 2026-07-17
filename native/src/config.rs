@@ -27,6 +27,9 @@ pub(crate) struct Quake {
     pub(crate) hotkey: String,
     pub(crate) height_pct: f32,
     pub(crate) hide_on_focus_loss: bool,
+    /// Run as a macOS accessory app: no Dock icon, no app-switcher/menu-bar entry - it just drops
+    /// from the top on the hotkey (the quake default). Set false to appear as a normal Dock app.
+    pub(crate) hide_from_dock: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,7 +49,12 @@ impl Default for Appearance {
 }
 impl Default for Quake {
     fn default() -> Self {
-        Self { hotkey: "Ctrl+Grave".into(), height_pct: 0.5, hide_on_focus_loss: true }
+        Self {
+            hotkey: "Ctrl+Grave".into(),
+            height_pct: 0.5,
+            hide_on_focus_loss: true,
+            hide_from_dock: true,
+        }
     }
 }
 impl Default for Terminal {

@@ -3286,6 +3286,7 @@ dependencies = [
  "serde",
  "sysinfo",
  "toml",
+ "winit",
 ]
 
 [[package]]

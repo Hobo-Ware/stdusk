@@ -464,6 +464,17 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## Post-0.1.0 fixes
+- **Quake = macOS accessory app** (user: shouldn't sit in Dock/tray, just drop from the top).
+  `quake.hide_from_dock` (default true) sets `ActivationPolicy::Accessory` via eframe's
+  `event_loop_builder` hook (needs a direct `winit = "0.30"` dep for the macos ext trait) - no
+  Dock icon, no app-switcher/menu-bar entry. `false` = normal Dock app.
+- **Native icon**: rebuilt on Apple's Big Sur grid - 824/1024 continuous-corner squircle (super-
+  ellipse), inset margin, soft shadow, dusk gradient (was a full-bleed plain rounded rect that
+  didn't match native icons). **Known gap**: true light/dark/tinted-adaptive app icons need the
+  macOS 26 Icon Composer `.icon` format (a GUI/Xcode-26 step, not scriptable here) - static .icns
+  for now.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
