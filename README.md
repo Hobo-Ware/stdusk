@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="native/assets/stdusk-logo.png" alt="stdusk" width="132" height="132">
+</p>
+
 <h1 align="center">stdusk</h1>
 
 <p align="center"><em>the machine speaks back</em></p>

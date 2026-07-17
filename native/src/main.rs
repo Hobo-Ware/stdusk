@@ -1086,13 +1086,21 @@ fn main() -> eframe::Result<()> {
     }
     let size = if screenshot.is_some() { [1400.0, 420.0] } else { [1200.0, 500.0] };
 
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_decorations(false)
+        .with_transparent(true)
+        .with_inner_size(size)
+        .with_position([0.0, 0.0]);
+    // App/window icon (the dusk-sun prompt). macOS uses the .app bundle icon for the Dock, so
+    // this mainly affects other platforms + the window itself; harmless where ignored.
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/stdusk-icon.png"))
+    {
+        viewport = viewport.with_icon(Arc::new(icon));
+    }
+
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow, // __screenshot capture requires the glow backend
-        viewport: egui::ViewportBuilder::default()
-            .with_decorations(false)
-            .with_transparent(true)
-            .with_inner_size(size)
-            .with_position([0.0, 0.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

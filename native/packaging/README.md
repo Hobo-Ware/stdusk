@@ -5,9 +5,13 @@
 1. Bump `version` in `native/Cargo.toml`.
 2. Tag and push: `git tag stdusk-v0.1.0 && git push origin stdusk-v0.1.0`.
 3. `.github/workflows/native-release.yml` builds a **universal** macOS binary (arm64 + x86_64
-   lipo'd together), tars it, and creates the GitHub Release with two assets:
-   - `stdusk-<version>-universal-apple-darwin.tar.gz` - the binary
+   lipo'd together), wraps it in a `stdusk.app` bundle (icns + Info.plist so the Dock shows the
+   brand icon), zips it, and creates the GitHub Release with two assets:
+   - `stdusk-<version>-universal.app.zip` - the app bundle
    - `stdusk.rb` - the Homebrew formula, with the correct `sha256` already filled in
+
+   The formula installs the bundle and symlinks `stdusk` onto the PATH, so you get both the CLI
+   and a proper Dock icon.
 
 ## Homebrew tap (one-time)
 

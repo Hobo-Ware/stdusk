@@ -1,3 +1,5 @@
+<img src="assets/stdusk-logo.png" alt="stdusk" width="96" align="right">
+
 # stdusk
 
 > the machine speaks back

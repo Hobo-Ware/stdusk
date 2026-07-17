@@ -41,19 +41,26 @@ jobs:
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
 
-      - name: Package universal binary
+      - name: Assemble stdusk.app (universal)
         id: pkg
         working-directory: native
         run: |
           VERSION="${{ steps.v.outputs.version }}"
           mkdir -p dist
-          lipo -create -output dist/stdusk \
+          APP="dist/stdusk.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          lipo -create -output "$APP/Contents/MacOS/stdusk" \
             target/aarch64-apple-darwin/release/stdusk \
             target/x86_64-apple-darwin/release/stdusk
-          TARBALL="stdusk-${VERSION}-universal-apple-darwin.tar.gz"
-          tar -C dist -czf "dist/${TARBALL}" stdusk
-          SHA=$(shasum -a 256 "dist/${TARBALL}" | awk '{print $1}')
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          chmod +x "$APP/Contents/MacOS/stdusk"
+          cp assets/stdusk.icns "$APP/Contents/Resources/stdusk.icns"
+          sed "s/__VERSION__/${VERSION}/g" packaging/Info.plist > "$APP/Contents/Info.plist"
+          # Zip via ditto so the bundle (symlinks, resource forks) survives the round-trip.
+          ZIP="stdusk-${VERSION}-universal.app.zip"
+          (cd dist && ditto -c -k --sequesterRsrc --keepParent stdusk.app "$ZIP")
+          SHA=$(shasum -a 256 "dist/${ZIP}" | awk '{print $1}')
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Generate Homebrew formula
@@ -61,23 +68,24 @@ jobs:
         run: |
           VERSION="${{ steps.v.outputs.version }}"
           SHA="${{ steps.pkg.outputs.sha }}"
-          TARBALL="${{ steps.pkg.outputs.tarball }}"
+          ZIP="${{ steps.pkg.outputs.zip }}"
           TAG="${{ steps.v.outputs.tag }}"
           cat > dist/stdusk.rb <<EOF
           class Stdusk < Formula
-            desc "Native Rust quake terminal with a real GUI tab bar and a first-party AI agent"
+            desc "Native Rust quake terminal with a real GUI tab bar and ambient AI-CLI awareness"
             homepage "https://github.com/Hobo-Ware/stdusk"
             version "${VERSION}"
             license "MIT"
-            url "https://github.com/Hobo-Ware/stdusk/releases/download/${TAG}/${TARBALL}"
+            url "https://github.com/Hobo-Ware/stdusk/releases/download/${TAG}/${ZIP}"
             sha256 "${SHA}"
 
             def install
-              bin.install "stdusk"
+              prefix.install "stdusk.app"
+              bin.install_symlink prefix/"stdusk.app/Contents/MacOS/stdusk"
             end
 
             test do
-              assert_match "stdusk ${VERSION}", shell_output("#{bin}/stdusk --version")
+              assert_match "stdusk #{version}", shell_output("#{bin}/stdusk --version")
             end
           end
           EOF
@@ -89,10 +97,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.v.outputs.tag }}" \
-            "dist/${{ steps.pkg.outputs.tarball }}" \
+            "dist/${{ steps.pkg.outputs.zip }}" \
             "dist/stdusk.rb" \
             --title "stdusk ${{ steps.v.outputs.version }}" \
-            --notes "Universal macOS binary. Install: \`brew install hobo-ware/tap/stdusk\`.
+            --notes "Universal macOS \`.app\`. Install: \`brew install hobo-ware/tap/stdusk\`.
 
-          The \`stdusk.rb\` asset here is the formula for the tap, with the correct sha256 for this build." \
+          The \`stdusk.rb\` asset is the tap formula for this build (correct sha256). It installs
+          the bundle and symlinks \`stdusk\` onto your PATH." \
             --verify-tag

@@ -3,15 +3,16 @@
 # `stdusk.rb`. To ship it, copy that generated file into the tap repo (Hobo-Ware/homebrew-tap)
 # at Formula/stdusk.rb. The version/sha below are placeholders.
 class Stdusk < Formula
-  desc "Native Rust quake terminal with a real GUI tab bar and a first-party AI agent"
+  desc "Native Rust quake terminal with a real GUI tab bar and ambient AI-CLI awareness"
   homepage "https://github.com/Hobo-Ware/stdusk"
   version "0.1.0"
   license "MIT"
-  url "https://github.com/Hobo-Ware/stdusk/releases/download/stdusk-v0.1.0/stdusk-0.1.0-universal-apple-darwin.tar.gz"
+  url "https://github.com/Hobo-Ware/stdusk/releases/download/stdusk-v0.1.0/stdusk-0.1.0-universal.app.zip"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
   def install
-    bin.install "stdusk"
+    prefix.install "stdusk.app"
+    bin.install_symlink prefix/"stdusk.app/Contents/MacOS/stdusk"
   end
 
   test do
