@@ -1,0 +1,98 @@
+name: release (stdusk)
+
+# Cut a stdusk release + Homebrew artifacts on a `stdusk-v*` tag. (Tabby's own tags are `v1.0.x`
+# on master; ours are namespaced so the two release lines never collide.)
+on:
+  push:
+    tags: ['stdusk-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. stdusk-v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14 # Apple silicon; we cross-build x86_64 and lipo into a universal binary
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: v
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          [ "${{ github.event_name }}" = "workflow_dispatch" ] && TAG="${{ inputs.tag }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#stdusk-v}" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      - name: Build (both arches)
+        working-directory: native
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Package universal binary
+        id: pkg
+        working-directory: native
+        run: |
+          VERSION="${{ steps.v.outputs.version }}"
+          mkdir -p dist
+          lipo -create -output dist/stdusk \
+            target/aarch64-apple-darwin/release/stdusk \
+            target/x86_64-apple-darwin/release/stdusk
+          TARBALL="stdusk-${VERSION}-universal-apple-darwin.tar.gz"
+          tar -C dist -czf "dist/${TARBALL}" stdusk
+          SHA=$(shasum -a 256 "dist/${TARBALL}" | awk '{print $1}')
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Homebrew formula
+        working-directory: native
+        run: |
+          VERSION="${{ steps.v.outputs.version }}"
+          SHA="${{ steps.pkg.outputs.sha }}"
+          TARBALL="${{ steps.pkg.outputs.tarball }}"
+          TAG="${{ steps.v.outputs.tag }}"
+          cat > dist/stdusk.rb <<EOF
+          class Stdusk < Formula
+            desc "Native Rust quake terminal with a real GUI tab bar and a first-party AI agent"
+            homepage "https://github.com/Hobo-Ware/stdusk"
+            version "${VERSION}"
+            license "MIT"
+            url "https://github.com/Hobo-Ware/stdusk/releases/download/${TAG}/${TARBALL}"
+            sha256 "${SHA}"
+
+            def install
+              bin.install "stdusk"
+            end
+
+            test do
+              assert_match "stdusk ${VERSION}", shell_output("#{bin}/stdusk --version")
+            end
+          end
+          EOF
+          cat dist/stdusk.rb
+
+      - name: Publish release
+        working-directory: native
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.v.outputs.tag }}" \
+            "dist/${{ steps.pkg.outputs.tarball }}" \
+            "dist/stdusk.rb" \
+            --title "stdusk ${{ steps.v.outputs.version }}" \
+            --notes "Universal macOS binary. Install: \`brew install hobo-ware/tap/stdusk\`.
+
+          The \`stdusk.rb\` asset here is the formula for the tap, with the correct sha256 for this build." \
+            --verify-tag
