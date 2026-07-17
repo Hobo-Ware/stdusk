@@ -245,6 +245,23 @@ impl<T> Pane<T> {
         }
     }
 
+    /// Grow/shrink the focused leaf along `want` by nudging the nearest matching ancestor split's
+    /// ratio. `grow > 0` makes the focused pane larger regardless of which side it's on (the sign
+    /// flips for a B-side child). Returns whether a matching split was found.
+    pub(crate) fn resize_focused(&mut self, focused: &[Side], want: SplitDir, grow: f32) -> bool {
+        for cut in (0..focused.len()).rev() {
+            let side = focused[cut];
+            if let Some(Pane::Split { dir, ratio, .. }) = self.at_mut(&focused[..cut])
+                && *dir == want
+            {
+                let d = if side == Side::A { grow } else { -grow };
+                *ratio = (*ratio + d).clamp(0.05, 0.95);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Every leaf's `(path, rect)` for the given area, accounting for split ratios + gutters.
     pub(crate) fn layout(&self, area: Rect) -> Vec<(Vec<Side>, Rect)> {
         let mut out = Vec::new();
@@ -488,5 +505,24 @@ mod tests {
         assert_eq!(neighbor(&layout, &c, Dir::Up), Some(b.clone()));
         assert_eq!(neighbor(&layout, &a, Dir::Left), None); // nothing further left
         assert_eq!(neighbor(&layout, &a, Dir::Up), None);
+    }
+
+    fn ratio_of(p: &Pane<u32>) -> f32 {
+        match p {
+            Pane::Split { ratio, .. } => *ratio,
+            Pane::Leaf(_) => panic!("not a split"),
+        }
+    }
+
+    #[test]
+    fn resize_focused_grows_correct_side() {
+        // Row split, ratio 0.5. Growing the A (left) child raises the ratio; growing B lowers it.
+        let (mut t, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false);
+        assert!(t.resize_focused(&[Side::A], SplitDir::Row, 0.1));
+        assert!((ratio_of(&t) - 0.6).abs() < 1e-6);
+        assert!(t.resize_focused(&[Side::B], SplitDir::Row, 0.1));
+        assert!((ratio_of(&t) - 0.5).abs() < 1e-6); // B grew -> ratio back down
+        // No Column ancestor -> no-op.
+        assert!(!t.resize_focused(&[Side::A], SplitDir::Column, 0.1));
     }
 }

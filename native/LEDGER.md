@@ -464,6 +464,13 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## M12b - keyboard pane resize (`pane.rs`, `main.rs`)
+- Cmd+Ctrl+arrows resize the focused pane (Right/Down grow, Left/Up shrink). `Pane::resize_focused`
+  (pure, tested) walks to the nearest ancestor split matching the axis and nudges its ratio,
+  flipping the sign for a B-side child so "grow" always enlarges the focused pane. Cmd+Ctrl+arrows
+  produce no pty bytes (ctrl swallows arrows to None), so no reservation needed. Splits group
+  (nav + maximize + resize) now complete.
+
 ## M15 - tab power features (`main.rs`)
 - **Next/prev tab cycle**: Ctrl+Tab / Ctrl+Shift+Tab (wraps via `rem_euclid`). Ctrl+Tab already
   returns no pty bytes (ctrl_letter(Tab)=None), so it's free.

@@ -728,6 +728,7 @@ impl eframe::App for Stdusk {
         let mut kb_scroll_pages: Option<i32> = None; // Shift+PageUp/Down: -1 up, +1 down
         let mut kb_tab_cycle: Option<i32> = None; // Ctrl+Tab next (+1) / Ctrl+Shift+Tab prev (-1)
         let mut kb_reopen = false; // Cmd+Shift+T: reopen last closed tab
+        let mut kb_resize: Option<(pane::SplitDir, f32)> = None; // Cmd+Ctrl+arrow: resize focused pane
         ctx.input(|i| {
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
                 kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
@@ -777,6 +778,22 @@ impl eframe::App for Stdusk {
                     }
                     if i.key_pressed(Enter) {
                         kb_maximize = true;
+                    }
+                }
+                // Cmd+Ctrl: resize the focused pane (Right/Down grow, Left/Up shrink).
+                if i.modifiers.ctrl {
+                    const STEP: f32 = 0.05;
+                    if i.key_pressed(ArrowRight) {
+                        kb_resize = Some((pane::SplitDir::Row, STEP));
+                    }
+                    if i.key_pressed(ArrowLeft) {
+                        kb_resize = Some((pane::SplitDir::Row, -STEP));
+                    }
+                    if i.key_pressed(ArrowDown) {
+                        kb_resize = Some((pane::SplitDir::Column, STEP));
+                    }
+                    if i.key_pressed(ArrowUp) {
+                        kb_resize = Some((pane::SplitDir::Column, -STEP));
                     }
                 }
                 if i.key_pressed(T) {
@@ -910,6 +927,11 @@ impl eframe::App for Stdusk {
         if kb_maximize {
             let tab = &mut self.tabs[self.active];
             tab.maximized = !tab.maximized;
+        }
+        if let Some((dir, delta)) = kb_resize {
+            let tab = &mut self.tabs[self.active];
+            let path = tab.focused.clone();
+            tab.root_mut().resize_focused(&path, dir, delta);
         }
         if let Some(dir) = kb_split {
             let cwd = self.tabs[self.active].focused_term().cwd();
