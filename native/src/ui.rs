@@ -70,6 +70,12 @@ pub(crate) fn key_to_bytes(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<
         return ctrl_letter(key).map(|b| vec![b]);
     }
     let bytes: Vec<u8> = match key {
+        // Cmd+Alt+{arrows,Enter} are app pane bindings (nav / maximize) - don't forward to the pty.
+        Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Enter
+            if mods.command && mods.alt =>
+        {
+            return None;
+        }
         Key::Enter => vec![b'\r'],
         Key::Backspace if mods.alt => b"\x1b\x7f".to_vec(), // delete previous word
         Key::Backspace if mods.command => vec![0x15],       // Ctrl-U: delete to line start
@@ -784,6 +790,16 @@ mod tests {
             Some(b"\x1b\x7f".to_vec())
         );
         assert_eq!(key_to_bytes(Key::Backspace, mods(false, false, true)), Some(vec![0x15]));
+    }
+
+    #[test]
+    fn cmd_alt_combos_are_reserved_for_panes() {
+        // Cmd+Alt+arrows/Enter are app pane bindings; they must not reach the pty.
+        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, true, true)), None);
+        assert_eq!(key_to_bytes(Key::ArrowRight, mods(false, true, true)), None);
+        assert_eq!(key_to_bytes(Key::ArrowUp, mods(false, true, true)), None);
+        assert_eq!(key_to_bytes(Key::ArrowDown, mods(false, true, true)), None);
+        assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true)), None);
     }
 
     #[test]

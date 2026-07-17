@@ -21,6 +21,48 @@ pub(crate) enum SplitDir {
     Column,
 }
 
+/// A screen direction for keyboard pane navigation / resize.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Dir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// The path of the pane nearest to `from` in direction `dir`, given a laid-out set of panes.
+/// Picks the closest pane whose center lies in that direction and whose cross-axis span overlaps
+/// `from` (so Left/Right stay on the same row band, Up/Down on the same column band).
+pub(crate) fn neighbor(layout: &[(Vec<Side>, Rect)], from: &[Side], dir: Dir) -> Option<Vec<Side>> {
+    let cur = layout.iter().find(|(p, _)| p.as_slice() == from)?.1;
+    let overlaps_y = |r: &Rect| r.top() < cur.bottom() && r.bottom() > cur.top();
+    let overlaps_x = |r: &Rect| r.left() < cur.right() && r.right() > cur.left();
+    let mut best: Option<(f32, &Vec<Side>)> = None;
+    for (p, r) in layout {
+        if p.as_slice() == from {
+            continue;
+        }
+        let (in_dir, dist) = match dir {
+            Dir::Left => {
+                (r.center().x < cur.center().x && overlaps_y(r), cur.center().x - r.center().x)
+            }
+            Dir::Right => {
+                (r.center().x > cur.center().x && overlaps_y(r), r.center().x - cur.center().x)
+            }
+            Dir::Up => {
+                (r.center().y < cur.center().y && overlaps_x(r), cur.center().y - r.center().y)
+            }
+            Dir::Down => {
+                (r.center().y > cur.center().y && overlaps_x(r), r.center().y - cur.center().y)
+            }
+        };
+        if in_dir && best.is_none_or(|(d, _)| dist < d) {
+            best = Some((dist, p));
+        }
+    }
+    best.map(|(_, p)| p.clone())
+}
+
 pub(crate) enum Pane<T> {
     Leaf(T),
     Split { dir: SplitDir, ratio: f32, a: Box<Pane<T>>, b: Box<Pane<T>> },
@@ -427,5 +469,24 @@ mod tests {
         assert!((ratio_from_pointer(parent, SplitDir::Row, pos2(47.0, 0.0)) - 0.5).abs() < 0.02);
         assert_eq!(ratio_from_pointer(parent, SplitDir::Row, pos2(-99.0, 0.0)), 0.05); // clamp low
         assert_eq!(ratio_from_pointer(parent, SplitDir::Row, pos2(999.0, 0.0)), 0.95); // clamp high
+    }
+
+    #[test]
+    fn neighbor_directional() {
+        // Three panes: A (left), B (top-right), C (bottom-right).
+        let a = vec![Side::A];
+        let b = vec![Side::B, Side::A];
+        let c = vec![Side::B, Side::B];
+        let layout = vec![
+            (a.clone(), Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 200.0))),
+            (b.clone(), Rect::from_min_max(pos2(100.0, 0.0), pos2(200.0, 100.0))),
+            (c.clone(), Rect::from_min_max(pos2(100.0, 100.0), pos2(200.0, 200.0))),
+        ];
+        assert_eq!(neighbor(&layout, &a, Dir::Right), Some(b.clone())); // nearest on the row band
+        assert_eq!(neighbor(&layout, &b, Dir::Left), Some(a.clone()));
+        assert_eq!(neighbor(&layout, &b, Dir::Down), Some(c.clone()));
+        assert_eq!(neighbor(&layout, &c, Dir::Up), Some(b.clone()));
+        assert_eq!(neighbor(&layout, &a, Dir::Left), None); // nothing further left
+        assert_eq!(neighbor(&layout, &a, Dir::Up), None);
     }
 }

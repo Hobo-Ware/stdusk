@@ -44,9 +44,9 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Feature | State | Notes |
 |---|---|---|
 | Split right/bottom/left/top + drag-resize + click-focus | ✅ | |
-| Keyboard pane nav (`pane-nav-up/down/left/right/prev/next/1-9`) | ⬜ | big daily-driver gap; click-only now |
+| Keyboard pane nav (directional) | ✅ | Cmd+Alt+arrows (`pane::neighbor`); prev/next + 1-9 still ⬜ |
 | Keyboard pane resize (`pane-increase/decrease-*`, step) | ⬜ | drag-only now |
-| `pane-maximize` / zoom | ⬜ | |
+| `pane-maximize` / zoom | ✅ | Cmd+Alt+Enter toggles `tab.maximized` |
 | Broadcast input (`pane-focus-all`, `focus-all-tabs`) | ⬜ | multifocus |
 | `rearrange-panes` (labelled move mode) | ⬜ | |
 | Aggregated tab progress/title across panes | 🟡 | shows focused pane only |

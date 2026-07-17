@@ -464,6 +464,16 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## M12 - keyboard pane nav + maximize (`pane.rs`, `main.rs`, `ui.rs`)
+- **Directional focus**: Cmd+Alt+arrows move focus to the neighbor pane. `pane::neighbor(layout,
+  from, Dir)` (pure, tested) picks the nearest pane whose center is in the direction + whose
+  cross-axis span overlaps the current pane.
+- **Maximize/zoom**: Cmd+Alt+Enter toggles `Tab.maximized` - the central panel then renders only
+  the focused pane at full area and hides the splitters (auto-ignored when the tab has one pane).
+- `key_to_bytes` now reserves Cmd+Alt+{arrows,Enter} (returns None) so these don't leak to the pty
+  as word/line motion or CR (regression-tested). Prev/next + focus-by-index + keyboard resize
+  still TODO.
+
 ## M11 - clickable links (`links.rs`, `ui.rs`, `config.rs`)
 - Cmd+click URLs (`https?/ftp/file://`) and file paths (absolute/`~`/relative) to open them via
   `open`. Cmd-hover underlines the link + shows the pointing-hand cursor. `links::find_in_row`

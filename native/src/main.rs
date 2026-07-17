@@ -39,6 +39,7 @@ struct Tab {
     root: Option<pane::Pane<PtyTerm>>, // Option so whole-tree transforms can `take()` it
     focused: Vec<pane::Side>,     // path to the focused leaf (its identity)
     cli: Option<procwatch::Cli>,  // a known AI CLI detected running in the tab (badge)
+    maximized: bool,              // zoom the focused pane to fill the tab (hide the other panes)
 }
 
 impl Tab {
@@ -73,6 +74,7 @@ fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
         root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
         cli: None,
+        maximized: false,
     }
 }
 
@@ -673,9 +675,33 @@ impl eframe::App for Stdusk {
         let mut kb_find = false;
         let mut kb_split: Option<pane::SplitDir> = None;
         let mut kb_switch: Option<usize> = None;
+        let mut kb_pane_dir: Option<pane::Dir> = None; // Cmd+Alt+arrow: focus the neighbor pane
+        let mut kb_maximize = false; // Cmd+Alt+Enter: toggle zooming the focused pane
         ctx.input(|i| {
             if i.modifiers.command {
-                use egui::Key::{D, F, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, T, W};
+                use egui::Key::{
+                    ArrowDown, ArrowLeft, ArrowRight, ArrowUp, D, Enter, F, Num1, Num2, Num3, Num4,
+                    Num5, Num6, Num7, Num8, Num9, T, W,
+                };
+                // Cmd+Alt: pane navigation / maximize (kept separate from the terminal's own
+                // Cmd/Alt+arrow line/word motion, which key_to_bytes reserves against Cmd+Alt).
+                if i.modifiers.alt {
+                    if i.key_pressed(ArrowLeft) {
+                        kb_pane_dir = Some(pane::Dir::Left);
+                    }
+                    if i.key_pressed(ArrowRight) {
+                        kb_pane_dir = Some(pane::Dir::Right);
+                    }
+                    if i.key_pressed(ArrowUp) {
+                        kb_pane_dir = Some(pane::Dir::Up);
+                    }
+                    if i.key_pressed(ArrowDown) {
+                        kb_pane_dir = Some(pane::Dir::Down);
+                    }
+                    if i.key_pressed(Enter) {
+                        kb_maximize = true;
+                    }
+                }
                 if i.key_pressed(T) {
                     kb_new = true;
                 }
@@ -792,6 +818,10 @@ impl eframe::App for Stdusk {
         }
         if kb_new {
             action = Some(TabAction::New);
+        }
+        if kb_maximize {
+            let tab = &mut self.tabs[self.active];
+            tab.maximized = !tab.maximized;
         }
         if let Some(dir) = kb_split {
             let cwd = self.tabs[self.active].focused_term().cwd();
@@ -929,8 +959,20 @@ impl eframe::App for Stdusk {
                     }
                 }
 
-                // Tile the pane tree and render each leaf in its rect.
-                let layout = tab.root().layout(area);
+                // Keyboard pane navigation (Cmd+Alt+arrow): move focus to the neighbor pane.
+                let full_layout = tab.root().layout(area);
+                if let Some(dir) = kb_pane_dir
+                    && let Some(target) = pane::neighbor(&full_layout, &tab.focused, dir)
+                {
+                    tab.focused = target;
+                }
+
+                // Tile the pane tree; when a pane is maximized, show only the focused one full-area.
+                let layout = if tab.maximized && full_layout.len() > 1 {
+                    vec![(tab.focused.clone(), area)]
+                } else {
+                    full_layout
+                };
                 let multi = layout.len() > 1;
                 let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
                 let pointer = ui.input(|i| i.pointer.hover_pos());
@@ -987,8 +1029,10 @@ impl eframe::App for Stdusk {
                     tab.focused = p;
                 }
 
-                // Draggable splitters between panes.
-                for (spath, dir, handle, parent) in tab.root().splitters(area) {
+                // Draggable splitters between panes (hidden while a pane is maximized).
+                for (spath, dir, handle, parent) in
+                    if tab.maximized { Vec::new() } else { tab.root().splitters(area) }
+                {
                     let resp = ui.interact(
                         handle,
                         egui::Id::new(("split", &spath)),
