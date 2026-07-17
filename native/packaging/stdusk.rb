@@ -1,22 +1,26 @@
-# Reference Homebrew formula for stdusk. The release workflow (native-release.yml) regenerates
-# this with the real url + sha256 for each build and attaches it to the GitHub Release as
-# `stdusk.rb`. To ship it, copy that generated file into the tap repo (Hobo-Ware/homebrew-tap)
-# at Formula/stdusk.rb. The version/sha below are placeholders.
-class Stdusk < Formula
-  desc "Native Rust quake terminal with a real GUI tab bar and ambient AI-CLI awareness"
-  homepage "https://github.com/Hobo-Ware/stdusk"
+# Reference Homebrew CASK for stdusk (a GUI .app -> a cask, not a formula, so it lands in
+# /Applications and Spotlight/Launchpad find it). The release workflow (native-release.yml)
+# regenerates this with the real version + sha256 per build and attaches it to the GitHub Release
+# as `stdusk.rb`; ship it by copying that into the tap at Hobo-Ware/homebrew-tap:Casks/stdusk.rb.
+# The version/sha below are placeholders.
+cask "stdusk" do
   version "0.1.0"
-  license "MIT"
-  url "https://github.com/Hobo-Ware/stdusk/releases/download/stdusk-v0.1.0/stdusk-0.1.0-universal.app.zip"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
-  def install
-    # Homebrew strips the single top-level dir, landing us inside stdusk.app/.
-    (prefix/"stdusk.app").install "Contents"
-    bin.install_symlink prefix/"stdusk.app/Contents/MacOS/stdusk"
+  url "https://github.com/Hobo-Ware/stdusk/releases/download/stdusk-v#{version}/stdusk-#{version}-universal.app.zip"
+  name "stdusk"
+  desc "Native Rust quake terminal with a real GUI tab bar and ambient AI-CLI awareness"
+  homepage "https://github.com/Hobo-Ware/stdusk"
+
+  app "stdusk.app"
+  binary "#{appdir}/stdusk.app/Contents/MacOS/stdusk"
+
+  postflight do
+    # Ad-hoc signed, not notarized: strip quarantine so Gatekeeper doesn't hard-block the GUI
+    # launch. Proper fix is Developer ID signing + notarization (see packaging/README.md).
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/stdusk.app"]
   end
 
-  test do
-    assert_match "stdusk #{version}", shell_output("#{bin}/stdusk --version")
-  end
+  zap trash: "~/.config/stdusk"
 end

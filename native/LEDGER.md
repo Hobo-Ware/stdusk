@@ -465,6 +465,17 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
 ## Post-0.1.0 fixes
+- **Distribution = Homebrew cask, not formula** (user: "we need it to be findable"). A formula
+  keeps the `.app` in the Cellar, so Spotlight/Launchpad never see it. The tap now ships
+  `Casks/stdusk.rb`: `app "stdusk.app"` -> `/Applications` (Spotlight-findable) + `binary` stanza
+  for the `stdusk` CLI. `brew install hobo-ware/tap/stdusk` auto-resolves the cask. Workflow +
+  `native/packaging/stdusk.rb` regenerate the cask.
+- **Gatekeeper block (macOS 26)**: the build is only ad-hoc/linker-signed (Rust default), and a
+  cask sets `com.apple.quarantine`, so `spctl` = "no usable signature" and the GUI launch is
+  hard-blocked ("stdusk Not Opened"). Fix: the cask's `postflight` runs `xattr -dr
+  com.apple.quarantine` so the installed app launches clean. **Proper fix (deferred)**: Developer
+  ID signing + `notarytool` notarization in CI (needs an Apple Developer account + secrets); then
+  drop the postflight. See packaging/README.md.
 - **Quake = macOS accessory app** (user: shouldn't sit in Dock/tray, just drop from the top).
   `quake.hide_from_dock` (default true) sets `ActivationPolicy::Accessory` via eframe's
   `event_loop_builder` hook (needs a direct `winit = "0.30"` dep for the macos ext trait) - no

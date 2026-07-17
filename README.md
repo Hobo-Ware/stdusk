@@ -29,7 +29,7 @@ stdusk refuses the tradeoff. `egui` paints real pixel-perfect tabs. `alacritty_t
 brew install hobo-ware/tap/stdusk
 ```
 
-Then hit **Ctrl+`** to summon it. Configurable - set it to F13 if you're fancy.
+Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk` CLI on your PATH. Then hit **Ctrl+`** to summon it - it drops from the top edge, no Dock icon, no clutter. Configurable - set it to F13 if you're fancy.
 
 ## What it does
 

@@ -75,5 +75,6 @@ cargo clippy --all-targets -- -D warnings
 
 ## Release
 
-Tag `stdusk-v<version>` and push - CI builds a universal macOS binary, cuts the GitHub
-Release, and generates the Homebrew formula. See [`packaging/README.md`](./packaging/README.md).
+Tag `stdusk-v<version>` and push - CI builds a universal macOS `.app`, cuts the GitHub
+Release, and generates the Homebrew **cask** (ships to `/Applications`, Spotlight-findable).
+See [`packaging/README.md`](./packaging/README.md).

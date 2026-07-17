@@ -150,6 +150,13 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Dynamic title from shell (OSC 0/2) + disable toggle | 🟡 | cwd title; verify OSC 0/2 title |
 | Save/load terminal output & state (debug) | ⛔ | niche debug tooling |
 
+## Distribution / packaging
+| Feature | State | Notes |
+|---|---|---|
+| Homebrew cask -> /Applications + `stdusk` CLI, Spotlight-findable | ✅ | `brew install hobo-ware/tap/stdusk` |
+| Universal (arm64+x86_64) `.app` built + released on tag | ✅ | native-release.yml |
+| Developer ID signing + notarization | ⬜ | needs Apple Developer acct; cask `postflight` strips quarantine as a stopgap |
+
 ## Dropped (out of scope - PLAN §1/§9)
 ⛔ SSH client + profiles/SFTP · ⛔ Serial · ⛔ Telnet · ⛔ Plugin system + marketplace ·
 ⛔ Web/SaaS config sync · ⛔ Vault (encrypted secrets) · ⛔ zmodem · ⛔ auto-sudo-password / UAC ·

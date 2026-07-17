@@ -1,40 +1,43 @@
 # Packaging stdusk
 
+stdusk ships as a Homebrew **cask** (it's a GUI `.app`, so a cask - not a formula - puts it in
+`/Applications` where Spotlight/Launchpad find it, and the `binary` stanza still links `stdusk`
+onto your PATH).
+
 ## Release flow (automated)
 
 1. Bump `version` in `native/Cargo.toml`.
 2. Tag and push: `git tag stdusk-v0.1.0 && git push origin stdusk-v0.1.0`.
 3. `.github/workflows/native-release.yml` builds a **universal** macOS binary (arm64 + x86_64
-   lipo'd together), wraps it in a `stdusk.app` bundle (icns + Info.plist so the Dock shows the
-   brand icon), zips it, and creates the GitHub Release with two assets:
+   lipo'd), wraps it in `stdusk.app` (icns + Info.plist), zips it with `ditto`, cuts the GitHub
+   Release, and generates the cask with the real `sha256`. Two assets:
    - `stdusk-<version>-universal.app.zip` - the app bundle
-   - `stdusk.rb` - the Homebrew formula, with the correct `sha256` already filled in
-
-   The formula installs the bundle and symlinks `stdusk` onto the PATH, so you get both the CLI
-   and a proper Dock icon.
+   - `stdusk.rb` - the cask, ready for the tap
 
 ## Homebrew tap (one-time)
-
-The formula lives in a tap so users get `brew install hobo-ware/tap/stdusk`:
 
 ```sh
 gh repo create Hobo-Ware/homebrew-tap --public -d "Homebrew tap for Hobo-Ware tools"
 git clone https://github.com/Hobo-Ware/homebrew-tap && cd homebrew-tap
-mkdir -p Formula
-# after each release, drop the generated formula in:
-gh release download stdusk-v0.1.0 -R Hobo-Ware/stdusk -p stdusk.rb -O Formula/stdusk.rb
-git add Formula/stdusk.rb && git commit -m "stdusk 0.1.0" && git push
+mkdir -p Casks
+gh release download stdusk-v0.1.0 -R Hobo-Ware/stdusk -p stdusk.rb -O Casks/stdusk.rb
+git add Casks/stdusk.rb && git commit -m "stdusk 0.1.0" && git push
 ```
 
-Then anyone can:
+Then:
 
 ```sh
-brew install hobo-ware/tap/stdusk
+brew install hobo-ware/tap/stdusk   # installs to /Applications + links the `stdusk` CLI
 ```
 
-`stdusk` is a plain binary (not a `.app`), so a Homebrew **formula** - not a cask - is correct,
-and formula-installed binaries aren't Gatekeeper-quarantined: it runs unsigned without a
-notarization prompt. A signed `.app` bundle is a later polish item.
+## Signing / notarization
 
-`native/packaging/stdusk.rb` is a reference copy with placeholder `version`/`sha256`; the real
-values come from the release build.
+The `.app` is **ad-hoc signed** (Rust's linker default), not Developer ID signed or notarized.
+On macOS the cask's `postflight` strips the `com.apple.quarantine` flag so Gatekeeper doesn't
+hard-block the GUI launch. That's a pragmatic stopgap, not the real fix.
+
+**Proper fix (later):** sign with a Developer ID cert + notarize with `notarytool` in CI. That
+needs an Apple Developer account ($99/yr) and these GitHub secrets: the signing cert (`.p12` +
+password) and an app-specific password / API key for notarization. Once notarized, drop the
+`postflight` quarantine-strip. Until then, a first Finder launch of a manually-downloaded `.app`
+(not via brew) may still need System Settings -> Privacy & Security -> "Open Anyway".
