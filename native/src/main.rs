@@ -630,7 +630,8 @@ impl eframe::App for Stdusk {
                 self.sys.refresh_processes_specifics(
                     sysinfo::ProcessesToUpdate::All,
                     true,
-                    sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
+                    sysinfo::ProcessRefreshKind::nothing()
+                        .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
                 );
                 for tab in &mut self.tabs {
                     let pids: Vec<u32> =
