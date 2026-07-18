@@ -113,8 +113,8 @@ only for the thin slice that truly needs a widget tree (focus moving on tab swit
   1. Request focus on a text field ONCE (a one-shot flag), never every frame - re-requesting
      stops egui from ever reporting the Enter-triggered `lost_focus`, so Enter never submits.
   2. The focused terminal pane requests focus every frame, so it will steal focus from any open
-     text field. Gate that (and pty input) on `input_captured = search.is_some() ||
-     renaming.is_some()` - every modal text field must be in that expression.
+     text field. Gate that (and pty input) on `ui::pty_input_captured(..)` - every modal surface
+     must be an argument of that predicate (authoritative pattern in §6).
   3. Sample `input_captured` BEFORE the modals run this frame. Sampling after lets the key that
      closes a modal (Enter committing a rename) leak to the shell once the modal clears its state.
 - **Keybinds:** `Modifiers::command` (Cmd on macOS, Ctrl elsewhere) for app binds
@@ -134,6 +134,36 @@ only for the thin slice that truly needs a widget tree (focus moving on tab swit
   in an `allocate_exact_size` box (see `icon_button`), and force a uniform pill font with
   `style.override_font_id` rather than per-widget `.size()`/`.font()`.
 
+## 6. Hit-testing, screenshot harness, and modal capture (hard-won, 0.2.2-0.2.4)
+
+- **Drag + click sensing must be ONE widget.** egui's hit test picks a single topmost widget
+  per interaction; a drag-only interact layered over a clickable widget returns click:None for
+  everything beneath it (the 0.2.3 regression: every tab interaction died). Never layer a drag
+  sense over a clickable rect - make the widget `Sense::click_and_drag()` with a stable id and
+  treat it as a drag only when `ui.input(|i| i.pointer.is_decidedly_dragging())`.
+- **`egui::Grid` vs the screenshot harness.** Grid discards its first-pass sizing, so the
+  harness's cumulative pass-2 capture catches a blank layout. Screenshot-verified views use
+  fixed-width label columns (see `settings.rs`), not `Grid`.
+- **Floating `Window`/`Area` never renders in the 2-frame screenshot harness; panels do.**
+  UI that must be screenshot-verifiable is a docked panel or a full central view. That's why
+  settings is a view (like Tabby's settings tab), not a window - prefer view-over-window for
+  anything substantial.
+- **Hover fills on elevated surfaces need `colors::hover_elevated()`.** `colors::hover()` is
+  elevated-at-alpha, which disappears when painted OVER an elevated menu/popup surface; use
+  `hover_elevated()` (one visible shade further) for rows on elevated fills.
+- **Keyboard capture is centralized - extend it, never fork it.** Two predicates in the loop;
+  BOTH must gain any new modal surface:
+  1. `ui::pty_input_captured(search_field_focused, renaming, palette, settings_open,
+     pending_pastes, pending_close)` gates pty bytes + the terminal's per-frame
+     `request_focus()`. The find bar counts only while its text field HAS focus - an
+     open-but-unfocused find bar must not swallow terminal keys (0.2.3 regression B).
+  2. `hard_modal = renaming || pending_pastes || pending_close || palette || settings_open`
+     additionally suppresses app keybinds (tab cycle, Cmd+W, ...) so they can't mutate a tab
+     hidden under a modal. Cmd+Shift+P and Cmd+, stay live outside TEXT modals (each is its
+     own dismissal).
+  Sample both BEFORE the modals run this frame (rule 3 in §5). A new modal that skips either
+  expression ships a key-leak bug.
+
 ## Checklist for any UI change
 
 - [ ] State classed persistent / derived / ephemeral, in the right place.
@@ -146,4 +176,5 @@ only for the thin slice that truly needs a widget tree (focus moving on tab swit
       opposing layouts; icons painted centered (not `ui.label`).
 - [ ] Surfaces/inputs/buttons come from a `ui.rs` design-system primitive (`overlay_frame`,
       `text_field`, `action_button`, …) - no hand-rolled `Frame`/`TextEdit`/`Button` styling; a
-      text field that captures the keyboard gates pty input + focus (`input_captured`).
+      text field that captures the keyboard gates pty input + focus (`pty_input_captured` +
+      `hard_modal`, §6).

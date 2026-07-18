@@ -11,6 +11,7 @@ use crate::terminal::{CmdState, GridSnap, PtyTerm};
 /// Phosphor icon codepoints (font vendored in assets/Phosphor.ttf, MIT).
 pub(crate) mod icons {
     pub(crate) const PLUS: &str = "\u{E3D4}";
+    pub(crate) const MINUS: &str = "\u{E32A}";
     pub(crate) const X: &str = "\u{E4F6}";
     pub(crate) const GEAR: &str = "\u{E270}";
     pub(crate) const APP_WINDOW: &str = "\u{E5DA}";
@@ -454,30 +455,97 @@ pub(crate) fn parse_int_clamped(s: &str, min: usize, max: usize) -> Option<usize
     digits.parse::<usize>().ok().map(|v| v.clamp(min, max))
 }
 
-/// The standard integer input: a `text_field` bound to a `usize` (digits only, clamped into
-/// `range` as you type; the shown text snaps to the real value on blur). Matches the rest of
-/// the inputs visually - never use a raw `DragValue` in settings rows.
-pub(crate) fn int_field(
+/// One `num_field` stepper press: `up` adds `step`, else subtracts; saturating and clamped.
+pub(crate) fn step_int(v: usize, step: usize, up: bool, min: usize, max: usize) -> usize {
+    if up { v.saturating_add(step).min(max) } else { v.saturating_sub(step).max(min) }
+}
+
+/// A small square +/- stepper button matching the `text_field` look (field bg, hairline
+/// border, hover fill, painted glyph). Sized to the field's height so the group reads as one.
+fn stepper_button(ui: &mut egui::Ui, icon: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 31.0), egui::Sense::click());
+    let p = ui.painter();
+    p.rect_filled(rect, 7.0, if resp.hovered() { colors::hover_elevated() } else { colors::bg() });
+    p.rect_stroke(rect, 7.0, egui::Stroke::new(1.0, colors::border()), egui::StrokeKind::Inside);
+    p.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(13.0),
+        if resp.hovered() { colors::fg() } else { colors::dim() },
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The standard numeric input: a `text_field` bound to a `usize` (digits only, clamped into
+/// `range` as you type; the shown text snaps to the real value on blur) plus small +/-
+/// steppers that nudge by `step`. Matches the rest of the inputs visually - never use a raw
+/// `DragValue` in settings rows.
+pub(crate) fn num_field(
     ui: &mut egui::Ui,
     id_salt: &str,
     value: &mut usize,
     range: std::ops::RangeInclusive<usize>,
+    step: usize,
     width: f32,
 ) -> egui::Response {
-    let id = ui.make_persistent_id(("int_field", id_salt));
-    let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.to_string());
-    let r = text_field(ui, &mut buf, "", width, colors::fg());
-    if r.changed()
-        && let Some(v) = parse_int_clamped(&buf, *range.start(), *range.end())
-    {
-        *value = v;
-    }
-    if !r.has_focus() {
-        // Not being edited: track the real value (covers Revert/Discard and out-of-range text).
-        buf = value.to_string();
-    }
-    ui.data_mut(|d| d.insert_temp(id, buf));
-    r
+    let id = ui.make_persistent_id(("num_field", id_salt));
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let mut buf =
+            ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.to_string());
+        let r = text_field(ui, &mut buf, "", width, colors::fg());
+        if r.changed()
+            && let Some(v) = parse_int_clamped(&buf, *range.start(), *range.end())
+        {
+            *value = v;
+        }
+        let mut stepped = false;
+        for (icon, up) in [(icons::MINUS, false), (icons::PLUS, true)] {
+            if stepper_button(ui, icon).clicked() {
+                *value = step_int(*value, step, up, *range.start(), *range.end());
+                stepped = true;
+            }
+        }
+        if stepped || !r.has_focus() {
+            // Not being edited (or just stepped): track the real value (covers Revert/Discard,
+            // out-of-range text, and stepper presses while the field holds stale text).
+            buf = value.to_string();
+        }
+        ui.data_mut(|d| d.insert_temp(id, buf));
+        r
+    })
+    .inner
+}
+
+/// A small read-only value readout for sliders (field bg, hairline border, centered text).
+/// Fixed min width so the chip doesn't jitter as the value's digit count changes.
+fn value_chip(ui: &mut egui::Ui, text: &str) {
+    let font = egui::FontId::proportional(12.0);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, colors::fg());
+    let w = (galley.size().x + 16.0).max(52.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 24.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 7.0, colors::bg());
+    p.rect_stroke(rect, 7.0, egui::Stroke::new(1.0, colors::border()), egui::StrokeKind::Inside);
+    p.galley(rect.center() - galley.size() / 2.0, galley, colors::fg());
+}
+
+/// The design-system slider: accent trailing fill and the live value in a styled chip
+/// instead of egui's raw `DragValue`. `fmt` renders the chip text ("85%", "13 pt", ...).
+pub(crate) fn slider(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    fmt: impl Fn(f32) -> String,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.visuals_mut().selection.bg_fill = colors::accent(); // trailing fill reads accent
+        let resp = ui.add(egui::Slider::new(value, range).show_value(false).trailing_fill(true));
+        value_chip(ui, &fmt(*value));
+        resp
+    })
+    .inner
 }
 
 /// The standard action button (dialog OK/Cancel etc.): consistent padding; `primary` fills with
@@ -1323,6 +1391,16 @@ mod tests {
         assert_eq!(parse_int_clamped("12a34", 100, 1_000_000), Some(1234)); // digits only
         assert_eq!(parse_int_clamped("", 100, 1_000_000), None);
         assert_eq!(parse_int_clamped("abc", 100, 1_000_000), None);
+    }
+
+    #[test]
+    fn step_int_clamps_and_saturates() {
+        assert_eq!(step_int(25_000, 1000, true, 100, 1_000_000), 26_000);
+        assert_eq!(step_int(25_000, 1000, false, 100, 1_000_000), 24_000);
+        assert_eq!(step_int(999_500, 1000, true, 100, 1_000_000), 1_000_000); // clamped high
+        assert_eq!(step_int(500, 1000, false, 100, 1_000_000), 100); // clamped low
+        assert_eq!(step_int(usize::MAX, 1000, true, 100, usize::MAX), usize::MAX); // saturates
+        assert_eq!(step_int(50, 1000, false, 100, 1_000_000), 100); // below-min input snaps up
     }
 
     #[test]

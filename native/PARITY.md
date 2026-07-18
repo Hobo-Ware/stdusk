@@ -18,6 +18,15 @@ whole-word); split panes (4 dirs, drag-resize, click-focus, right-click menu, mi
 shell integration OSC 133 (fail signal); visual bell; cwd tracking + new-tab-in-cwd + cwd auto-title;
 copy-current-path; ambient AI-CLI awareness badges.
 
+## Also shipped (0.1.x-0.2.x wave)
+Tabby-exact paste/copy/input suite (trim/replace-newlines/multiline-guard/intelligent Ctrl-C/
+alt-is-meta/word-separators/copy-on-select/middle-click paste); font zoom + select-all + Cmd+K;
+session restore; 191 community XRDB schemes + follow-OS light/dark; keyboard pane nav/resize/
+maximize; tab power ops (cycle/move/duplicate/reopen/restart/close-others); notify-when-done;
+command palette (20 commands + profile launchers); named profiles; drag-reorder tabs; symbol
+ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar icon + dock modes;
+`quake.unfocused_opacity` (beyond Tabby).
+
 ---
 
 ## Tabs
@@ -37,6 +46,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Notify-when-done | ✅ | `terminal.notify_on_done`; osascript notification when a >10s command finishes while hidden. notify-on-activity still ⬜ |
 | Current-process display in menu | ⬜ | have procwatch tree already |
 | Drag-reorder tabs | ✅ | midpoint-crossing swaps, mixed widths; between-windows N/A (single window) |
+| Warn when closing a tab with a running process | ✅ | `terminal.warn_on_close_running` (default on) + confirm modal |
 | `toggle-fullscreen` | ⬜ | |
 | Save-as-profile / save-layout-as-profile | ⛔ | depends on profiles (deferred) |
 
@@ -58,7 +68,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Truecolor/256/16 + cursor styles | ✅ | |
 | Cursor blink | ✅ | `cursor_blink` (default on); focused pane only, xterm cadence |
 | Font weight / bold weight | ⬜ | single weight |
-| Configurable fallback font + line padding | 🟡 | fallbacks hardcoded; no linePadding |
+| Font family + fallback font + line padding | ⬜ | no font config at all (egui bundled mono + hardcoded fallbacks); Nerd Font PUA glyphs (starship/p10k) render as tofu. Tabby: `font: Menlo`, configurable |
 | Ligatures | 🟡 | `ligatures` (default off): symbol substitution (-> => != >= <= ...); true OpenType shaping still ⬜ (egui limit) |
 | Sixel / inline images | ⛔→FUTURE | alacritty grid has no image model |
 | Bold-in-bright-colors | ✅ | `bold_bright` (default on) |
@@ -67,7 +77,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Light color scheme + follow-OS light/dark | ✅ | `appearance.follow_system` + `theme_light`/`theme_dark`; adaptive chrome; `one-half-light` added |
 | Background: image / vibrancy / blur | ⬜ | opacity only |
 | Configurable scrollback lines (25k default) | ✅ | `scrollback_lines` (default 25000) |
-| Wide-char / Unicode 11 widths | 🟡 | verify CJK/emoji cell widths |
+| Wide-char / Unicode 11 widths | 🟡 | verified broken-ish: no WIDE_CHAR/spacer handling in `grid_snapshot`; CJK/emoji squeeze into one cell and overlap |
 
 ## Input / copy-paste
 | Feature | State | Notes |
@@ -101,7 +111,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 ## Command palette / discoverability
 | Feature | State | Notes |
 |---|---|---|
-| Command palette (`command-selector`) | ✅ | Cmd+Shift+P; fuzzy-scored, 19 commands + profile launchers |
+| Command palette (`command-selector`) | ✅ | Cmd+Shift+P; fuzzy-scored, 20 commands + profile launchers |
 | Profile selector | ⛔ | depends on profiles |
 
 ## Profiles & shell
@@ -141,15 +151,16 @@ copy-current-path; ambient AI-CLI awareness badges.
 ## Settings GUI (M11)
 | Feature | State | Notes |
 |---|---|---|
-| egui settings panel | ✅ | gear opens it: Appearance/Terminal/Quake/Session, live-apply + Save-to-toml; hotkey editor ⬜ |
-| Raw config editor / show-defaults | 🟡 | gear opens config.toml in $EDITOR |
+| egui settings panel | ✅ | gear or Cmd+, opens the full view: Appearance/Terminal/Quake/Session/About sidebar, scheme browser w/ search + live preview card, unsaved-changes guard, live-apply + Save-to-toml. Quake hotkey editable (live re-register); general keybinding editor still ⬜ |
+| Settings sync via git (config + custom schemes) | ✅ | `[sync] repo` push/pull with the user's own git creds (`sync.rs`); replaces the dropped SaaS sync |
+| Raw config editor / show-defaults | 🟡 | "Open config file/folder" link rows in settings About section |
 
 ## Session / lifecycle
 | Feature | State | Notes |
 |---|---|---|
 | Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ✅ | `[session] restore`; cwd/title/color, saved every 3s |
-| Behavior on session end (keep/close/restart) | ⬜ | |
-| Dynamic title from shell (OSC 0/2) + disable toggle | 🟡 | cwd title; verify OSC 0/2 title |
+| Behavior on session end (keep/close/restart) | ⬜ | **bug-grade**: shell exit leaves a dead frozen tab (reader thread breaks silently, nothing observes it). Tabby default auto-closes on clean exit |
+| Dynamic title from shell (OSC 0/2) + disable toggle | 🟡 | cwd title only; OSC 0/2 confirmed NOT parsed (`osc.rs` drops it; EventProxy handles Bell only) |
 | Save/load terminal output & state (debug) | ⛔ | niche debug tooling |
 
 ## Distribution / packaging
@@ -167,14 +178,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 
 ---
 
-## Suggested next milestones (priority order)
-1. **M11 - clickable links** (M2.5 debt): URL/IP/file, cwd-relative + `~`, modifier-click, `open`. High daily-driver value, self-contained.
-2. **M12 - keyboard pane nav + resize + maximize**: the biggest splits gap; power users live here.
-3. **M13 - input/paste polish**: select-all, clear, font-zoom, copy-on-select, middle-click paste,
-   scroll hotkeys, right-click modes, multiline-paste guard. Cheap, high-frequency wins.
-4. **M14 - color-scheme import + light/dark follow-OS**: port the 191 XRDB schemes; huge perceived surface.
-5. **M15 - tab power features**: next/prev cycle, move hotkeys, duplicate, reopen, toggle-last, pin,
-   restart, close-others; drag-reorder; notify-when-done (OSC 133 already parsed).
-6. **M16 - session restore** + dynamic OSC 0/2 title + behavior-on-exit.
-7. **M17 - settings GUI** (egui) + more quake/docking + tab-bar location + cursor blink + font weight.
-8. **Later/FUTURE**: named profiles, command palette, ligatures, sixel/images, broadcast input.
+## Next milestones
+M11-M17 from the original list all shipped (0.1.x-0.2.x). The remaining gaps, ranked and
+batched into releases (0.3.0 → 1.0.0), live in **[V1.md](./V1.md)** - that file supersedes
+this section as the release roadmap.

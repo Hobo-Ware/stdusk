@@ -51,7 +51,14 @@ and [LEDGER.md](./LEDGER.md) for the running build state.
 - [x] **M8** - split panes (tree, focus, drag-resize, per-pane pty)
 - [x] **M9** - shell integration (OSC 133) + bell + cursor styles
 - [x] **M10** - ambient AI-CLI awareness: badge tabs running claude/codex/gemini/copilot/aider/cursor/ollama
-- [ ] **M11** - polish + settings GUI
+- [x] **M11** - polish + settings GUI (Tabby-grade settings view, command palette, profiles)
+
+Shipped on top of that through 0.2.4: command palette (Cmd+Shift+P), drag-to-reorder tabs,
+symbol ligatures, named `[[profiles]]` (shell/args/cwd/env/tab color), a full settings view
+(Cmd+, - sidebar sections, searchable 193-scheme browser with live preview, live-apply +
+Save/Revert, unsaved-changes guard), always-on-top + unfocused opacity, action toasts,
+close-busy-tab confirmation, brand-color CLI badge chips, and settings sync to your own git
+repo (Push/Pull with your existing credentials).
 
 > **Note on M10:** originally scoped as a first-party chat agent; dropped in favor of
 > *awareness* (the CLIs' own UX is already supreme). `procwatch.rs` scans the process tree

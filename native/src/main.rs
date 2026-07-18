@@ -125,6 +125,12 @@ impl Stdusk {
 
         apply_theme(&cc.egui_ctx);
 
+        // Deterministic captures: skip egui's ~0.1s widget animations (scrollbar fade-in,
+        // toggle knobs) so the pass-2 screenshot shows the settled UI, not a mid-fade frame.
+        if screenshot.is_some() {
+            cc.egui_ctx.all_styles_mut(|s| s.animation_time = 0.0);
+        }
+
         // Global quake hotkey from config (default Ctrl+`). Carbon API on macOS - no
         // Accessibility grant needed.
         let mgr = GlobalHotKeyManager::new().expect("hotkey manager");

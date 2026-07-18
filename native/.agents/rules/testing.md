@@ -84,6 +84,36 @@ fn cmd_left_sends_line_start() {
 }
 ```
 
+## Headless egui end-to-end frames (interaction regressions)
+
+Some bugs live in egui's hit-test/focus plumbing, not in any pure helper - a drag sense
+swallowing clicks, an unfocused text field black-holing keys. The sanctioned way to
+regression-test those is driving REAL frames headless with `Context::run_ui`:
+
+```rust
+let ctx = egui::Context::default();
+let raw = egui::RawInput {
+    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+    events: vec![Event::PointerMoved(p)], // or PointerButton { .. }, Key { .. }
+    focused: true,
+    ..Default::default()
+};
+let _ = ctx.run_ui(raw, |ui| { /* rebuild the app's REAL widget structure */ });
+```
+
+Rules:
+
+- **Reproduce the app's actual structure** (panel + `draw_tab` + grid interact +
+  `collect_input`), not a simplification - hit-test bugs only reproduce with the real layering.
+- **Warm-up frame first** (empty events) so layout exists; read widget rects from the
+  responses, then aim synthetic pointer events at them.
+- **One frame per event step** (move, press, release) - egui decides click-vs-drag across
+  frames (`is_decidedly_dragging`).
+- **Assert on responses / collected bytes**, not pixels.
+
+Reference implementations: the tab click / drag-reorder / close-x and find-bar backspace
+tests in `src/ui.rs`, and `sections_render_headless` in `src/settings.rs`.
+
 ## Coverage bar
 
 Don't chase a percentage. Target **100% of parser/state-machine + config branches** and
@@ -97,4 +127,5 @@ uncovered `main.rs` draw code as expected, not debt.
 - [ ] Homogeneous cases are table-driven.
 - [ ] Chunk-boundary logic touched → the `proptest` split invariant covers it.
 - [ ] New UI math extracted to a pure fn in `ui.rs` and unit-tested.
+- [ ] Interaction/hit-test/focus bug → a headless `Context::run_ui` end-to-end test.
 - [ ] Full suite green; nothing removed to make it pass.

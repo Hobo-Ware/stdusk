@@ -39,7 +39,11 @@ Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk`
 - **Quake drop-down** - borderless, top-edge, global hotkey, hide-on-blur. There when you call, gone when you don't.
 - **Splits** - panes, drag to resize, a tiny live map of the layout drawn right on the tab.
 - **Scrollback search** - Cmd+F, with regex, case, and whole-word toggles.
-- **Supreme defaults** - truecolor, mouse selection and copy, cwd-aware new tabs, bracketed paste, OSC 52 clipboard, shell-integration exit signals, cursor styles, themes and opacity from a plain TOML.
+- **Command palette** - Cmd+Shift+P, fuzzy-searched, every action two keystrokes away.
+- **A real settings GUI** - Cmd+, opens a full settings view: browse 193 color schemes with live preview, tweak everything, watch it apply before you save.
+- **Profiles** - named launchers with their own shell, args, cwd, env, and tab color. One right-click away.
+- **Settings sync** - push your config to your own private git repo and pull it anywhere. Your credentials, your repo, no OAuth middleman.
+- **Supreme defaults** - truecolor, mouse selection and copy, cwd-aware new tabs, bracketed paste, OSC 52 clipboard, shell-integration exit signals, cursor styles, ligatures, session restore.
 
 ## The name
 
@@ -47,7 +51,7 @@ Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk`
 
 ## Configure
 
-Everything lives in `~/.config/stdusk/config.toml`. Missing file, sane defaults. See [`native/config.example.toml`](./native/config.example.toml) for the full set (theme, opacity, hotkey, cursor, bell, progress detection, CLI badges).
+Hit **Cmd+,** for the settings view, or edit `~/.config/stdusk/config.toml` by hand - same thing, the GUI just saves it for you. Missing file, sane defaults. See [`native/config.example.toml`](./native/config.example.toml) for the full set (theme, opacity, hotkey, cursor, bell, profiles, progress detection, CLI badges, sync).
 
 ## Build from source
 

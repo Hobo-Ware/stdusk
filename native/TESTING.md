@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through the supreme pass (0.2.0).
+Step-by-step verification for everything shipped through 0.2.4.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -115,3 +115,17 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | Change opacity / font size / toggles | Live-apply; footer Save persists to config.toml ("Saved" toast); Revert reloads the file and re-applies the theme ("Reverted" toast) |
 | About section | Version shown; Open config file / Open config folder rows work; "the machine speaks back" tagline |
 | `cargo run -- --screenshot-settings /tmp/s.png` | Renders the settings view (Color scheme section, one-half-dark pinned) and exits 0 |
+
+## 12. 0.2.3 / 0.2.4 additions
+| Step | Expect |
+|---|---|
+| `hide_on_focus_loss = false`, summon, click another app | stdusk stays visible ON TOP of the other app's windows (always-on-top) |
+| Also set `[quake] unfocused_opacity = 0.6`, focus another app | stdusk dims while unfocused; refocusing restores full opacity; with hide-on-blur back on the setting is moot (the window hides) |
+| Settings -> Appearance theme pickers (manual theme, or the light/dark pair under follow-system) | Each is a searchable dropdown; typing filters live; picking applies instantly |
+| Change any setting, then Close (gear / Esc / footer Close) | "Unsaved changes" modal: Save persists + closes, Discard reverts + closes, Keep editing stays in settings |
+| `sleep 100`, then Cmd+W (or the tab close-x / menu Close) | Close-busy-tab confirm naming the running command; Cancel keeps it; `warn_on_close_running = false` closes instantly |
+| Run `claude` in a tab | Compact brand-colored initial chip ("C") BEFORE the title; full name on hover; never overlaps the close-x |
+| Right-click tab -> Color, hover the swatches | The tab underline previews the hovered color live; hover-out reverts; click applies |
+| Settings -> Session -> Sync: set a (private!) repo, hit Push | Buttons disabled while the field is empty or a sync runs; Push saves first, then commits + pushes config.toml + custom schemes; session.toml + shell hooks are NOT in the repo |
+| On another machine (or after local edits), hit Pull | Repo settings overwrite local; theme + hotkey re-apply live, no restart |
+| `STDUSK_SHOT_SECTION=quake cargo run -- --screenshot-settings /tmp/s.png` | Renders that settings section instead of the scheme browser and exits 0 |

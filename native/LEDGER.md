@@ -49,7 +49,7 @@ cargo test             # unit + headless integration
 | M8 | Split panes (pane tree, focus, drag-resize, per-pane pty) | 🟡 code done, builds + 46 tests green, pending human verify |
 | M9 | Shell integration (OSC 133) + exit dot; bell; cursor styles | ✅ done: auto-injected shell hooks, bell flash, cursor styles (running/ok tab indicators later dropped as noise - see M10) |
 | M10 | Ambient CLI awareness (tab badges for claude/gemini/...) | 🟡 code done, builds + 60 tests green + clippy clean, badges screenshot-verified; live detection pending human verify |
-| M11 | Polish + settings GUI | todo |
+| M11 | Polish + settings GUI | ✅ done (0.2.1-0.2.4): full settings view, palette, profiles, sync |
 
 **M10 pivot (user):** the original M10 "first-party AI chat agent" was built then **dropped** -
 a chat panel duplicated the CLIs' own supreme UX and served no purpose. What the user actually
@@ -437,6 +437,22 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
 - **Tabby has ~zero tests** - reuse its *spec* (exact progress regex, OSC framing, config
   defaults from `tabby-terminal/src/config.ts`) as golden fixtures, plus xterm.js/esctest
   vectors. See PLAN §5.
+- **egui drag-only widgets black-hole clicks to widgets beneath them.** The hit test picks ONE
+  topmost widget per interaction; a drag-only interact layered above a clickable one returns
+  click:None for the whole stack (the 0.2.3 dead-tab regression). Anything that needs drag AND
+  click must be a single `click_and_drag` widget, with drags gated on
+  `pointer.is_decidedly_dragging()`. Rule in `.agents/rules/ui.md` §6.
+- **egui `Grid` blanks the pass-2 screenshot capture** - its first-pass sizing discard means
+  the harness's cumulative pass 2 catches an empty layout. Screenshot-verified views use
+  fixed-width label columns instead (see `settings.rs`).
+- **egui `Window`/`Area` never renders in the 2-frame screenshot harness; full panels do.**
+  Corollary: build substantial UI as a docked panel / central VIEW, not a floating window -
+  settings-as-view (0.2.2) beats the 0.2.1 floating settings window for verifiability.
+- **Cherry-picking parallel-agent work can silently drop hunks** in 3-way merges - verify each
+  rebuilt commit compiles AND its tests pass in a worktree before moving on (bit 0.2.1).
+- **Headless egui end-to-end tests** (`Context::run_ui` driving real frames) are the sanctioned
+  harness for interaction/hit-test/focus regressions - see the tab click/drag/close-x + find-bar
+  backspace tests in `src/ui.rs` and the pattern in `.agents/rules/testing.md`.
 
 ## Decisions log
 - Splits (M8) + scrollback search (M7) are v1 must-haves (user).
@@ -471,6 +487,51 @@ substitution - egui can't shape OpenType); named `[[profiles]]` (shell/args/cwd~
 resolution tested) launchable from tab menu / '+' right-click / palette; settings GUI on the
 gear (live-apply, Save serializes Config - round-trip tested). Gotcha: cherry-picking parallel
 work can silently drop hunks in 3-way merges - verify each rebuilt commit compiles in a worktree.
+
+## 0.2.2 - theme-derived widget visuals + Tabby-grade settings view
+`apply_theme` built every widget from egui's dark base, so light themes got dark controls with
+dark text (unreadable settings). Visuals now start from the matching light/dark base and derive
+all widget fills/strokes from the theme (elevated/hover/border/selection/accent). Appearance
+rows are honest: follow-system mode exposes light/dark pickers (the fixed theme is ignored
+there - the "dracula but light" confusion), manual mode exposes the theme picker. Settings is
+now a full central VIEW (`settings.rs`, like Tabby's settings tab): icon sidebar + pinned
+version, grouped content pane, footer with config path + Revert/Close/Save. The scheme browser
+searches all 193 schemes, renders each row on its own background with a 16-swatch palette
+strip, live terminal preview follows hover, click applies instantly (follow-system aware:
+writes the light or dark slot per the current OS appearance). `--screenshot-settings PATH`
+renders the whole view headless; verified dark AND light. Gotcha: egui `Grid`'s first-pass
+sizing discard blanks the pass-2 screenshot capture - fixed-width label columns instead.
+
+## 0.2.3 - tab/pty input regressions fixed + settings UX batch
+- **Regression A (all tab interactions dead)**: the drag-reorder overlay was a drag-only
+  interact registered ON TOP of each tab; egui's hit test returns click:None when the topmost
+  widget only senses drags, starving click/double-click/context-menu/close-x underneath. Fix:
+  the tab is ONE `click_and_drag` widget (stable tab-id), reorder gates on
+  `is_decidedly_dragging`. Headless `Context::run_ui` regression tests cover click,
+  drag-reorder, and close-x (`ui.rs`).
+- **Regression B (keys "not reaching the shell")**: an open-but-unfocused find bar black-holed
+  all terminal keys, and the 0.2.2 settings view made an open search invisible + undismissable
+  (Esc deadlock). Capture is now focus-aware (pure `pty_input_captured`, table-tested + a
+  headless end-to-end backspace test); opening settings dismisses the find bar.
+  Delete/Insert/Home/End/PageUp/Down now map to CSI.
+- **UX batch**: always-on-top when hide-on-blur is off + `quake.unfocused_opacity`; live hotkey
+  re-registration + live height/tray/dock-policy apply ("applies to new tabs" hints);
+  searchable theme dropdowns (all three slots); shortcut tooltips + Cmd+, opens settings;
+  action toasts (copied/pasted/theme/zoom/hotkey); live cursor-style preview; unsaved-changes
+  guard (Save/Discard/Keep editing); close-busy-tab confirm (`procwatch::busy_child`, opt-out
+  `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
+  structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
+
+## 0.2.4 - settings sync via git + polish
+`[sync] repo` (Settings > Session > Sync) points at your own (private) git repo; Push/Pull
+moves `~/.config/stdusk` (config.toml + custom schemes) with the SYSTEM git + your existing
+credentials - no OAuth, no stored tokens. The git command plan is pure and unit-tested
+(`sync.rs`: bootstrap/commit/push, fetch/hard-reset pull, tolerant steps); execution runs on a
+background thread reporting through a polled slot; Pull reloads + re-applies config live
+(theme, hotkey). session.toml + generated shell hooks are gitignored - they never leave the
+machine. Polish: tab Color menu previews the hovered swatch live on the tab;
+`colors::hover_elevated()` fixes invisible hover fills on elevated surfaces;
+`--screenshot-settings` can target any section via `STDUSK_SHOT_SECTION`. 135 tests green.
 
 ## Supreme pass (0.2.0) - Tabby-parity input/paste/render suite + session restore + themes
 Multi-agent pass: Tabby re-audit (exact paste/copy semantics extracted from
@@ -630,4 +691,5 @@ builder agent; implementation + integration here.
   quarantine); a signed bundle is a later polish item.
 - **Live-verify**: M5-M9 interactions, M10 CLI-badge detection against real claude/gemini/etc.
 - Backlog: M8 (pane reorder, broadcast input, pane zoom, aggregated tab progress), M7 all-match
-  highlight, egui_kittest harness for UI regressions, M11 settings GUI.
+  highlight. (Settings GUI shipped 0.2.1-0.2.2; the headless `run_ui` harness replaced the
+  egui_kittest idea.)

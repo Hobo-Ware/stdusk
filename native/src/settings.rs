@@ -262,16 +262,9 @@ fn row_new_tabs(ui: &mut egui::Ui, name: &str, desc: &str, control: impl FnOnce(
     row_full(ui, name, desc, "Applies to new tabs", control);
 }
 
-/// A fraction slider displayed as a percentage ("85%"). Returns true while being changed.
+/// A fraction slider displayed as a live percentage chip ("85%"). Returns true while changed.
 fn pct_slider(ui: &mut egui::Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
-    ui.add(
-        egui::Slider::new(value, range)
-            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-            .custom_parser(|s| {
-                s.trim().trim_end_matches('%').parse::<f64>().ok().map(|v| v / 100.0)
-            }),
-    )
-    .changed()
+    ui::slider(ui, value, range, |v| format!("{:.0}%", v * 100.0)).changed()
 }
 
 /// A link-style row (About section): icon + title + dim subtitle, whole row clickable.
@@ -501,8 +494,10 @@ fn scheme_row(ui: &mut egui::Ui, name: &str, t: &Theme, active: bool) -> egui::R
 // ---- searchable scheme dropdown (used by all three theme slots) ----
 
 /// A searchable scheme picker: a combo-style button showing the current value; clicking opens
-/// an overlay with a filter field + the full (virtualized) scheme list. Returns true when a
-/// scheme was picked into `value`. Only one dropdown is open at a time (`st.dropdown_open`).
+/// an overlay with a filter field + the full (virtualized) scheme list. Hovering a row hands
+/// the scheme to `st.hover_preview` so the section's preview card follows it. Returns true
+/// when a scheme was picked into `value`. Only one dropdown is open at a time
+/// (`st.dropdown_open`).
 fn scheme_dropdown(
     ui: &mut egui::Ui,
     st: &mut SettingsState,
@@ -571,7 +566,8 @@ fn scheme_dropdown(
                     shown.len(),
                     |ui, range| {
                         for i in range {
-                            let name = all[shown[i]].0.as_str();
+                            let (name, theme) = &all[shown[i]];
+                            let name = name.as_str();
                             let active = name == normalize_name(value);
                             let (rect, resp) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 24.0),
@@ -590,7 +586,13 @@ fn scheme_dropdown(
                                 egui::FontId::proportional(13.0),
                                 if active { colors::accent() } else { colors::fg() },
                             );
-                            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if resp.hovered() {
+                                // Live-preview the hovered scheme in the section's preview
+                                // card (same hover handoff as the scheme browser rows).
+                                st.hover_preview = Some(*theme);
+                            }
+                            if resp.clicked() {
                                 name.clone_into(value);
                                 picked = true;
                             }
@@ -615,16 +617,19 @@ fn scheme_dropdown(
 
 // ---- plain sections (pure config edits) ----
 
-/// Appearance aggregates EVERYTHING that changes how the terminal looks (theme, font, cursor,
-/// ligatures) so the single live preview card at the top reflects each control below it.
+/// Appearance aggregates EVERYTHING that changes how the terminal looks (theme, opacity,
+/// font, cursor, ligatures) so the single live preview card at the top reflects each control
+/// below it. The card also follows a scheme row hovered in an open theme dropdown.
 fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut SettingsState) {
     title(ui, "Appearance");
 
-    // One live preview for the whole section: resolved theme + font size + cursor + ligatures.
+    // One live preview for the whole section: resolved theme + font size + cursor + ligatures,
+    // overridden by the dropdown row hovered last frame (same handoff as the scheme browser).
     let system_light = matches!(ui.ctx().input(|i| i.raw.system_theme), Some(egui::Theme::Light));
     let resolved = resolved_theme_name(&cfg.appearance, system_light);
-    let theme = colors::by_name(&resolved);
+    let theme = st.hover_preview.unwrap_or_else(|| colors::by_name(&resolved));
     preview_card(ui, &theme, &preview_opts(cfg));
+    st.hover_preview = None;
     ui.add_space(14.0);
 
     subheading(ui, "Theme");
@@ -645,18 +650,49 @@ fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Sett
                 scheme_dropdown(ui, st, "theme_fixed", &mut a.theme);
             });
         }
+    });
+
+    subheading(ui, "Window");
+    let q = &mut cfg.quake;
+    rows(ui, |ui| {
         row(ui, "Opacity", "Window background transparency", |ui| {
             pct_slider(ui, &mut a.opacity, 0.4..=1.0);
         });
-        row(ui, "Font size", "", |ui| {
-            ui.add(egui::Slider::new(&mut a.font_size, 9.0..=24.0).fixed_decimals(0).suffix(" pt"));
-        });
+        row_full(
+            ui,
+            "Unfocused opacity",
+            "Dim the window while another app has focus",
+            "No effect while Hide on focus loss is on",
+            |ui| {
+                pct_slider(ui, &mut q.unfocused_opacity, 0.2..=1.0);
+            },
+        );
     });
 
-    subheading(ui, "Text & cursor");
+    subheading(ui, "Text");
     let t = &mut cfg.terminal;
     rows(ui, |ui| {
-        row(ui, "Cursor style", "", |ui| {
+        row(ui, "Font size", "", |ui| {
+            ui::slider(ui, &mut a.font_size, 9.0..=24.0, |v| format!("{v:.0} pt"));
+        });
+        row(ui, "Ligatures", "Draw common code sequences as single glyphs", |ui| {
+            ui::toggle_switch(ui, &mut t.ligatures);
+            ui.add_space(10.0);
+            lig_preview(ui, t.ligatures);
+        });
+        row_new_tabs(
+            ui,
+            "Bold in bright colors",
+            "Draw bold text with the bright ANSI palette",
+            |ui| {
+                ui::toggle_switch(ui, &mut t.bold_bright);
+            },
+        );
+    });
+
+    subheading(ui, "Cursor");
+    rows(ui, |ui| {
+        row(ui, "Cursor style", "Previewed live in the card above", |ui| {
             ui.horizontal(|ui| {
                 for (label, value) in
                     [("Block", "block"), ("Underline", "underline"), ("Beam", "beam")]
@@ -671,18 +707,19 @@ fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Sett
         row(ui, "Blink the cursor", "", |ui| {
             ui::toggle_switch(ui, &mut t.cursor_blink);
         });
-        row_new_tabs(
-            ui,
-            "Bold in bright colors",
-            "Draw bold text with the bright ANSI palette",
-            |ui| {
-                ui::toggle_switch(ui, &mut t.bold_bright);
-            },
-        );
-        row(ui, "Ligatures", "Draw -> => != >= <= as single glyphs", |ui| {
-            ui::toggle_switch(ui, &mut t.ligatures);
-        });
     });
+}
+
+/// Tiny live before/after for the Ligatures row: the raw sequences while off, the single
+/// glyphs while on - flips with the toggle next to it.
+fn lig_preview(ui: &mut egui::Ui, on: bool) {
+    const SAMPLE: &str = "-> => != >= <=";
+    let (text, color) = if on {
+        (ui::apply_ligatures(SAMPLE), colors::accent())
+    } else {
+        (SAMPLE.into(), colors::dim())
+    };
+    ui.label(egui::RichText::new(text).monospace().size(13.0).color(color));
 }
 
 fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
@@ -692,7 +729,7 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
     subheading(ui, "Behavior");
     rows(ui, |ui| {
         row_new_tabs(ui, "Scrollback lines", "History kept per pane", |ui| {
-            ui::int_field(ui, "scrollback", &mut t.scrollback_lines, 100..=1_000_000, 110.0);
+            ui::num_field(ui, "scrollback", &mut t.scrollback_lines, 100..=1_000_000, 1000, 110.0);
         });
         row_new_tabs(
             ui,
@@ -753,8 +790,8 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
         });
     });
 
-    // (Cursor style / blink / bold-bright / ligatures live in Appearance - one preview there
-    // covers them all.)
+    // (Cursor / ligatures / bold-bright / opacity live in Appearance - one preview there
+    // covers them all. Terminal is behavior only.)
 }
 
 /// Side effects the Quake section needs applied by the caller (which has `&mut Stdusk`).
@@ -767,6 +804,8 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     title(ui, "Quake");
     let q = &mut cfg.quake;
     let mut fx = QuakeFx { hotkey_commit: false, height_changed: false };
+
+    subheading(ui, "Window");
     rows(ui, |ui| {
         row(ui, "Global hotkey", "Applies when the field loses focus", |ui| {
             let r = ui::text_field(ui, &mut q.hotkey, "e.g. Ctrl+Grave, F13", 180.0, colors::fg());
@@ -777,14 +816,13 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
         row(ui, "Window height", "Fraction of the screen the window drops down", |ui| {
             fx.height_changed = pct_slider(ui, &mut q.height_pct, 0.2..=0.9);
         });
+    });
+
+    subheading(ui, "Focus & Dock");
+    rows(ui, |ui| {
         row(ui, "Hide on focus loss", "Hide when another app takes focus", |ui| {
             ui::toggle_switch(ui, &mut q.hide_on_focus_loss);
         });
-        if !q.hide_on_focus_loss {
-            row(ui, "Unfocused opacity", "Dim the window while another app has focus", |ui| {
-                pct_slider(ui, &mut q.unfocused_opacity, 0.2..=1.0);
-            });
-        }
         row(ui, "Hide from Dock", "Run as an accessory app (no Dock icon)", |ui| {
             ui::toggle_switch(ui, &mut q.hide_from_dock);
         });
@@ -1135,37 +1173,61 @@ impl Stdusk {
                 bottom: 10,
             }))
             .show(ui, |ui| {
+                // Thin always-visible scrollbars that ALLOCATE their lane (6px), so the bar
+                // can never overlay the content cards. (`solid()` reserves a lane too but its
+                // bar rect collapses under this panel's multi-pass sizing - thin() doesn't.)
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+                ui.spacing_mut().slider_width = 190.0;
                 // Cap the column width and ease it off the sidebar on wide windows (a hard-left
                 // column next to a quake-wide dead zone reads unbalanced).
-                let col_w = ui.available_width().min(CONTENT_MAX_W);
-                let pad = ((ui.available_width() - col_w) / 2.0).clamp(0.0, 120.0);
-                let full = ui.available_rect_before_wrap();
-                let col = egui::Rect::from_min_size(
-                    egui::pos2(full.left() + pad, full.top()),
-                    egui::vec2(col_w, full.height()),
-                );
-                let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(col));
-                let ui = &mut ui;
-                ui.spacing_mut().slider_width = 190.0;
+                let col = |ui: &egui::Ui| {
+                    let col_w = ui.available_width().min(CONTENT_MAX_W);
+                    let pad = ((ui.available_width() - col_w) / 2.0).clamp(0.0, 120.0);
+                    (col_w, pad)
+                };
                 match self.settings.section {
                     // The scheme browser manages its own scrolling (fixed head, scrolling list).
-                    Section::ColorScheme => self.scheme_section(ui, ctx),
+                    Section::ColorScheme => {
+                        let (col_w, pad) = col(ui);
+                        let full = ui.available_rect_before_wrap();
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(full.left() + pad, full.top()),
+                            egui::vec2(col_w, full.height()),
+                        );
+                        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                        self.scheme_section(&mut ui, ctx);
+                    }
                     section => {
+                        // The ScrollArea spans the FULL pane so its bar pins to the far right
+                        // edge; the readable column is laid out inside it.
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            ui.set_max_width(CONTENT_MAX_W.min(ui.available_width()));
-                            match section {
-                                Section::Appearance => {
-                                    appearance_section(ui, &mut self.cfg, &mut self.settings);
-                                }
-                                Section::Terminal => terminal_section(ui, &mut self.cfg),
-                                Section::Quake => quake_fx = Some(quake_section(ui, &mut self.cfg)),
-                                Section::Session => {
-                                    sync_op = session_section(ui, &mut self.cfg, self.sync_busy);
-                                }
-                                Section::About => about_section(ui),
-                                Section::ColorScheme => unreachable!(),
-                            }
-                            ui.add_space(16.0);
+                            let (col_w, pad) = col(ui);
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                ui.vertical(|ui| {
+                                    ui.set_max_width(col_w);
+                                    match section {
+                                        Section::Appearance => {
+                                            appearance_section(
+                                                ui,
+                                                &mut self.cfg,
+                                                &mut self.settings,
+                                            );
+                                        }
+                                        Section::Terminal => terminal_section(ui, &mut self.cfg),
+                                        Section::Quake => {
+                                            quake_fx = Some(quake_section(ui, &mut self.cfg));
+                                        }
+                                        Section::Session => {
+                                            sync_op =
+                                                session_section(ui, &mut self.cfg, self.sync_busy);
+                                        }
+                                        Section::About => about_section(ui),
+                                        Section::ColorScheme => unreachable!(),
+                                    }
+                                    ui.add_space(16.0);
+                                });
+                            });
                         });
                     }
                 }
