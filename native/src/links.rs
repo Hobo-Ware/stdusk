@@ -8,6 +8,7 @@ use regex::Regex;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LinkKind {
     Url,
+    Ip, // bare IPv4 literal (no scheme) - opened as http://<ip>
     Path,
 }
 
@@ -22,6 +23,13 @@ pub(crate) struct Link {
 fn url_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r#"(?i)\b(?:https?|ftp|file)://[^\s<>"'`|{}\^\[\]()]+"#).unwrap())
+}
+
+fn ip_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    // Bare IPv4 with optional port (Tabby's IPHandler). Octet ranges are not validated - a
+    // false-positive like 999.1.1.1 just opens a dead page.
+    R.get_or_init(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b").unwrap())
 }
 
 fn path_re() -> &'static Regex {
@@ -57,6 +65,10 @@ pub(crate) fn find_in_row(text: &str) -> Vec<Link> {
         let trimmed = m.as_str().trim_end_matches(TRAILING);
         push(col(m.start()), trimmed.chars().count(), LinkKind::Url, &mut taken);
     }
+    for m in ip_re().find_iter(text) {
+        let trimmed = m.as_str().trim_end_matches(TRAILING);
+        push(col(m.start()), trimmed.chars().count(), LinkKind::Ip, &mut taken);
+    }
     for m in path_re().find_iter(text) {
         let trimmed = m.as_str().trim_end_matches(TRAILING);
         push(col(m.start()), trimmed.chars().count(), LinkKind::Path, &mut taken);
@@ -70,6 +82,7 @@ pub(crate) fn find_in_row(text: &str) -> Vec<Link> {
 pub(crate) fn resolve_target(text: &str, kind: LinkKind, cwd: Option<&str>, home: &str) -> String {
     match kind {
         LinkKind::Url => text.to_owned(),
+        LinkKind::Ip => format!("http://{text}"),
         LinkKind::Path => {
             if text == "~" {
                 home.to_owned()
@@ -143,6 +156,20 @@ mod tests {
         let links = find_in_row("file:///etc/hosts");
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].kind, LinkKind::Url);
+    }
+
+    #[test]
+    fn finds_bare_ip_literals() {
+        assert_eq!(kinds("ping 192.168.1.10 now"), vec![(5, 12, LinkKind::Ip)]);
+        assert_eq!(
+            kinds("curl 10.0.0.1:8080/x"),
+            vec![(5, 13, LinkKind::Ip), (18, 2, LinkKind::Path)]
+        );
+        // An IP inside a full URL stays one URL match.
+        assert_eq!(find_in_row("http://10.0.0.1:8080/x").len(), 1);
+        assert_eq!(find_in_row("http://10.0.0.1:8080/x")[0].kind, LinkKind::Url);
+        // Version strings don't match (only 3 dots + digits do; 1.2.3 has 2 dots).
+        assert!(kinds("v1.2.3 released").is_empty());
     }
 
     #[test]
