@@ -9,7 +9,7 @@ use eframe::egui;
 
 use crate::colors::{self, Theme};
 use crate::ui::{self, icons};
-use crate::{Stdusk, config, themes};
+use crate::{Stdusk, config, sync, themes};
 
 /// Left nav width (outer, incl. margins).
 const NAV_W: f32 = 184.0;
@@ -342,14 +342,34 @@ fn nav_row(ui: &mut egui::Ui, section: Section, selected: bool) -> egui::Respons
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-// ---- color-scheme section drawing ----
+// ---- the fake-shell preview card (shared by Appearance and the scheme browser) ----
 
-/// The fake-shell preview card: `PREVIEW_LINES` painted on the scheme's own bg, plus a
-/// cursor block after the prompt.
-fn preview_card(ui: &mut egui::Ui, theme: &Theme) {
+/// What the preview card reflects beyond the theme - built from the live config so every
+/// appearance-affecting setting shows up in ONE place.
+pub(crate) struct PreviewOpts {
+    pub(crate) font_size: f32,
+    pub(crate) cursor: ui::CursorStyle,
+    pub(crate) blink: bool,
+    pub(crate) ligatures: bool,
+}
+
+/// Preview options straight from the live config.
+fn preview_opts(cfg: &config::Config) -> PreviewOpts {
+    PreviewOpts {
+        font_size: cfg.appearance.font_size,
+        cursor: ui::cursor_style(&cfg.terminal.cursor),
+        blink: cfg.terminal.cursor_blink,
+        ligatures: cfg.terminal.ligatures,
+    }
+}
+
+/// The fake-shell preview card: `PREVIEW_LINES` painted on the scheme's own bg at the
+/// configured font size, with the configured cursor (blinking on egui's clock when enabled)
+/// after the prompt and symbol ligatures applied when on.
+fn preview_card(ui: &mut egui::Ui, theme: &Theme, opts: &PreviewOpts) {
     let width = ui.available_width().min(CONTENT_MAX_W);
-    let font = egui::FontId::monospace(12.5);
-    let line_h = 19.0;
+    let font = egui::FontId::monospace(opts.font_size);
+    let line_h = (opts.font_size * 1.45).round();
     let pad = egui::vec2(16.0, 13.0);
     let height = PREVIEW_LINES.len() as f32 * line_h + pad.y * 2.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
@@ -366,7 +386,9 @@ fn preview_card(ui: &mut egui::Ui, theme: &Theme) {
         let y = rect.top() + pad.y + li as f32 * line_h;
         for run in *line {
             let color = ink_color(theme, run.ink);
-            let galley = painter.layout_no_wrap(run.text.to_owned(), font.clone(), color);
+            let text =
+                if opts.ligatures { ui::apply_ligatures(run.text) } else { run.text.to_owned() };
+            let galley = painter.layout_no_wrap(text, font.clone(), color);
             if let Some(bg) = run.bg {
                 let bg_rect = egui::Rect::from_min_size(
                     egui::pos2(x, y - 1.0),
@@ -379,15 +401,50 @@ fn preview_card(ui: &mut egui::Ui, theme: &Theme) {
             x += run_w;
         }
         if li == 0 {
-            // Cursor block right after the typed command.
-            painter.rect_filled(
-                egui::Rect::from_min_size(egui::pos2(x + 2.0, y), egui::vec2(7.0, 15.0)),
-                1.0,
-                theme.cursor,
-            );
+            // The configured cursor right after the typed command. Blink rides egui's clock
+            // (never std::time); keep repainting while visible so it ticks.
+            if opts.blink {
+                let time = ui.input(|i| i.time);
+                let next_flip = 0.53 - time.rem_euclid(0.53);
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(next_flip.max(0.01)));
+                if !ui::blink_on(time) {
+                    continue;
+                }
+            }
+            let (cw, ch) = (opts.font_size * 0.55, opts.font_size * 1.15);
+            let cpos = egui::pos2(x + 2.0, y);
+            match opts.cursor {
+                ui::CursorStyle::Beam => {
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)),
+                        0.0,
+                        theme.cursor,
+                    );
+                }
+                ui::CursorStyle::Underline => {
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(cpos.x, cpos.y + ch - 2.0),
+                            egui::vec2(cw, 2.0),
+                        ),
+                        0.0,
+                        theme.cursor,
+                    );
+                }
+                ui::CursorStyle::Block => {
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(cpos, egui::vec2(cw, ch)),
+                        1.0,
+                        theme.cursor,
+                    );
+                }
+            }
         }
     }
 }
+
+// ---- color-scheme section drawing ----
 
 /// One scheme row: name + a strip of the 16 ANSI swatches, drawn on the scheme's own bg so
 /// every row is its own live preview. Accent border marks the active scheme.
@@ -558,8 +615,19 @@ fn scheme_dropdown(
 
 // ---- plain sections (pure config edits) ----
 
+/// Appearance aggregates EVERYTHING that changes how the terminal looks (theme, font, cursor,
+/// ligatures) so the single live preview card at the top reflects each control below it.
 fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut SettingsState) {
     title(ui, "Appearance");
+
+    // One live preview for the whole section: resolved theme + font size + cursor + ligatures.
+    let system_light = matches!(ui.ctx().input(|i| i.raw.system_theme), Some(egui::Theme::Light));
+    let resolved = resolved_theme_name(&cfg.appearance, system_light);
+    let theme = colors::by_name(&resolved);
+    preview_card(ui, &theme, &preview_opts(cfg));
+    ui.add_space(14.0);
+
+    subheading(ui, "Theme");
     let a = &mut cfg.appearance;
     rows(ui, |ui| {
         row(ui, "Follow system appearance", "Switch themes with the macOS light/dark mode", |ui| {
@@ -584,6 +652,37 @@ fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Sett
             ui.add(egui::Slider::new(&mut a.font_size, 9.0..=24.0).fixed_decimals(0).suffix(" pt"));
         });
     });
+
+    subheading(ui, "Text & cursor");
+    let t = &mut cfg.terminal;
+    rows(ui, |ui| {
+        row(ui, "Cursor style", "", |ui| {
+            ui.horizontal(|ui| {
+                for (label, value) in
+                    [("Block", "block"), ("Underline", "underline"), ("Beam", "beam")]
+                {
+                    let selected = ui::cursor_style(&t.cursor) == ui::cursor_style(value);
+                    if ui::chip(ui, label, selected).clicked() {
+                        t.cursor = value.into();
+                    }
+                }
+            });
+        });
+        row(ui, "Blink the cursor", "", |ui| {
+            ui::toggle_switch(ui, &mut t.cursor_blink);
+        });
+        row_new_tabs(
+            ui,
+            "Bold in bright colors",
+            "Draw bold text with the bright ANSI palette",
+            |ui| {
+                ui::toggle_switch(ui, &mut t.bold_bright);
+            },
+        );
+        row(ui, "Ligatures", "Draw -> => != >= <= as single glyphs", |ui| {
+            ui::toggle_switch(ui, &mut t.ligatures);
+        });
+    });
 }
 
 fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
@@ -593,7 +692,7 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
     subheading(ui, "Behavior");
     rows(ui, |ui| {
         row_new_tabs(ui, "Scrollback lines", "History kept per pane", |ui| {
-            ui.add(egui::DragValue::new(&mut t.scrollback_lines).range(100..=1_000_000));
+            ui::int_field(ui, "scrollback", &mut t.scrollback_lines, 100..=1_000_000, 110.0);
         });
         row_new_tabs(
             ui,
@@ -654,75 +753,8 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
         });
     });
 
-    subheading(ui, "Rendering");
-    rows(ui, |ui| {
-        row(ui, "Cursor style", "", |ui| {
-            ui.horizontal(|ui| {
-                for (label, value) in
-                    [("Block", "block"), ("Underline", "underline"), ("Beam", "beam")]
-                {
-                    let selected = ui::cursor_style(&t.cursor) == ui::cursor_style(value);
-                    if ui::chip(ui, label, selected).clicked() {
-                        t.cursor = value.into();
-                    }
-                }
-                ui.add_space(6.0);
-                cursor_preview(ui, ui::cursor_style(&t.cursor), t.cursor_blink);
-            });
-        });
-        row(ui, "Blink the cursor", "", |ui| {
-            ui::toggle_switch(ui, &mut t.cursor_blink);
-        });
-        row_new_tabs(
-            ui,
-            "Bold in bright colors",
-            "Draw bold text with the bright ANSI palette",
-            |ui| {
-                ui::toggle_switch(ui, &mut t.bold_bright);
-            },
-        );
-        row(ui, "Ligatures", "Draw -> => != >= <= as single glyphs", |ui| {
-            ui::toggle_switch(ui, &mut t.ligatures);
-        });
-    });
-}
-
-/// Tiny live preview next to the cursor-style chips: a fake prompt with the selected cursor
-/// rendered (blinking when cursor_blink is on, on the same cadence as the real grid).
-fn cursor_preview(ui: &mut egui::Ui, style: ui::CursorStyle, blink: bool) {
-    let font = egui::FontId::monospace(12.5);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(96.0, 26.0), egui::Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, 7.0, colors::bg());
-    p.rect_stroke(rect, 7.0, egui::Stroke::new(1.0, colors::border()), egui::StrokeKind::Inside);
-    let text_pos = egui::pos2(rect.left() + 8.0, rect.center().y);
-    let galley = p.layout_no_wrap("~ $ ls".to_owned(), font, colors::fg());
-    let size = galley.size();
-    p.galley(egui::pos2(text_pos.x, text_pos.y - size.y / 2.0), galley, colors::fg());
-    // Blink on egui's clock (never std::time); keep repainting while visible so it ticks.
-    let time = ui.input(|i| i.time);
-    if blink {
-        let next_flip = 0.53 - time.rem_euclid(0.53);
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(next_flip.max(0.01)));
-        if !ui::blink_on(time) {
-            return;
-        }
-    }
-    let (cw, ch) = (7.0, size.y);
-    let cpos = egui::pos2(text_pos.x + size.x + 3.0, text_pos.y - ch / 2.0);
-    let cur = colors::cursor();
-    match style {
-        ui::CursorStyle::Beam => {
-            p.rect_filled(egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)), 0.0, cur);
-        }
-        ui::CursorStyle::Underline => {
-            let u = egui::pos2(cpos.x, cpos.y + ch - 2.0);
-            p.rect_filled(egui::Rect::from_min_size(u, egui::vec2(cw, 2.0)), 0.0, cur);
-        }
-        ui::CursorStyle::Block => {
-            p.rect_filled(egui::Rect::from_min_size(cpos, egui::vec2(cw, ch)), 0.0, cur);
-        }
-    }
+    // (Cursor style / blink / bold-bright / ligatures live in Appearance - one preview there
+    // covers them all.)
 }
 
 /// Side effects the Quake section needs applied by the caller (which has `&mut Stdusk`).
@@ -766,7 +798,8 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     fx
 }
 
-fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
+/// Session + settings-sync. Returns the sync operation to start, if a button was clicked.
+fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> Option<sync::Op> {
     title(ui, "Session");
     rows(ui, |ui| {
         row(
@@ -778,6 +811,45 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
             },
         );
     });
+
+    subheading(ui, "Sync");
+    let mut op = None;
+    rows(ui, |ui| {
+        row_full(
+            ui,
+            "Sync repo",
+            "Git remote for config.toml + custom schemes",
+            "Keep it private - e.g. gh repo create stdusk-settings --private",
+            |ui| {
+                ui::text_field(
+                    ui,
+                    &mut cfg.sync.repo,
+                    "git@github.com:you/stdusk-settings.git",
+                    300.0,
+                    colors::fg(),
+                );
+            },
+        );
+        row(ui, "Sync now", "Uses your own git credentials (SSH key / helper)", |ui| {
+            ui.add_enabled_ui(!busy && !cfg.sync.repo.trim().is_empty(), |ui| {
+                ui.horizontal(|ui| {
+                    if ui::action_button(ui, "Push", true).clicked() {
+                        op = Some(sync::Op::Push);
+                    }
+                    if ui::action_button(ui, "Pull", false)
+                        .on_hover_text("Overwrites local settings with the repo's")
+                        .clicked()
+                    {
+                        op = Some(sync::Op::Pull);
+                    }
+                    if busy {
+                        ui.label(egui::RichText::new("syncing…").color(colors::dim()));
+                    }
+                });
+            });
+        });
+    });
+    op
 }
 
 fn about_section(ui: &mut egui::Ui) {
@@ -882,7 +954,11 @@ impl Stdusk {
             .iter()
             .find(|(n, _)| *n == active)
             .map_or_else(|| colors::by_name(&self.theme_name), |(_, t)| *t);
-        preview_card(ui, &self.settings.hover_preview.unwrap_or(active_theme));
+        preview_card(
+            ui,
+            &self.settings.hover_preview.unwrap_or(active_theme),
+            &preview_opts(&self.cfg),
+        );
         ui.add_space(12.0);
 
         ui.horizontal(|ui| {
@@ -946,13 +1022,19 @@ impl Stdusk {
         }
     }
 
-    /// Re-resolve + re-apply the active theme from `self.cfg` (after Revert / Discard).
-    fn reapply_appearance(&mut self, ctx: &egui::Context) {
+    /// Re-resolve + re-apply the active theme from `self.cfg` (after Revert / Discard / a
+    /// settings-sync pull).
+    pub(crate) fn reapply_appearance(&mut self, ctx: &egui::Context) {
         let system_light = matches!(ctx.input(|i| i.raw.system_theme), Some(egui::Theme::Light));
         let want = resolved_theme_name(&self.cfg.appearance, system_light);
         colors::set(colors::by_name(&want));
         ui::apply_theme(ctx);
         self.theme_name = want;
+    }
+
+    /// Reset the unsaved-changes baseline to the current config (after an external reload).
+    pub(crate) fn rebaseline_settings(&mut self) {
+        self.settings.baseline = Some(self.cfg.clone());
     }
 
     /// Sticky footer: Save / Close / Revert, right-aligned. Returns true when Close was hit.
@@ -992,6 +1074,7 @@ impl Stdusk {
         let field_focused = ctx.memory(|m| m.focused().is_some());
         let dropdown_was_open = self.settings.dropdown_open.is_some();
         let mut quake_fx: Option<QuakeFx> = None;
+        let mut sync_op: Option<sync::Op> = None;
 
         let nav = egui::Panel::left("settings_nav")
             .exact_size(NAV_W)
@@ -1076,7 +1159,9 @@ impl Stdusk {
                                 }
                                 Section::Terminal => terminal_section(ui, &mut self.cfg),
                                 Section::Quake => quake_fx = Some(quake_section(ui, &mut self.cfg)),
-                                Section::Session => session_section(ui, &mut self.cfg),
+                                Section::Session => {
+                                    sync_op = session_section(ui, &mut self.cfg, self.sync_busy);
+                                }
                                 Section::About => about_section(ui),
                                 Section::ColorScheme => unreachable!(),
                             }
@@ -1095,6 +1180,15 @@ impl Stdusk {
             if fx.height_changed && self.screenshot.is_none() && self.visible {
                 crate::apply_visibility(ctx, true, self.cfg.quake.height_pct);
             }
+        }
+
+        // Kick off a settings push/pull; a push saves first so the repo gets what you see.
+        if let Some(op) = sync_op {
+            if op == sync::Op::Push {
+                self.save_settings(ctx);
+            }
+            self.sync_busy = true;
+            sync::spawn(op, self.cfg.sync.repo.trim().to_owned(), &self.sync_slot, ctx.clone());
         }
 
         // Esc closes - but not while a hard modal (rename/paste/close/palette) or the find bar

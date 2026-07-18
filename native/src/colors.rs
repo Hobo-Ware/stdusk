@@ -156,6 +156,11 @@ pub(crate) fn hover() -> Color32 {
     let e = elevated();
     Color32::from_rgba_unmultiplied(e.r(), e.g(), e.b(), 160)
 }
+/// Hover fill for rows on the `elevated` menu/popup surface. `hover()` is elevated-at-alpha,
+/// which disappears when painted OVER elevated - this is one visible step further instead.
+pub(crate) fn hover_elevated() -> Color32 {
+    shade(theme().bg, if is_dark() { 1.75 } else { 0.84 })
+}
 /// Translucent fill painted over selected cells.
 pub(crate) fn selection() -> Color32 {
     let a = accent();

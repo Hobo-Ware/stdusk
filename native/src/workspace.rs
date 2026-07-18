@@ -29,12 +29,12 @@ fn pane_menu(
 ) {
     style_menu(ui);
     ui.add_enabled_ui(has_selection, |ui| {
-        if ui.button("Copy").clicked() {
+        if ui::menu_item(ui, "Copy", "Cmd+C").clicked() {
             *action = Some(PaneAction::Copy(path.to_vec()));
         }
     });
     ui.add_enabled_ui(cwd.is_some(), |ui| {
-        if ui.button("Copy current path").clicked() {
+        if ui::menu_item(ui, "Copy current path", "").clicked() {
             *action = Some(PaneAction::CopyPath(path.to_vec()));
         }
     });
@@ -42,24 +42,24 @@ fn pane_menu(
     ui.menu_button("Split", |ui| {
         use pane::SplitDir::{Column, Row};
         style_menu(ui);
-        if ui.button("Right").clicked() {
+        if ui::menu_item(ui, "Right", "Cmd+D").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Row, false));
         }
-        if ui.button("Down").clicked() {
+        if ui::menu_item(ui, "Down", "Cmd+Shift+D").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Column, false));
         }
-        if ui.button("Left").clicked() {
+        if ui::menu_item(ui, "Left", "").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Row, true));
         }
-        if ui.button("Up").clicked() {
+        if ui::menu_item(ui, "Up", "").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Column, true));
         }
     });
     ui.separator();
-    if ui.button("New tab").clicked() {
+    if ui::menu_item(ui, "New tab", "Cmd+T").clicked() {
         *action = Some(PaneAction::NewTab);
     }
-    if ui.button("Close pane").clicked() {
+    if ui::menu_item(ui, "Close pane", "Cmd+W").clicked() {
         *action = Some(PaneAction::Close(path.to_vec()));
     }
 }

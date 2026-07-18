@@ -22,6 +22,7 @@ mod search;
 mod session;
 mod settings;
 mod shell;
+mod sync;
 mod tabs;
 mod terminal;
 mod themes;
@@ -59,16 +60,19 @@ struct Stdusk {
     pending_close: Option<(u64, String)>, // close-tab confirm: (tab id, running process name)
     window_top: Option<bool>, // last-applied always-on-top state (re-applied when it changes)
     fx_opacity: f32, // this frame's effective window opacity (unfocused dim applied); derived
+    color_preview: Option<(u64, Option<egui::Color32>)>, // Color-menu swatch hover preview (tab id, color)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
-    flash: f64,      // bell visual-flash expiry (egui time); 0 = none
-    zoom: f32,       // font-size multiplier (Cmd +/-/0)
-    theme_name: String, // currently-applied theme (to detect OS light/dark changes)
-    sys: sysinfo::System, // process table for CLI-awareness scans
-    next_cli_scan: f64, // egui time of the next throttled procwatch scan
-    next_session_save: f64, // egui time of the next throttled session persist
+    flash: f64,                   // bell visual-flash expiry (egui time); 0 = none
+    zoom: f32,                    // font-size multiplier (Cmd +/-/0)
+    theme_name: String,           // currently-applied theme (to detect OS light/dark changes)
+    sys: sysinfo::System,         // process table for CLI-awareness scans
+    next_cli_scan: f64,           // egui time of the next throttled procwatch scan
+    next_session_save: f64,       // egui time of the next throttled session persist
     last_session: session::SavedSession, // last persisted session (skip identical writes)
-    tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
-    screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
+    tray: Option<tray::Tray>,     // menu-bar status item (kept alive; Some when enabled)
+    sync_slot: sync::SyncSlot,    // settings-sync worker result, polled each frame
+    sync_busy: bool,              // a sync push/pull is in flight (buttons disabled)
+    screenshot: Option<String>,   // --screenshot PATH: demo tabs, capture, exit
 }
 
 impl Stdusk {
@@ -187,10 +191,19 @@ impl Stdusk {
         let tray = (cfg.quake.menu_bar_icon && screenshot.is_none()).then(tray::build).flatten();
         let theme_name = cfg.appearance.theme.clone();
 
-        // --screenshot-settings: open the settings view on the scheme browser (the money shot).
+        // --screenshot-settings: open the settings view on the scheme browser (the money shot)
+        // or, via STDUSK_SHOT_SECTION, any other section (visual checks of the whole view).
         let mut settings = settings::SettingsState::new();
         if settings_shot {
-            settings.open_section(settings::Section::ColorScheme);
+            let section = match std::env::var("STDUSK_SHOT_SECTION").as_deref() {
+                Ok("appearance") => settings::Section::Appearance,
+                Ok("terminal") => settings::Section::Terminal,
+                Ok("quake") => settings::Section::Quake,
+                Ok("session") => settings::Section::Session,
+                Ok("about") => settings::Section::About,
+                _ => settings::Section::ColorScheme,
+            };
+            settings.open_section(section);
         }
 
         let registered_hotkey = cfg.quake.hotkey.clone();
@@ -218,6 +231,7 @@ impl Stdusk {
             pending_close: None,
             window_top: None,
             fx_opacity,
+            color_preview: None,
             toast: None,
             flash: 0.0,
             zoom: 1.0,
@@ -227,6 +241,8 @@ impl Stdusk {
             next_session_save: 0.0,
             last_session: session::SavedSession::default(),
             tray,
+            sync_slot: sync::SyncSlot::default(),
+            sync_busy: false,
             screenshot,
         }
     }
@@ -406,6 +422,33 @@ impl eframe::App for Stdusk {
                 ctx.request_repaint_after(std::time::Duration::from_millis(120));
             }
             self.sync_dock();
+        }
+
+        // Settings-sync worker finished: toast the outcome; a successful pull replaced the
+        // config file, so reload + re-apply it (same path as the footer Revert).
+        let sync_done = self.sync_slot.lock().unwrap().take();
+        if let Some((op, res)) = sync_done {
+            self.sync_busy = false;
+            let now = ctx.input(|i| i.time);
+            match (op, res) {
+                (sync::Op::Push, Ok(())) => {
+                    self.toast = Some(("Settings pushed".into(), now + 1.8));
+                }
+                (sync::Op::Pull, Ok(())) => {
+                    self.cfg = Config::load();
+                    self.reapply_appearance(&ctx);
+                    self.reregister_hotkey();
+                    if self.settings_open {
+                        self.rebaseline_settings();
+                    }
+                    self.toast = Some(("Settings pulled".into(), now + 1.8));
+                }
+                (_, Err(e)) => {
+                    let (mut msg, _) = ui::ellipsize(&format!("Sync failed: {e}"), 90);
+                    msg = msg.replace('\n', " ");
+                    self.toast = Some((msg, now + 3.0));
+                }
+            }
         }
 
         // Screenshot harness: keep repainting so eframe's built-in capture (triggered by

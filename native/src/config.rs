@@ -12,7 +12,16 @@ pub(crate) struct Config {
     pub(crate) quake: Quake,
     pub(crate) terminal: Terminal,
     pub(crate) session: Session,
+    pub(crate) sync: Sync,
     pub(crate) profiles: Vec<Profile>,
+}
+
+/// Settings sync: a git repo (ideally a private GitHub repo) that config.toml + custom
+/// schemes are pushed to / pulled from using the user's own git credentials.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub(crate) struct Sync {
+    pub(crate) repo: String, // e.g. "git@github.com:you/stdusk-settings.git"; empty = off
 }
 
 /// A named launch profile (Tabby-style): per-tab shell/args/cwd/env overrides.

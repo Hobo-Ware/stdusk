@@ -122,22 +122,25 @@ fn drag_swap_target(rects: &[egui::Rect], from: usize, pointer_x: f32) -> Option
 /// submenu and the "+" button's right-click menu.
 fn profile_menu_rows(ui: &mut egui::Ui, profiles: &[Profile], action: &mut Option<TabAction>) {
     for (pi, p) in profiles.iter().enumerate() {
-        if ui.button(&p.name).clicked() {
+        if ui::menu_item(ui, &p.name, "").clicked() {
             *action = Some(TabAction::NewWithProfile(pi));
         }
     }
 }
 
 /// Right-click tab context menu. Sets `action`; egui auto-closes the menu on any button click.
+/// Hovering a color swatch (or "No color") previews it on the tab via `color_preview`.
 fn tab_menu(
     ui: &mut egui::Ui,
     i: usize,
+    tab_id: u64,
     current: Option<egui::Color32>,
     profiles: &[Profile],
     action: &mut Option<TabAction>,
+    color_preview: &mut Option<(u64, Option<egui::Color32>)>,
 ) {
     style_menu(ui);
-    if ui.button("New tab").clicked() {
+    if ui::menu_item(ui, "New tab", "Cmd+T").clicked() {
         *action = Some(TabAction::New);
     }
     if !profiles.is_empty() {
@@ -146,29 +149,38 @@ fn tab_menu(
             profile_menu_rows(ui, profiles, action);
         });
     }
-    if ui.button("Duplicate").clicked() {
+    if ui::menu_item(ui, "Duplicate", "").clicked() {
         *action = Some(TabAction::Duplicate(i));
     }
-    if ui.button("Rename…").clicked() {
+    if ui::menu_item(ui, "Rename…", "double-click").clicked() {
         *action = Some(TabAction::Rename(i));
     }
-    if ui.button("Restart").clicked() {
+    if ui::menu_item(ui, "Restart", "").clicked() {
         *action = Some(TabAction::Restart(i));
     }
     ui.menu_button("Color", |ui| {
         // Snug width for the swatch grid (style_menu's 210 leaves dead space here).
         ui.spacing_mut().button_padding = egui::vec2(12.0, 7.0);
         ui.set_min_width(168.0);
-        if ui.button("No color").clicked() {
+        let none = ui.button("No color");
+        if none.hovered() {
+            *color_preview = Some((tab_id, None));
+        }
+        if none.clicked() {
             *action = Some(TabAction::SetColor(i, None));
         }
         ui.add_space(4.0);
-        // Filled-circle swatches, 2 rows of 6; the current color gets a ring.
+        // Filled-circle swatches, 2 rows of 6; the current color gets a ring. Hovering one
+        // previews it live on the tab's underline before committing.
         for row in colors::tab_colors().chunks(6) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for &col in row {
-                    if color_swatch(ui, col, current == Some(col)).clicked() {
+                    let sw = color_swatch(ui, col, current == Some(col));
+                    if sw.hovered() {
+                        *color_preview = Some((tab_id, Some(col)));
+                    }
+                    if sw.clicked() {
                         *action = Some(TabAction::SetColor(i, Some(col)));
                     }
                 }
@@ -176,23 +188,23 @@ fn tab_menu(
         }
     });
     ui.separator();
-    if ui.button("Move left").clicked() {
+    if ui::menu_item(ui, "Move left", "Cmd+Shift+←").clicked() {
         *action = Some(TabAction::MoveLeft(i));
     }
-    if ui.button("Move right").clicked() {
+    if ui::menu_item(ui, "Move right", "Cmd+Shift+→").clicked() {
         *action = Some(TabAction::MoveRight(i));
     }
     ui.separator();
-    if ui.button("Close").clicked() {
+    if ui::menu_item(ui, "Close", "Cmd+W").clicked() {
         *action = Some(TabAction::Close(i));
     }
-    if ui.button("Close other tabs").clicked() {
+    if ui::menu_item(ui, "Close other tabs", "").clicked() {
         *action = Some(TabAction::CloseOthers(i));
     }
-    if ui.button("Close tabs to the right").clicked() {
+    if ui::menu_item(ui, "Close tabs to the right", "").clicked() {
         *action = Some(TabAction::CloseRight(i));
     }
-    if ui.button("Close tabs to the left").clicked() {
+    if ui::menu_item(ui, "Close tabs to the left", "").clicked() {
         *action = Some(TabAction::CloseLeft(i));
     }
 }
@@ -400,6 +412,8 @@ impl Stdusk {
         let opacity = self.fx_opacity;
         let mut clicked: Option<usize> = None;
         let mut action: Option<TabAction> = None;
+        // Rebuilt every frame from the Color menu's hovered swatch (None once the hover ends).
+        let mut color_preview: Option<(u64, Option<egui::Color32>)> = None;
         let bar = egui::Panel::top("tabbar")
             .frame(
                 egui::Frame::new()
@@ -407,7 +421,9 @@ impl Stdusk {
                     // separately from the terminal body.
                     .fill(tint(colors::titlebar(), opacity))
                     .corner_radius(egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
-                    .inner_margin(egui::Margin::symmetric(8, 6)),
+                    // No bottom margin: tabs sit flush against the terminal area (Tabby-style)
+                    // instead of floating above a strip of dead bar.
+                    .inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 1 }),
             )
             .show(ui, |ui| {
                 // ONE left-to-right, center-aligned row for every control (tabs + icons). Nesting
@@ -421,8 +437,15 @@ impl Stdusk {
                     // whose drag response is active + the pointer x, plus every tab's rect.
                     let mut rects: Vec<egui::Rect> = Vec::with_capacity(self.tabs.len());
                     let mut drag: Option<(usize, f32)> = None;
+                    // Color-menu hover preview: last frame's hovered swatch tints the tab now;
+                    // this frame's hover is collected for the next (immediate-mode handoff).
+                    let prev_preview = self.color_preview;
                     for (i, tab) in self.tabs.iter().enumerate() {
                         let active = i == self.active;
+                        let shown_color = match prev_preview {
+                            Some((id, c)) if id == tab.id => c,
+                            _ => tab.color,
+                        };
                         // ONE response senses click AND drag: activate, double-click rename,
                         // context menu, and drag-reorder all live on the same widget. A separate
                         // drag-only interact layered on top made egui 0.35 drop the click hit
@@ -434,7 +457,7 @@ impl Stdusk {
                             tab.id,
                             &tab.title,
                             active,
-                            tab.color,
+                            shown_color,
                             tab.focused_term().progress(),
                             tab.focused_term().cmd_state(),
                             &tab.root().miniature(),
@@ -448,6 +471,7 @@ impl Stdusk {
                             clicked = Some(i);
                         }
                         let tab_color = tab.color;
+                        let tab_id = tab.id;
                         // Gate reorder on egui's decided-drag threshold so a plain click (or a
                         // sloppy click) never reorders.
                         if resp.dragged()
@@ -458,7 +482,15 @@ impl Stdusk {
                         }
                         rects.push(resp.rect);
                         resp.context_menu(|ui| {
-                            tab_menu(ui, i, tab_color, &self.cfg.profiles, &mut action);
+                            tab_menu(
+                                ui,
+                                i,
+                                tab_id,
+                                tab_color,
+                                &self.cfg.profiles,
+                                &mut action,
+                                &mut color_preview,
+                            );
                         });
                     }
                     // Apply the drag AFTER the loop (deferred, like every other TabAction):
@@ -502,12 +534,14 @@ impl Stdusk {
                     egui::Popup::menu(&mgr).show(|ui| {
                         style_menu(ui);
                         for (i, tab) in self.tabs.iter().enumerate() {
-                            if ui.button(format!("{}   {}", i + 1, tab.title)).clicked() {
+                            let shortcut =
+                                if i < 9 { format!("Cmd+{}", i + 1) } else { String::new() };
+                            if ui::menu_item(ui, &tab.title, &shortcut).clicked() {
                                 clicked = Some(i);
                             }
                         }
                         ui.separator();
-                        if ui.button("Command palette…   Cmd+Shift+P").clicked() {
+                        if ui::menu_item(ui, "Command palette…", "Cmd+Shift+P").clicked() {
                             action = Some(TabAction::OpenPalette);
                         }
                     });
@@ -529,6 +563,7 @@ impl Stdusk {
             br.bottom() - 0.5,
             egui::Stroke::new(1.0, colors::border()),
         );
+        self.color_preview = color_preview;
         (clicked, action)
     }
 

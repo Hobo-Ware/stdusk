@@ -294,6 +294,16 @@ pub(crate) fn ligature_spans(row: &[char]) -> Vec<(usize, usize, char)> {
     out
 }
 
+/// Replace every ligature sequence in `s` with its single glyph (settings preview text; the
+/// grid uses `ligature_spans` per-cell). Table order is longest-first so "..." wins over "..".
+pub(crate) fn apply_ligatures(s: &str) -> String {
+    let mut out = s.to_owned();
+    for (pat, glyph) in LIGATURES {
+        out = out.replace(pat, &glyph.to_string());
+    }
+    out
+}
+
 /// Tabby's trim rule for the NON-warned paste path: trim the end always; trim the start only when
 /// the (already-trimmed) paste is single-line. The multiline-warning modal path skips this.
 pub(crate) fn trim_paste(s: &str, trim: bool) -> String {
@@ -358,7 +368,9 @@ pub(crate) fn apply_theme(ctx: &egui::Context) {
     v.selection.stroke = egui::Stroke::new(1.0, colors::accent());
     v.hyperlink_color = colors::accent();
     let base = colors::elevated();
-    let strong = colors::hover();
+    // Hover/active fills must be a real step past `elevated` - menus/popups draw ON elevated,
+    // so `hover()` (elevated at partial alpha) gave menu rows no visible hover feedback.
+    let strong = colors::hover_elevated();
     for (w, fill) in [
         (&mut v.widgets.noninteractive, colors::bg()),
         (&mut v.widgets.inactive, base),
@@ -436,6 +448,38 @@ pub(crate) fn text_field(
     )
 }
 
+/// Clamped integer parse for `int_field`: digits only, empty -> None, clamped into range.
+pub(crate) fn parse_int_clamped(s: &str, min: usize, max: usize) -> Option<usize> {
+    let digits: String = s.chars().filter(char::is_ascii_digit).collect();
+    digits.parse::<usize>().ok().map(|v| v.clamp(min, max))
+}
+
+/// The standard integer input: a `text_field` bound to a `usize` (digits only, clamped into
+/// `range` as you type; the shown text snaps to the real value on blur). Matches the rest of
+/// the inputs visually - never use a raw `DragValue` in settings rows.
+pub(crate) fn int_field(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    value: &mut usize,
+    range: std::ops::RangeInclusive<usize>,
+    width: f32,
+) -> egui::Response {
+    let id = ui.make_persistent_id(("int_field", id_salt));
+    let mut buf = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.to_string());
+    let r = text_field(ui, &mut buf, "", width, colors::fg());
+    if r.changed()
+        && let Some(v) = parse_int_clamped(&buf, *range.start(), *range.end())
+    {
+        *value = v;
+    }
+    if !r.has_focus() {
+        // Not being edited: track the real value (covers Revert/Discard and out-of-range text).
+        buf = value.to_string();
+    }
+    ui.data_mut(|d| d.insert_temp(id, buf));
+    r
+}
+
 /// The standard action button (dialog OK/Cancel etc.): consistent padding; `primary` fills with
 /// the accent so the default action stands out. Returns the Response.
 pub(crate) fn action_button(ui: &mut egui::Ui, label: &str, primary: bool) -> egui::Response {
@@ -455,6 +499,17 @@ pub(crate) fn style_menu(ui: &mut egui::Ui) {
     let s = ui.spacing_mut();
     s.button_padding = egui::vec2(12.0, 7.0);
     s.item_spacing.y = 3.0;
+}
+
+/// The standard context-menu row: label left, dim keyboard shortcut right (pass "" for none),
+/// stretched to the menu width so shortcuts align. Use for every plain menu row (submenu
+/// triggers stay `ui.menu_button`).
+pub(crate) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> egui::Response {
+    let mut btn = egui::Button::new(label).min_size(egui::vec2(ui.available_width(), 0.0));
+    if !shortcut.is_empty() {
+        btn = btn.shortcut_text(egui::RichText::new(shortcut).size(11.5).color(colors::dim()));
+    }
+    ui.add(btn)
 }
 
 /// A Tabby-style on/off switch: sliding knob on an accent-filled pill while on. The standard
@@ -683,13 +738,12 @@ pub(crate) fn draw_tab(
                 if layout.len() > 1 {
                     draw_mini_layout(ui, layout, active);
                 }
-                // CLI chip leads the title (the trailing edge belongs to the close-x).
-                if let Some(cli) = cli {
-                    draw_cli_chip(ui, cli);
-                }
                 let lbl = ui.add(egui::Label::new(rt).selectable(false));
                 if truncated {
                     lbl.on_hover_text(title);
+                }
+                if let Some(cli) = cli {
+                    draw_cli_chip(ui, cli);
                 }
             });
         });
@@ -1255,6 +1309,23 @@ mod tests {
     }
 
     #[test]
+    fn apply_ligatures_replaces_sequences() {
+        assert_eq!(apply_ligatures("a -> b => c"), "a \u{2192} b \u{21d2} c");
+        assert_eq!(apply_ligatures("x... != y"), "x\u{2026} \u{2260} y");
+        assert_eq!(apply_ligatures("plain"), "plain"); // untouched
+    }
+
+    #[test]
+    fn int_parse_clamps_and_rejects_junk() {
+        assert_eq!(parse_int_clamped("25000", 100, 1_000_000), Some(25000));
+        assert_eq!(parse_int_clamped("5", 100, 1_000_000), Some(100)); // below min
+        assert_eq!(parse_int_clamped("99999999", 100, 1_000_000), Some(1_000_000)); // above max
+        assert_eq!(parse_int_clamped("12a34", 100, 1_000_000), Some(1234)); // digits only
+        assert_eq!(parse_int_clamped("", 100, 1_000_000), None);
+        assert_eq!(parse_int_clamped("abc", 100, 1_000_000), None);
+    }
+
+    #[test]
     fn nav_and_edit_keys_map_to_csi() {
         let none = Modifiers::default();
         assert_eq!(key_to_bytes(Key::Delete, none, false), Some(b"\x1b[3~".to_vec()));
@@ -1381,6 +1452,13 @@ mod tests {
             pressed,
             modifiers: Modifiers::default(),
         }
+    }
+
+    #[test]
+    fn debug_geometry_dump() {
+        let ctx = egui::Context::default();
+        let out = tab_frame(&ctx, vec![]);
+        println!("tab rects: {:?}", out.rects);
     }
 
     #[test]
