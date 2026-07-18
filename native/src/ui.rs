@@ -212,6 +212,37 @@ pub(crate) fn normalize_paste(input: &str, newlines_to_spaces: bool) -> String {
     }
 }
 
+/// Symbol "ligatures": common code sequences drawn as one Unicode glyph spanning their cells.
+/// Visual only - the grid, selection, and copy all keep the real characters. (True OpenType
+/// ligatures need text shaping, which egui doesn't do.) Longest match wins; conservative table
+/// so glyph coverage is safe in the bundled fonts.
+const LIGATURES: &[(&str, char)] = &[
+    ("...", '\u{2026}'), // …
+    ("->", '\u{2192}'),  // →
+    ("=>", '\u{21d2}'),  // ⇒
+    ("!=", '\u{2260}'),  // ≠
+    (">=", '\u{2265}'),  // ≥
+    ("<=", '\u{2264}'),  // ≤
+];
+
+/// Find ligature spans in one row: `(start col, char len, glyph)`, non-overlapping, longest-first.
+pub(crate) fn ligature_spans(row: &[char]) -> Vec<(usize, usize, char)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    'outer: while i < row.len() {
+        for (pat, glyph) in LIGATURES {
+            let pl = pat.chars().count();
+            if i + pl <= row.len() && row[i..i + pl].iter().copied().eq(pat.chars()) {
+                out.push((i, pl, *glyph));
+                i += pl;
+                continue 'outer;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Tabby's trim rule for the NON-warned paste path: trim the end always; trim the start only when
 /// the (already-trimmed) paste is single-line. The multiline-warning modal path skips this.
 pub(crate) fn trim_paste(s: &str, trim: bool) -> String {
@@ -626,6 +657,18 @@ pub(crate) fn collect_input(ui: &egui::Ui, alt_is_meta: bool, intercept_ctrl_c: 
 /// `dimmed` fades the pane toward the background (used for unfocused panes in a split). Returns
 /// the pane's `Response` (so the caller can focus on click/drag + attach a context menu).
 /// `id_src` must be unique per pane (its path).
+/// Per-pane render options (bundled - render_grid was accumulating bool params).
+// Independent render toggles, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy)]
+pub(crate) struct GridStyle {
+    pub(crate) cursor: CursorStyle,
+    pub(crate) dimmed: bool,      // unfocused pane in a split: fade content
+    pub(crate) link_active: bool, // links react to hover/click this frame
+    pub(crate) blink: bool,       // blink the cursor (focused pane only)
+    pub(crate) ligatures: bool,   // draw symbol ligatures
+}
+
 pub(crate) fn render_grid(
     ui: &mut egui::Ui,
     id_src: &[crate::pane::Side],
@@ -635,11 +678,9 @@ pub(crate) fn render_grid(
     cw: f32,
     ch: f32,
     font: &egui::FontId,
-    cursor: CursorStyle,
-    dimmed: bool,
-    link_active: bool,
-    blink: bool,
+    style: GridStyle,
 ) -> egui::Response {
+    let GridStyle { cursor, dimmed, link_active, blink, ligatures } = style;
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     let origin = rect.min;
@@ -703,6 +744,32 @@ pub(crate) fn render_grid(
     // only the content recedes (no opaque scrim that would change see-through).
     let fade = |c: egui::Color32| if dimmed { c.gamma_multiply(0.5) } else { c };
     for r in 0..snap.rows {
+        // Symbol ligatures: cells covered by a span skip their own glyph; the span's single
+        // glyph is drawn centered across the covered cells (bg/selection stay per-cell).
+        let mut lig_skip = vec![false; if ligatures { snap.cols } else { 0 }];
+        if ligatures {
+            let row_chars: Vec<char> =
+                (0..snap.cols).map(|c| snap.cells[r * snap.cols + c].c).collect();
+            for (start, len, glyph) in ligature_spans(&row_chars) {
+                for f in &mut lig_skip[start..start + len] {
+                    *f = true;
+                }
+                let cell = &snap.cells[r * snap.cols + start];
+                let span = egui::Rect::from_min_size(
+                    origin + egui::vec2(start as f32 * cw, r as f32 * ch),
+                    egui::vec2(len as f32 * cw, ch),
+                );
+                painter.text(
+                    span.center(),
+                    egui::Align2::CENTER_CENTER,
+                    glyph,
+                    font.clone(),
+                    fade(cell.fg),
+                );
+            }
+        }
+        // Index-driven on purpose: c addresses three parallel sources (cells, pixel x, lig_skip).
+        #[allow(clippy::needless_range_loop)]
         for c in 0..snap.cols {
             let cell = &snap.cells[r * snap.cols + c];
             let pos = origin + egui::vec2(c as f32 * cw, r as f32 * ch);
@@ -712,6 +779,9 @@ pub(crate) fn render_grid(
             }
             if cell.selected {
                 painter.rect_filled(cell_rect, 0.0, fade(colors::selection()));
+            }
+            if ligatures && lig_skip[c] {
+                continue; // glyph drawn by the span above
             }
             if cell.c != ' ' && cell.c != '\0' {
                 painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), fade(cell.fg));
@@ -910,6 +980,21 @@ mod tests {
             Some(b"\x1b\x7f".to_vec())
         );
         assert_eq!(key_to_bytes(Key::Backspace, mods(false, false, true), false), Some(vec![0x15]));
+    }
+
+    #[test]
+    fn ligature_spans_detect_sequences() {
+        let row: Vec<char> = "a -> b => c".chars().collect();
+        assert_eq!(ligature_spans(&row), vec![(2, 2, '\u{2192}'), (7, 2, '\u{21d2}')]);
+        // Longest-first: "..." is one span, not overlapping shorter matches; != >= <= work.
+        let row: Vec<char> = "x... != >= <=".chars().collect();
+        assert_eq!(
+            ligature_spans(&row),
+            vec![(1, 3, '\u{2026}'), (5, 2, '\u{2260}'), (8, 2, '\u{2265}'), (11, 2, '\u{2264}')]
+        );
+        // No false positives in plain text.
+        let row: Vec<char> = "plain text - no = pairs".chars().collect();
+        assert!(ligature_spans(&row).is_empty());
     }
 
     #[test]

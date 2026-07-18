@@ -14,6 +14,31 @@ pub(crate) struct Config {
     pub(crate) session: Session,
 }
 
+/// A named launch profile (Tabby-style): per-tab shell/args/cwd/env overrides.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Profile {
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) shell: Option<String>, // override $SHELL
+    #[serde(default)]
+    pub(crate) args: Vec<String>, // extra shell arguments
+    #[serde(default)]
+    pub(crate) cwd: Option<String>, // starting directory; leading ~ expands to $HOME
+    #[serde(default)]
+    pub(crate) env: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    #[allow(dead_code)] // read by the tab UI, wired separately
+    pub(crate) color: Option<String>, // tab color, "#rrggbb"
+}
+
+/// Look up a profile by name, case-insensitively.
+#[allow(dead_code)] // consumed by the profile-picker UI, wired separately
+pub(crate) fn find_profile<'a>(profiles: &'a [Profile], name: &str) -> Option<&'a Profile> {
+    profiles.iter().find(|p| p.name.eq_ignore_ascii_case(name))
+}
+
+/// Expand a leading `~` / `~/...` to `$HOME`. `~user` and paths without a leading `~` pass
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub(crate) struct Session {
@@ -79,6 +104,7 @@ pub(crate) struct Terminal {
     pub(crate) trim_whitespace_on_paste: bool, // strip leading/trailing whitespace from pastes
     pub(crate) replace_newlines_on_paste: bool, // newlines -> spaces on paste
     pub(crate) bold_bright: bool,    // draw bold text in the bright ANSI colors
+    pub(crate) ligatures: bool, // render common code sequences (-> => != >= <=) as single glyphs
 }
 
 impl Default for Appearance {
@@ -126,6 +152,7 @@ impl Default for Terminal {
             trim_whitespace_on_paste: true,
             replace_newlines_on_paste: false,
             bold_bright: true,
+            ligatures: false,
         }
     }
 }
@@ -246,4 +273,8 @@ mod tests {
         assert_eq!(parse_hotkey(""), (Some(Modifiers::CONTROL), Code::Backquote));
         assert_eq!(parse_hotkey("nonsense"), (None, Code::Backquote));
     }
+
+
+
+
 }

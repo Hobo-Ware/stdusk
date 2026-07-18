@@ -218,10 +218,13 @@ impl Stdusk {
                         cw,
                         ch,
                         &font,
-                        cursor,
-                        dimmed,
-                        link_active,
-                        blink,
+                        ui::GridStyle {
+                            cursor,
+                            dimmed,
+                            link_active,
+                            blink,
+                            ligatures: tcfg.ligatures,
+                        },
                     );
                     if bell_on && term.take_bell() {
                         bell_rang = true;
