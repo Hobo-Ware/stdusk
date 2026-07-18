@@ -155,6 +155,12 @@ impl PtyTerm {
 
         let shell = resolve_shell(profile.as_ref(), std::env::var("SHELL").ok());
         let mut cmd = CommandBuilder::new(&shell);
+        // Advertise color support like Tabby does (session.ts sets the same trio). Launched from
+        // Finder there is NO inherited TERM, so chalk/supports-color-style detection in child
+        // programs (Claude CLI etc.) silently disables ANSI colors without these.
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM_PROGRAM", "stdusk");
         if let Some(dir) =
             resolve_cwd(profile.as_ref(), cwd).filter(|d| std::path::Path::new(d).is_dir())
         {
