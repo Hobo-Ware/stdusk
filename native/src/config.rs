@@ -3,9 +3,9 @@
 use std::str::FromStr;
 
 use global_hotkey::hotkey::{Code, Modifiers};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct Config {
     pub(crate) appearance: Appearance,
@@ -16,7 +16,7 @@ pub(crate) struct Config {
 }
 
 /// A named launch profile (Tabby-style): per-tab shell/args/cwd/env overrides.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct Profile {
     pub(crate) name: String,
     #[serde(default)]
@@ -28,12 +28,11 @@ pub(crate) struct Profile {
     #[serde(default)]
     pub(crate) env: std::collections::HashMap<String, String>,
     #[serde(default)]
-    #[allow(dead_code)] // read by the tab UI, wired separately
     pub(crate) color: Option<String>, // tab color, "#rrggbb"
 }
 
 /// Look up a profile by name, case-insensitively.
-#[allow(dead_code)] // consumed by the profile-picker UI, wired separately
+#[allow(dead_code)] // the pickers (tab menu / palette) select by index; kept for by-name callers
 pub(crate) fn find_profile<'a>(profiles: &'a [Profile], name: &str) -> Option<&'a Profile> {
     profiles.iter().find(|p| p.name.eq_ignore_ascii_case(name))
 }
@@ -49,7 +48,7 @@ pub(crate) fn expand_tilde(path: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct Session {
     pub(crate) restore: bool, // reopen last session's tabs (cwd/title/color) on launch
@@ -61,7 +60,7 @@ impl Default for Session {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct Appearance {
     pub(crate) theme: String, // used when follow_system = false
@@ -73,7 +72,7 @@ pub(crate) struct Appearance {
 }
 
 #[allow(clippy::struct_excessive_bools)] // independent quake toggles, not a mode
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct Quake {
     pub(crate) hotkey: String,
@@ -93,7 +92,7 @@ pub(crate) struct Quake {
 
 // Independent user toggles, not a mode - a state machine would be more code, not less.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct Terminal {
     pub(crate) detect_progress: bool,
@@ -185,6 +184,12 @@ impl Config {
 fn config_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .map(|home| std::path::Path::new(&home).join(".config/stdusk/config.toml"))
+}
+
+/// Serialize a config to TOML - the settings window's Save path. Pure; round-trips through
+/// `Config::deserialize` (unit-tested below).
+pub(crate) fn config_to_toml(cfg: &Config) -> String {
+    toml::to_string(cfg).unwrap_or_default()
 }
 
 /// Return the config path, creating it (with the example content) if it doesn't exist.
@@ -330,6 +335,55 @@ name = "ops"
         assert_eq!(find_profile(&profiles, "WORK").map(|p| p.name.as_str()), Some("Work"));
         assert!(find_profile(&profiles, "missing").is_none());
         assert!(find_profile(&[], "work").is_none());
+    }
+
+    #[test]
+    fn config_to_toml_round_trips() {
+        let mut cfg = Config::default();
+        cfg.appearance.theme = "dracula".into();
+        cfg.appearance.opacity = 0.7;
+        cfg.terminal.ligatures = true;
+        cfg.quake.height_pct = 0.6;
+        cfg.profiles.push(Profile {
+            name: "work".into(),
+            shell: Some("/bin/zsh".into()),
+            args: vec!["-c".into(), "echo hi".into()],
+            cwd: Some("~/Git".into()),
+            env: [("AWS_PROFILE".to_string(), "work".to_string())].into(),
+            color: Some("#61afef".into()),
+        });
+        let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
+        assert_eq!(back.appearance.theme, "dracula");
+        assert_eq!(back.appearance.opacity, 0.7);
+        assert!(back.terminal.ligatures);
+        assert_eq!(back.quake.height_pct, 0.6);
+        assert_eq!(back.profiles.len(), 1);
+        let p = &back.profiles[0];
+        assert_eq!(p.name, "work");
+        assert_eq!(p.shell.as_deref(), Some("/bin/zsh"));
+        assert_eq!(p.cwd.as_deref(), Some("~/Git"));
+        assert_eq!(p.env["AWS_PROFILE"], "work");
+        assert_eq!(p.color.as_deref(), Some("#61afef"));
+    }
+
+    #[test]
+    fn config_to_toml_round_trips_defaults_and_bare_profile() {
+        // Optional profile fields all None/empty must serialize (and come back) cleanly.
+        let mut cfg = Config::default();
+        cfg.profiles.push(Profile {
+            name: "ops".into(),
+            shell: None,
+            args: Vec::new(),
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            color: None,
+        });
+        let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
+        assert_eq!(back.appearance.theme, Config::default().appearance.theme);
+        assert_eq!(back.terminal.scrollback_lines, 25000);
+        assert!(back.session.restore);
+        assert_eq!(back.profiles[0].name, "ops");
+        assert!(back.profiles[0].shell.is_none() && back.profiles[0].color.is_none());
     }
 
     #[test]

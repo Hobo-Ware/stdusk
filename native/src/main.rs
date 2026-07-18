@@ -20,6 +20,7 @@ mod procwatch;
 mod progress;
 mod search;
 mod session;
+mod settings;
 mod shell;
 mod tabs;
 mod terminal;
@@ -50,6 +51,7 @@ struct Stdusk {
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     palette: Option<palette::PaletteState>, // command palette (Cmd+Shift+P), None when closed
+    settings_open: bool, // settings window (tab-bar gear), edits cfg live
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     pending_pastes: std::collections::VecDeque<(u64, String)>, // multiline pastes awaiting confirm (tab id, text)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
@@ -188,6 +190,7 @@ impl Stdusk {
             renaming: None,
             search: None,
             palette: None,
+            settings_open: false,
             closed: Vec::new(),
             pending_pastes: std::collections::VecDeque::new(),
             toast: None,
@@ -692,11 +695,13 @@ impl eframe::App for Stdusk {
         let input_captured = self.search.is_some()
             || self.renaming.is_some()
             || self.palette.is_some()
+            || self.settings_open
             || !self.pending_pastes.is_empty();
 
         self.rename_window(&ctx);
         self.paste_confirm_window(&ctx);
         self.palette_window(&ctx);
+        self.settings_window(&ctx);
 
         // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.
         if let Some(text) =

@@ -5,10 +5,10 @@ use std::sync::atomic::Ordering;
 
 use eframe::egui;
 
-use crate::config::{self, Config};
+use crate::config::{Config, Profile};
 use crate::terminal::{self, PtyTerm};
 use crate::ui::{self, ICON_BTN_W, color_swatch, draw_tab, icon_button, icons, style_menu, tint};
-use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch};
+use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch, session};
 
 /// Fixed tab-bar row height - keeps every control centered on the same line (no drift).
 const TABBAR_ROW_H: f32 = 34.0;
@@ -70,9 +70,28 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
     }
 }
 
+/// Spawn a tab from a launch profile: shell/args/cwd/env overrides, titled after the profile
+/// (renamed, so cwd auto-titling stays off) and colored per its `color`.
+pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Profile) -> Tab {
+    let mut opts = spawn_opts(cfg, None);
+    opts.profile = Some(profile.clone());
+    let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts);
+    Tab {
+        id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
+        title: profile.name.clone(),
+        color: profile.color.as_deref().and_then(session::hex_to_color),
+        renamed: true,
+        root: Some(pane::Pane::leaf(term)),
+        focused: Vec::new(),
+        cli: None,
+        maximized: false,
+    }
+}
+
 /// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
 pub(crate) enum TabAction {
     New,
+    NewWithProfile(usize), // index into cfg.profiles
     Duplicate(usize),
     Rename(usize),
     Restart(usize),
@@ -98,16 +117,33 @@ fn drag_swap_target(rects: &[egui::Rect], from: usize, pointer_x: f32) -> Option
     None
 }
 
+/// One menu row per profile, each spawning a tab with it. Shared by the tab context menu's
+/// submenu and the "+" button's right-click menu.
+fn profile_menu_rows(ui: &mut egui::Ui, profiles: &[Profile], action: &mut Option<TabAction>) {
+    for (pi, p) in profiles.iter().enumerate() {
+        if ui.button(&p.name).clicked() {
+            *action = Some(TabAction::NewWithProfile(pi));
+        }
+    }
+}
+
 /// Right-click tab context menu. Sets `action`; egui auto-closes the menu on any button click.
 fn tab_menu(
     ui: &mut egui::Ui,
     i: usize,
     current: Option<egui::Color32>,
+    profiles: &[Profile],
     action: &mut Option<TabAction>,
 ) {
     style_menu(ui);
     if ui.button("New tab").clicked() {
         *action = Some(TabAction::New);
+    }
+    if !profiles.is_empty() {
+        ui.menu_button("New tab with profile", |ui| {
+            style_menu(ui);
+            profile_menu_rows(ui, profiles, action);
+        });
     }
     if ui.button("Duplicate").clicked() {
         *action = Some(TabAction::Duplicate(i));
@@ -349,7 +385,9 @@ impl Stdusk {
                             drag = Some((i, p.x));
                         }
                         rects.push(resp.rect);
-                        resp.context_menu(|ui| tab_menu(ui, i, tab_color, &mut action));
+                        resp.context_menu(|ui| {
+                            tab_menu(ui, i, tab_color, &self.cfg.profiles, &mut action);
+                        });
                     }
                     // Apply the drag AFTER the loop (deferred, like every other TabAction):
                     // crossing a neighbor's midpoint emits one move; re-derived every frame,
@@ -377,8 +415,16 @@ impl Stdusk {
                         }
                     }
                     ui.add_space(6.0);
-                    if icon_button(ui, icons::PLUS, "New tab").clicked() {
+                    let plus = icon_button(ui, icons::PLUS, "New tab");
+                    if plus.clicked() {
                         action = Some(TabAction::New);
+                    }
+                    // Right-click the "+" for a per-profile spawn menu (only when configured).
+                    if !self.cfg.profiles.is_empty() {
+                        plus.context_menu(|ui| {
+                            style_menu(ui);
+                            profile_menu_rows(ui, &self.cfg.profiles, &mut action);
+                        });
                     }
                     let mgr = icon_button(ui, icons::APP_WINDOW, "Tabs");
                     egui::Popup::menu(&mgr).show(|ui| {
@@ -391,10 +437,8 @@ impl Stdusk {
                     });
                     // Gear pinned to the right edge (spacer, not a nested layout).
                     ui.add_space((ui.available_width() - ICON_BTN_W).max(0.0));
-                    if icon_button(ui, icons::GEAR, "Settings (config.toml)").clicked()
-                        && let Some(p) = config::ensure_and_path()
-                    {
-                        let _ = std::process::Command::new("open").arg(p).spawn();
+                    if icon_button(ui, icons::GEAR, "Settings").clicked() {
+                        self.settings_open = !self.settings_open;
                     }
                 });
             });
@@ -414,6 +458,13 @@ impl Stdusk {
     pub(crate) fn apply_tab_action(&mut self, action: Option<TabAction>, ctx: &egui::Context) {
         match action {
             Some(TabAction::New) => self.new_tab(ctx),
+            Some(TabAction::NewWithProfile(pi)) => {
+                if let Some(p) = self.cfg.profiles.get(pi).cloned() {
+                    let tab = spawn_profile_tab(&self.cfg, ctx, &p);
+                    self.tabs.push(tab);
+                    self.active = self.tabs.len() - 1;
+                }
+            }
             Some(TabAction::Duplicate(i)) => {
                 let cwd = self.tabs.get(i).and_then(|t| t.focused_term().cwd());
                 let tab = spawn_tab(&self.cfg, ctx, cwd);
