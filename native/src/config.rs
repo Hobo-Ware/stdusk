@@ -11,6 +11,19 @@ pub(crate) struct Config {
     pub(crate) appearance: Appearance,
     pub(crate) quake: Quake,
     pub(crate) terminal: Terminal,
+    pub(crate) session: Session,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub(crate) struct Session {
+    pub(crate) restore: bool, // reopen last session's tabs (cwd/title/color) on launch
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self { restore: true }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -16,6 +16,7 @@ mod pane;
 mod procwatch;
 mod progress;
 mod search;
+mod session;
 mod shell;
 mod terminal;
 mod tray;
@@ -184,6 +185,8 @@ struct Stdusk {
     theme_name: String, // currently-applied theme (to detect OS light/dark changes)
     sys: sysinfo::System, // process table for CLI-awareness scans
     next_cli_scan: f64, // egui time of the next throttled procwatch scan
+    next_session_save: f64, // egui time of the next throttled session persist
+    last_session: session::SavedSession, // last persisted session (skip identical writes)
     tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
     screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
 }
@@ -253,8 +256,26 @@ impl Stdusk {
             }
         });
 
-        let mut tabs = vec![spawn_tab(&cfg, &cc.egui_ctx, None)];
+        // Session restore: reopen last session's tabs (cwd/title/color); else one fresh tab.
+        let mut tabs = Vec::new();
         let mut active = 0;
+        if cfg.session.restore && screenshot.is_none() {
+            let saved = session::load();
+            for st in &saved.tabs {
+                let mut tab = spawn_tab(&cfg, &cc.egui_ctx, st.cwd.clone());
+                if let Some(title) = &st.title {
+                    tab.title.clone_from(title);
+                    tab.renamed = true;
+                }
+                tab.color = st.color.as_deref().and_then(session::hex_to_color);
+                tabs.push(tab);
+            }
+            active = saved.active.min(tabs.len().saturating_sub(1));
+        }
+        if tabs.is_empty() {
+            tabs.push(spawn_tab(&cfg, &cc.egui_ctx, None));
+            active = 0;
+        }
         let mut sized = false;
 
         // Visual-test harness: populate representative tabs and skip monitor sizing.
@@ -301,6 +322,8 @@ impl Stdusk {
             theme_name,
             sys: sysinfo::System::new(),
             next_cli_scan: 0.0,
+            next_session_save: 0.0,
+            last_session: session::SavedSession::default(),
             tray,
             screenshot,
         }
@@ -839,6 +862,31 @@ impl eframe::App for Stdusk {
                 && let Some(c) = tab.focused_term().cwd()
             {
                 tab.title = basename(&c);
+            }
+        }
+
+        // Session persist: snapshot open tabs (cwd/title/color) every few seconds; skip identical
+        // writes so the file only changes when the session does.
+        if self.cfg.session.restore && self.screenshot.is_none() {
+            let now = ctx.input(|i| i.time);
+            if now >= self.next_session_save {
+                self.next_session_save = now + 3.0;
+                let snap = session::SavedSession {
+                    tabs: self
+                        .tabs
+                        .iter()
+                        .map(|t| session::SavedTab {
+                            title: t.renamed.then(|| t.title.clone()),
+                            color: t.color.map(session::color_to_hex),
+                            cwd: t.focused_term().cwd(),
+                        })
+                        .collect(),
+                    active: self.active,
+                };
+                if snap != self.last_session {
+                    session::save(&snap);
+                    self.last_session = snap;
+                }
             }
         }
 
