@@ -25,3 +25,4 @@ bell = "visual"           # BEL handling: "visual" (screen flash) | "off"
 detect_clis = true        # badge tabs that are running a known AI CLI (claude/codex/gemini/...)
 clickable_links = true    # open URLs and file paths in the terminal on click
 link_modifier = "none"    # modifier to activate links: "none" (hover) | "cmd" | "ctrl" | "alt" | "shift"
+notify_on_done = true     # desktop notification when a long (>10s) command finishes while hidden

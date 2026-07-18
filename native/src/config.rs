@@ -55,6 +55,7 @@ pub(crate) struct Terminal {
     pub(crate) detect_clis: bool,       // badge tabs running a known AI CLI (claude/gemini/...)
     pub(crate) clickable_links: bool,   // open URLs / file paths on click
     pub(crate) link_modifier: String,   // "none" (hover) | "cmd" | "ctrl" | "alt" | "shift"
+    pub(crate) notify_on_done: bool, // desktop notification when a long (>10s) command finishes while hidden
 }
 
 impl Default for Appearance {
@@ -91,6 +92,7 @@ impl Default for Terminal {
             detect_clis: true,
             clickable_links: true,
             link_modifier: "none".into(),
+            notify_on_done: true,
         }
     }
 }

@@ -464,6 +464,13 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## Notify-when-done (`terminal.rs`, `main.rs`, `config.rs`)
+- The reader thread times each command via OSC 133 (`Instant` on CommandStart; on CommandEnd, if
+  it ran >=10s, set `TabState.done_notify = Some(exit)`). The UI drains it each frame and, when
+  `terminal.notify_on_done` (default true) AND stdusk is hidden, posts a macOS notification via
+  `osascript display notification`. Consumed even when visible (so it never fires late) but only
+  surfaced while hidden - no nagging while you're watching the build. (notify-on-activity: TODO.)
+
 ## Dock/menu-bar modes (`main.rs`, `config.rs`) - macOS
 - macOS has no "menu bar without a Dock icon" static mode: accessory = neither, regular = both.
   So pure accessory (our default) means the visible menu bar belongs to whatever other regular app

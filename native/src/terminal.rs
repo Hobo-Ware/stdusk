@@ -67,6 +67,7 @@ pub(crate) struct TabState {
     pub(crate) clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
     pub(crate) cmd: CmdState,             // OSC 133 last-command state (tab dot)
     pub(crate) bell: bool,                // BEL rung since last consumed (drives the visual flash)
+    pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
 }
 
 /// Grid sizing. History (scrollback) comes from `Config::scrolling_history`, not here.
@@ -160,6 +161,7 @@ impl PtyTerm {
             let mut prog = ProgressScanner::new(detect_progress);
             let mut osc = OscScanner::new();
             let mut buf = [0u8; 8192];
+            let mut cmd_started: Option<std::time::Instant> = None; // for notify-when-done
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
@@ -177,6 +179,7 @@ impl PtyTerm {
                         let mut cwd_update = None;
                         let mut clip_update = None;
                         let mut cmd_update = None;
+                        let mut notify = None; // Some(exit) when a long command just finished
                         for ev in osc_events {
                             match ev {
                                 OscEvent::Progress(p) => progress = p, // OSC 9;4 wins over %-scrape
@@ -192,9 +195,17 @@ impl PtyTerm {
                                 OscEvent::Shell(s) => match s {
                                     ShellEvent::CommandStart => {
                                         cmd_update = Some(CmdState::Running);
+                                        cmd_started = Some(std::time::Instant::now());
                                     }
                                     ShellEvent::CommandEnd(code) => {
                                         cmd_update = Some(cmd_from_exit(code));
+                                        // Flag a "done" notification only for long-running commands.
+                                        // Notify only for commands that ran a while (a "long" job).
+                                        if cmd_started.take().is_some_and(|t| {
+                                            t.elapsed() >= std::time::Duration::from_secs(10)
+                                        }) {
+                                            notify = Some(code.unwrap_or(0));
+                                        }
                                     }
                                     // PromptStart: keep the last result visible at the prompt.
                                     ShellEvent::PromptStart => {}
@@ -212,6 +223,9 @@ impl PtyTerm {
                             }
                             if let Some(c) = cmd_update {
                                 s.cmd = c;
+                            }
+                            if let Some(code) = notify {
+                                s.done_notify = Some(code);
                             }
                         }
                         ctx.request_repaint();
@@ -296,6 +310,11 @@ impl PtyTerm {
     /// Take the pending bell (BEL rung since last call), for a one-shot visual flash.
     pub(crate) fn take_bell(&self) -> bool {
         std::mem::take(&mut self.state.lock().unwrap().bell)
+    }
+
+    /// Take a pending "long command finished" notification (exit code), if any.
+    pub(crate) fn take_done_notify(&self) -> Option<i32> {
+        self.state.lock().unwrap().done_notify.take()
     }
 
     pub(crate) fn cwd(&self) -> Option<String> {

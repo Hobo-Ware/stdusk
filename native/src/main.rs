@@ -564,6 +564,20 @@ fn set_dock_icon(visible: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon(_visible: bool) {}
 
+/// Post a desktop notification that a long command finished (macOS `osascript`).
+fn notify_done(title: &str, code: i32) {
+    #[cfg(target_os = "macos")]
+    {
+        let status =
+            if code == 0 { "finished".to_owned() } else { format!("failed (exit {code})") };
+        let body = format!("{title}: command {status}");
+        let script = format!("display notification {body:?} with title \"stdusk\"");
+        let _ = std::process::Command::new("osascript").args(["-e", &script]).spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (title, code);
+}
+
 fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
     if visible {
@@ -721,6 +735,17 @@ impl eframe::App for Stdusk {
                 && let Some(c) = tab.focused_term().cwd()
             {
                 tab.title = basename(&c);
+            }
+        }
+
+        // Notify-when-done: a long command finished. Consume the flag always (so it doesn't fire
+        // late), but only post a notification when stdusk is hidden - no nagging while you watch.
+        for tab in &self.tabs {
+            if let Some(code) = tab.focused_term().take_done_notify()
+                && self.cfg.terminal.notify_on_done
+                && !self.visible
+            {
+                notify_done(&tab.title, code);
             }
         }
 

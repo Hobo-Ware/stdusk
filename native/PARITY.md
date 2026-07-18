@@ -34,7 +34,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 | `restart-tab` (respawn shell) | ⬜ | |
 | Close other / to-the-right / to-the-left | ⬜ | context-menu items |
 | `explode-tab` (panes -> tabs) / `combine-tabs` (tabs -> split) | ⬜ | power-user, low priority |
-| Notify-when-done / notify-on-activity | ⬜ | have OSC 133 + bell infra to build on |
+| Notify-when-done | ✅ | `terminal.notify_on_done`; osascript notification when a >10s command finishes while hidden. notify-on-activity still ⬜ |
 | Current-process display in menu | ⬜ | have procwatch tree already |
 | Drag-reorder tabs (+ between windows) | ⬜ | single-window; drag-reorder wanted |
 | `toggle-fullscreen` | ⬜ | |
