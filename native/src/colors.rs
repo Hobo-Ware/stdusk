@@ -138,7 +138,7 @@ pub(crate) fn yellow() -> Color32 {
 }
 /// True when the theme background is dark (drives the direction of the derived chrome shades, so
 /// the tab strip / active tab / borders read correctly on both light and dark themes).
-fn is_dark() -> bool {
+pub(crate) fn is_dark() -> bool {
     let c = theme().bg;
     0.299 * f32::from(c.r()) + 0.587 * f32::from(c.g()) + 0.114 * f32::from(c.b()) < 128.0
 }

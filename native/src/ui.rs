@@ -295,10 +295,32 @@ pub(crate) fn tint(c: egui::Color32, opacity: f32) -> egui::Color32 {
 }
 
 pub(crate) fn apply_theme(ctx: &egui::Context) {
-    let mut v = egui::Visuals::dark();
+    // Start from the matching egui base (light widgets on light themes - a dark base under a
+    // light theme yields dark-on-dark controls) then derive every widget fill from the theme.
+    let mut v = if colors::is_dark() { egui::Visuals::dark() } else { egui::Visuals::light() };
     v.panel_fill = colors::bg();
-    v.window_fill = colors::bg();
+    v.window_fill = colors::elevated();
+    v.window_stroke = egui::Stroke::new(1.0, colors::border());
+    v.extreme_bg_color = colors::bg();
     v.override_text_color = Some(colors::fg());
+    v.selection.bg_fill = colors::selection();
+    v.selection.stroke = egui::Stroke::new(1.0, colors::accent());
+    v.hyperlink_color = colors::accent();
+    let base = colors::elevated();
+    let strong = colors::hover();
+    for (w, fill) in [
+        (&mut v.widgets.noninteractive, colors::bg()),
+        (&mut v.widgets.inactive, base),
+        (&mut v.widgets.hovered, strong),
+        (&mut v.widgets.active, strong),
+        (&mut v.widgets.open, base),
+    ] {
+        w.bg_fill = fill;
+        w.weak_bg_fill = fill;
+        w.fg_stroke = egui::Stroke::new(1.0, colors::fg());
+        w.bg_stroke = egui::Stroke::new(1.0, colors::border());
+    }
+    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, colors::dim());
     ctx.set_visuals(v);
 }
 

@@ -49,19 +49,28 @@ fn combo(ui: &mut egui::Ui, id: &str, value: &mut String, options: &[&str]) {
 fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
     heading(ui, "Appearance");
     let a = &mut cfg.appearance;
-    row(ui, "Theme", |ui| {
-        combo(ui, "theme", &mut a.theme, &BUILT_IN_THEMES);
-    });
-    row(ui, "Custom scheme", |ui| {
-        ui::text_field(ui, &mut a.theme, "community scheme name", 160.0, colors::fg());
-    });
     ui.checkbox(&mut a.follow_system, "Follow the system light/dark appearance");
-    row(ui, "Light theme", |ui| {
-        ui::text_field(ui, &mut a.theme_light, "theme when light", 160.0, colors::fg());
-    });
-    row(ui, "Dark theme", |ui| {
-        ui::text_field(ui, &mut a.theme_dark, "theme when dark", 160.0, colors::fg());
-    });
+    if a.follow_system {
+        // The fixed `theme` is ignored in this mode - only show what actually applies.
+        ui.label(
+            egui::RichText::new("Theme follows macOS: pick one per appearance.")
+                .small()
+                .color(colors::dim()),
+        );
+        row(ui, "Light theme", |ui| {
+            ui::text_field(ui, &mut a.theme_light, "theme when light", 160.0, colors::fg());
+        });
+        row(ui, "Dark theme", |ui| {
+            ui::text_field(ui, &mut a.theme_dark, "theme when dark", 160.0, colors::fg());
+        });
+    } else {
+        row(ui, "Theme", |ui| {
+            combo(ui, "theme", &mut a.theme, &BUILT_IN_THEMES);
+        });
+        row(ui, "Custom scheme", |ui| {
+            ui::text_field(ui, &mut a.theme, "community scheme name", 160.0, colors::fg());
+        });
+    }
     row(ui, "Opacity", |ui| {
         ui.add(egui::Slider::new(&mut a.opacity, 0.4..=1.0));
     });
