@@ -103,6 +103,17 @@ impl EventListener for EventProxy {
     }
 }
 
+/// Everything a terminal spawn needs from the user config (one bag instead of a positional list).
+#[derive(Clone)]
+pub(crate) struct SpawnOpts {
+    pub(crate) detect_progress: bool,
+    pub(crate) shell_integration: bool,
+    pub(crate) scrollback_lines: usize,
+    pub(crate) word_separators: String,
+    pub(crate) bold_bright: bool,
+    pub(crate) cwd: Option<String>,
+}
+
 pub(crate) struct PtyTerm {
     term: Arc<FairMutex<Term<EventProxy>>>,
     writer: Box<dyn Write + Send>,
@@ -111,17 +122,12 @@ pub(crate) struct PtyTerm {
     cols: usize,
     rows: usize,
     shell_pid: Option<u32>, // for CLI-awareness process scanning (procwatch)
+    bold_bright: bool,      // draw bold text in bright ANSI colors
 }
 
 impl PtyTerm {
-    pub(crate) fn spawn(
-        cols: usize,
-        rows: usize,
-        ctx: egui::Context,
-        detect_progress: bool,
-        cwd: Option<String>,
-        shell_integration: bool,
-    ) -> Self {
+    pub(crate) fn spawn(cols: usize, rows: usize, ctx: egui::Context, opts: &SpawnOpts) -> Self {
+        let SpawnOpts { detect_progress, shell_integration, cwd, .. } = opts.clone();
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -148,8 +154,13 @@ impl PtyTerm {
         let writer = pair.master.take_writer().expect("writer");
 
         let state = Arc::new(Mutex::new(TabState::default()));
+        let term_config = Config {
+            scrolling_history: opts.scrollback_lines,
+            semantic_escape_chars: opts.word_separators.clone(),
+            ..Config::default()
+        };
         let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
+            term_config,
             &Dims { cols, rows },
             EventProxy { state: state.clone() },
         )));
@@ -234,7 +245,16 @@ impl PtyTerm {
             }
         });
 
-        Self { term, writer, master: pair.master, state, cols, rows, shell_pid }
+        Self {
+            term,
+            writer,
+            master: pair.master,
+            state,
+            cols,
+            rows,
+            shell_pid,
+            bold_bright: opts.bold_bright,
+        }
     }
 
     /// PID of the tab's shell process - the root for CLI-awareness descendant scans.
@@ -351,7 +371,8 @@ impl PtyTerm {
                 Some(colors::to_color32(bg_c))
             };
             let selected = selection.as_ref().is_some_and(|r| r.contains(indexed.point));
-            cells.push(CellSnap { c: cell.c, fg: colors::to_color32(fg_c), bg, selected });
+            let bold = self.bold_bright && cell.flags.contains(Flags::BOLD);
+            cells.push(CellSnap { c: cell.c, fg: colors::cell_fg(fg_c, bold), bg, selected });
         }
         // Cursor only shown when the viewport is at the bottom (not scrolled into history).
         let cursor = if grid.display_offset() == 0 {
@@ -364,6 +385,12 @@ impl PtyTerm {
             None
         };
         GridSnap { cols, rows, cells, cursor, top_line }
+    }
+
+    /// Whether the terminal is on the alternate screen (vim/less/...), e.g. to suppress the
+    /// multiline-paste warning like Tabby does.
+    pub(crate) fn is_alt_screen(&self) -> bool {
+        self.term.lock().mode().contains(TermMode::ALT_SCREEN)
     }
 
     /// Begin a text selection anchored at a grid point (mapped from mouse coords).

@@ -46,6 +46,30 @@ pub(crate) fn to_color32(c: Color) -> Color32 {
     }
 }
 
+/// Foreground for a cell: when `bold` (drawBoldTextInBrightColors), promote the 8 base ANSI
+/// colors to their bright counterparts; everything else is unchanged.
+pub(crate) fn cell_fg(c: Color, bold: bool) -> Color32 {
+    use NamedColor::{Black, Blue, Cyan, Green, Magenta, Red, White, Yellow};
+    if !bold {
+        return to_color32(c);
+    }
+    match c {
+        Color::Indexed(i @ 0..=7) => indexed(i + 8),
+        Color::Named(n) => match n {
+            Black => theme().ansi[8],
+            Red => theme().ansi[9],
+            Green => theme().ansi[10],
+            Yellow => theme().ansi[11],
+            Blue => theme().ansi[12],
+            Magenta => theme().ansi[13],
+            Cyan => theme().ansi[14],
+            White => theme().ansi[15],
+            other => named(other),
+        },
+        other => to_color32(other),
+    }
+}
+
 fn named(n: NamedColor) -> Color32 {
     use NamedColor::*;
     let a = theme().ansi;
@@ -278,5 +302,26 @@ pub(crate) fn by_name(name: &str) -> Theme {
         "tokyo-night" | "tokyonight" => tokyo_night(),
         "one-half-light" | "onehalflight" | "light" => one_half_light(),
         _ => one_half_dark(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bold_promotes_base_ansi_to_bright() {
+        init(one_half_dark());
+        let t = one_half_dark();
+        // Named base colors -> bright counterparts when bold.
+        assert_eq!(cell_fg(Color::Named(NamedColor::Red), true), t.ansi[9]);
+        assert_eq!(cell_fg(Color::Named(NamedColor::Red), false), t.ansi[1]);
+        // Indexed 0-7 -> 8-15.
+        assert_eq!(cell_fg(Color::Indexed(2), true), t.ansi[10]);
+        // Truecolor unchanged by bold.
+        let spec = Color::Spec(alacritty_terminal::vte::ansi::Rgb { r: 1, g: 2, b: 3 });
+        assert_eq!(cell_fg(spec, true), Color32::from_rgb(1, 2, 3));
+        // Bright colors stay bright.
+        assert_eq!(cell_fg(Color::Named(NamedColor::BrightRed), true), t.ansi[9]);
     }
 }

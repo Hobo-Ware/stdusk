@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 alacritty_terminal = "0.26.0"
+arboard = { version = "3.6.1", default-features = false }
 base64 = "0.22.1"
 eframe = { version = "0.35.0", features = ["glow", "__screenshot"] }
 egui = "0.35.0"

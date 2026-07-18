@@ -3777,6 +3777,7 @@ name = "stdusk"
 version = "0.1.10"
 dependencies = [
  "alacritty_terminal",
+ "arboard",
  "base64",
  "eframe",
  "egui",

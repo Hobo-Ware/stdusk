@@ -64,10 +64,23 @@ pub(crate) fn pos_to_cell(
 /// Bytes a key press sends to the pty, or `None` when the key is unmapped (plain text is
 /// handled separately via `Event::Text`). `Ctrl+letter` wins over everything; then macOS
 /// natural-editing: `Option+←/→` word, `Cmd+←/→` line ends, `Option/Cmd+Backspace` deletes.
-pub(crate) fn key_to_bytes(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<u8>> {
+pub(crate) fn key_to_bytes(
+    key: egui::Key,
+    mods: egui::Modifiers,
+    alt_is_meta: bool,
+) -> Option<Vec<u8>> {
     use egui::Key;
     if mods.ctrl {
         return ctrl_letter(key).map(|b| vec![b]);
+    }
+    // altIsMeta: Option+letter/digit sends ESC-prefixed keys (like xterm macOptionIsMeta) instead
+    // of macOS composed characters. Arrows/backspace keep their word-motion mappings below.
+    if alt_is_meta
+        && mods.alt
+        && !mods.command
+        && let Some(n) = ctrl_letter(key)
+    {
+        return Some(vec![0x1b, b'a' + n - 1]);
     }
     let bytes: Vec<u8> = match key {
         // Cmd+Alt+{arrows,Enter} are app pane bindings (nav / maximize) - don't forward to the pty.
@@ -76,6 +89,8 @@ pub(crate) fn key_to_bytes(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<
         {
             return None;
         }
+        // Cmd+Shift+arrows are app tab bindings (move tab) - don't forward either.
+        Key::ArrowLeft | Key::ArrowRight if mods.command && mods.shift => return None,
         Key::Enter => vec![b'\r'],
         Key::Backspace if mods.alt => b"\x1b\x7f".to_vec(), // delete previous word
         Key::Backspace if mods.command => vec![0x15],       // Ctrl-U: delete to line start
@@ -144,6 +159,47 @@ pub(crate) fn progress_fraction(p: Progress) -> Option<f32> {
 /// Toast opacity (0..=1): full until `remaining_s` drops below `fade_window_s`, then linear out.
 pub(crate) fn toast_alpha(remaining_s: f64, fade_window_s: f64) -> f32 {
     (remaining_s / fade_window_s).clamp(0.0, 1.0) as f32
+}
+
+/// Cursor blink phase: on for the first half of each ~1.06s cycle (xterm-ish cadence).
+pub(crate) fn blink_on(time: f64) -> bool {
+    time.rem_euclid(1.06) < 0.53
+}
+
+/// Normalize pasted text the way Tabby does (`baseTerminalTab.paste()`): CRLF/LF -> CR (shells
+/// expect CR), then optionally collapse newline runs to single spaces. Returns the normalized
+/// text; multiline-ness afterwards is simply `contains('\r')`.
+pub(crate) fn normalize_paste(input: &str, newlines_to_spaces: bool) -> String {
+    let s = input.replace("\r\n", "\r").replace('\n', "\r");
+    if newlines_to_spaces {
+        // Collapse runs of CRs into one space (Tabby: /[\r\n]+/g -> ' ').
+        let mut out = String::with_capacity(s.len());
+        let mut in_run = false;
+        for ch in s.chars() {
+            if ch == '\r' {
+                if !in_run {
+                    out.push(' ');
+                    in_run = true;
+                }
+            } else {
+                in_run = false;
+                out.push(ch);
+            }
+        }
+        out
+    } else {
+        s
+    }
+}
+
+/// Tabby's trim rule for the NON-warned paste path: trim the end always; trim the start only when
+/// the (already-trimmed) paste is single-line. The multiline-warning modal path skips this.
+pub(crate) fn trim_paste(s: &str, trim: bool) -> String {
+    if !trim {
+        return s.to_owned();
+    }
+    let t = s.trim_end();
+    if t.contains('\r') { t.to_owned() } else { t.trim_start().to_owned() }
 }
 
 /// Terminal cursor shape.
@@ -518,14 +574,23 @@ pub(crate) fn draw_tab(
 }
 
 /// Translate this frame's key/text events into bytes for the pty.
-pub(crate) fn collect_input(ui: &egui::Ui) -> Vec<u8> {
+pub(crate) fn collect_input(ui: &egui::Ui, alt_is_meta: bool, intercept_ctrl_c: bool) -> Vec<u8> {
     let mut out = Vec::new();
     ui.input(|i| {
+        let alt_held = i.modifiers.alt;
         for event in &i.events {
             match event {
+                // With altIsMeta on, Option+key already produced ESC-prefixed bytes via the Key
+                // event - drop the macOS composed character so it isn't sent twice.
+                egui::Event::Text(_) if alt_is_meta && alt_held => {}
                 egui::Event::Text(t) => out.extend_from_slice(t.as_bytes()),
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                    if let Some(bytes) = key_to_bytes(*key, *modifiers) {
+                    // Intelligent Ctrl-C (Tabby): when a selection exists the caller copies it
+                    // instead of us sending SIGINT.
+                    if intercept_ctrl_c && *key == egui::Key::C && modifiers.ctrl {
+                        continue;
+                    }
+                    if let Some(bytes) = key_to_bytes(*key, *modifiers, alt_is_meta) {
                         out.extend_from_slice(&bytes);
                     }
                 }
@@ -553,6 +618,7 @@ pub(crate) fn render_grid(
     cursor: CursorStyle,
     dimmed: bool,
     link_active: bool,
+    blink: bool,
 ) -> egui::Response {
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -638,8 +704,21 @@ pub(crate) fn render_grid(
         painter.hline(x0..=x1, y, egui::Stroke::new(1.0, fade(colors::accent())));
     }
 
+    // Cursor blink (focused pane only, like xterm): skip the draw during the off phase and
+    // schedule a repaint at the next phase flip so the cadence keeps ticking.
+    let blink_hidden = if blink && !dimmed {
+        let time = ui.input(|i| i.time);
+        let next_flip = 0.53 - time.rem_euclid(0.53);
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(next_flip.max(0.01)));
+        !blink_on(time)
+    } else {
+        false
+    };
+
     // Cursor (block/underline/beam); hidden while scrolled into history.
-    if let Some((cr, cc)) = snap.cursor {
+    if let Some((cr, cc)) = snap.cursor
+        && !blink_hidden
+    {
         let cpos = origin + egui::vec2(cc as f32 * cw, cr as f32 * ch);
         let cur = fade(colors::cursor());
         match cursor {
@@ -774,34 +853,87 @@ mod tests {
 
     #[test]
     fn key_to_bytes_plain_and_ctrl() {
-        assert_eq!(key_to_bytes(Key::Enter, mods(false, false, false)), Some(vec![b'\r']));
-        assert_eq!(key_to_bytes(Key::Backspace, mods(false, false, false)), Some(vec![0x7f]));
-        assert_eq!(key_to_bytes(Key::C, mods(true, false, false)), Some(vec![3])); // Ctrl-C SIGINT
-        assert_eq!(key_to_bytes(Key::Enter, mods(true, false, false)), None); // Ctrl+non-letter
-        assert_eq!(key_to_bytes(Key::F5, mods(false, false, false)), None); // unmapped
+        assert_eq!(key_to_bytes(Key::Enter, mods(false, false, false), false), Some(vec![b'\r']));
+        assert_eq!(
+            key_to_bytes(Key::Backspace, mods(false, false, false), false),
+            Some(vec![0x7f])
+        );
+        assert_eq!(key_to_bytes(Key::C, mods(true, false, false), false), Some(vec![3])); // Ctrl-C SIGINT
+        assert_eq!(key_to_bytes(Key::Enter, mods(true, false, false), false), None); // Ctrl+non-letter
+        assert_eq!(key_to_bytes(Key::F5, mods(false, false, false), false), None); // unmapped
     }
 
     #[test]
     fn key_to_bytes_natural_editing() {
         // Option (alt) + arrows -> word motion; Cmd + arrows -> line ends.
-        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, true, false)), Some(b"\x1bb".to_vec()));
         assert_eq!(
-            key_to_bytes(Key::ArrowRight, mods(false, true, false)),
+            key_to_bytes(Key::ArrowLeft, mods(false, true, false), false),
+            Some(b"\x1bb".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(Key::ArrowRight, mods(false, true, false), false),
             Some(b"\x1bf".to_vec())
         );
-        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, false, true)), Some(vec![0x01]));
-        assert_eq!(key_to_bytes(Key::ArrowRight, mods(false, false, true)), Some(vec![0x05]));
+        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, false, true), false), Some(vec![0x01]));
+        assert_eq!(
+            key_to_bytes(Key::ArrowRight, mods(false, false, true), false),
+            Some(vec![0x05])
+        );
         // Plain arrows keep the CSI sequences.
         assert_eq!(
-            key_to_bytes(Key::ArrowLeft, mods(false, false, false)),
+            key_to_bytes(Key::ArrowLeft, mods(false, false, false), false),
             Some(b"\x1b[D".to_vec())
         );
         // Backspace variants.
         assert_eq!(
-            key_to_bytes(Key::Backspace, mods(false, true, false)),
+            key_to_bytes(Key::Backspace, mods(false, true, false), false),
             Some(b"\x1b\x7f".to_vec())
         );
-        assert_eq!(key_to_bytes(Key::Backspace, mods(false, false, true)), Some(vec![0x15]));
+        assert_eq!(key_to_bytes(Key::Backspace, mods(false, false, true), false), Some(vec![0x15]));
+    }
+
+    #[test]
+    fn paste_normalization_matches_tabby() {
+        // CRLF and LF both become CR.
+        assert_eq!(normalize_paste("a\r\nb\nc", false), "a\rb\rc");
+        // newlines->spaces collapses runs into ONE space.
+        assert_eq!(normalize_paste("a\n\n\nb", true), "a b");
+        assert_eq!(normalize_paste("ls -la\n", true), "ls -la ");
+    }
+
+    #[test]
+    fn paste_trim_rules() {
+        // Single-line: both ends trimmed.
+        assert_eq!(trim_paste("  ls -la \r", true), "ls -la");
+        // Multiline (still contains \r after end-trim): only the end is trimmed.
+        assert_eq!(trim_paste("  a\rb  \r", true), "  a\rb");
+        // Disabled: untouched.
+        assert_eq!(trim_paste("  x  ", false), "  x  ");
+    }
+
+    #[test]
+    fn blink_phase_toggles() {
+        assert!(blink_on(0.0));
+        assert!(blink_on(0.52));
+        assert!(!blink_on(0.54));
+        assert!(blink_on(1.07)); // next cycle
+    }
+
+    #[test]
+    fn alt_is_meta_sends_esc_prefixed_letters() {
+        let alt = mods(false, true, false);
+        assert_eq!(key_to_bytes(Key::B, alt, true), Some(vec![0x1b, b'b']));
+        // Off: unmapped (macOS composes a Text event instead).
+        assert_eq!(key_to_bytes(Key::B, alt, false), None);
+        // Word-motion arrows unchanged even with altIsMeta.
+        assert_eq!(key_to_bytes(Key::ArrowLeft, alt, true), Some(b"\x1bb".to_vec()));
+    }
+
+    #[test]
+    fn cmd_shift_arrows_are_reserved_for_move_tab() {
+        let m = egui::Modifiers { shift: true, command: true, mac_cmd: true, ..Default::default() };
+        assert_eq!(key_to_bytes(Key::ArrowLeft, m, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowRight, m, false), None);
     }
 
     #[test]
@@ -819,18 +951,18 @@ mod tests {
     #[test]
     fn cmd_alt_combos_are_reserved_for_panes() {
         // Cmd+Alt+arrows/Enter are app pane bindings; they must not reach the pty.
-        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, true, true)), None);
-        assert_eq!(key_to_bytes(Key::ArrowRight, mods(false, true, true)), None);
-        assert_eq!(key_to_bytes(Key::ArrowUp, mods(false, true, true)), None);
-        assert_eq!(key_to_bytes(Key::ArrowDown, mods(false, true, true)), None);
-        assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true)), None);
+        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, true, true), false), None);
+        assert_eq!(key_to_bytes(Key::ArrowRight, mods(false, true, true), false), None);
+        assert_eq!(key_to_bytes(Key::ArrowUp, mods(false, true, true), false), None);
+        assert_eq!(key_to_bytes(Key::ArrowDown, mods(false, true, true), false), None);
+        assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true), false), None);
     }
 
     #[test]
     fn shift_tab_is_back_tab() {
         let shift = Modifiers { shift: true, ..Modifiers::default() };
-        assert_eq!(key_to_bytes(Key::Tab, shift), Some(b"\x1b[Z".to_vec())); // apps cycle on this
-        assert_eq!(key_to_bytes(Key::Tab, Modifiers::default()), Some(vec![b'\t'])); // plain tab
+        assert_eq!(key_to_bytes(Key::Tab, shift, false), Some(b"\x1b[Z".to_vec())); // apps cycle on this
+        assert_eq!(key_to_bytes(Key::Tab, Modifiers::default(), false), Some(vec![b'\t'])); // plain tab
     }
 
     #[test]

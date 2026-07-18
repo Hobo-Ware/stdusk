@@ -56,6 +56,16 @@ pub(crate) struct Terminal {
     pub(crate) clickable_links: bool,   // open URLs / file paths on click
     pub(crate) link_modifier: String,   // "none" (hover) | "cmd" | "ctrl" | "alt" | "shift"
     pub(crate) notify_on_done: bool, // desktop notification when a long (>10s) command finishes while hidden
+    pub(crate) scrollback_lines: usize, // history size (Tabby default 25000)
+    pub(crate) cursor_blink: bool,   // blink the focused pane's cursor
+    pub(crate) alt_is_meta: bool,    // Option+key sends ESC+key instead of composed chars
+    pub(crate) word_separators: String, // chars that end a double-click word selection
+    pub(crate) copy_on_select: bool, // copy to clipboard whenever a selection finishes
+    pub(crate) paste_on_middle_click: bool, // middle-click pastes the clipboard
+    pub(crate) warn_on_multiline_paste: bool, // confirm before pasting multiple lines
+    pub(crate) trim_whitespace_on_paste: bool, // strip leading/trailing whitespace from pastes
+    pub(crate) replace_newlines_on_paste: bool, // newlines -> spaces on paste
+    pub(crate) bold_bright: bool,    // draw bold text in the bright ANSI colors
 }
 
 impl Default for Appearance {
@@ -93,6 +103,16 @@ impl Default for Terminal {
             clickable_links: true,
             link_modifier: "none".into(),
             notify_on_done: true,
+            scrollback_lines: 25000,
+            cursor_blink: true,
+            alt_is_meta: false,
+            word_separators: " ()[]{}'\"".into(),
+            copy_on_select: false,
+            paste_on_middle_click: true,
+            warn_on_multiline_paste: true,
+            trim_whitespace_on_paste: true,
+            replace_newlines_on_paste: false,
+            bold_bright: true,
         }
     }
 }

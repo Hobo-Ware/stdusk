@@ -58,15 +58,20 @@ impl Tab {
     }
 }
 
-fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
-    let term = PtyTerm::spawn(
-        COLS,
-        ROWS,
-        ctx.clone(),
-        cfg.terminal.detect_progress,
+/// Bundle the config bits a terminal spawn needs.
+fn spawn_opts(cfg: &Config, cwd: Option<String>) -> terminal::SpawnOpts {
+    terminal::SpawnOpts {
+        detect_progress: cfg.terminal.detect_progress,
+        shell_integration: cfg.terminal.shell_integration,
+        scrollback_lines: cfg.terminal.scrollback_lines,
+        word_separators: cfg.terminal.word_separators.clone(),
+        bold_bright: cfg.terminal.bold_bright,
         cwd,
-        cfg.terminal.shell_integration,
-    );
+    }
+}
+
+fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
+    let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
     Tab {
         title: "zsh".into(),
         color: None,
@@ -93,10 +98,14 @@ enum TabAction {
     New,
     Duplicate(usize),
     Rename(usize),
+    Restart(usize),
     SetColor(usize, Option<egui::Color32>),
     MoveLeft(usize),
     MoveRight(usize),
     Close(usize),
+    CloseOthers(usize),
+    CloseRight(usize),
+    CloseLeft(usize),
 }
 
 /// Deferred pane action from the right-click menu, applied after the central panel. Each
@@ -168,6 +177,7 @@ struct Stdusk {
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
+    pending_paste: Option<String>, // multiline paste awaiting the user's confirm (modal)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
     flash: f64,       // bell visual-flash expiry (egui time); 0 = none
     zoom: f32,        // font-size multiplier (Cmd +/-/0)
@@ -284,6 +294,7 @@ impl Stdusk {
             renaming: None,
             search: None,
             closed: Vec::new(),
+            pending_paste: None,
             toast: None,
             flash: 0.0,
             zoom: 1.0,
@@ -329,6 +340,29 @@ impl Stdusk {
             set_dock_icon(self.visible);
             self.dock_shown = self.visible;
         }
+    }
+
+    /// Close every tab whose index fails `keep`, remembering cwds for reopen. The tab at
+    /// `focus` (which must pass `keep`) becomes active.
+    fn close_tabs_where(&mut self, keep: impl Fn(usize) -> bool, focus: usize) {
+        let mut kept = Vec::new();
+        let mut new_active = 0;
+        for (i, tab) in self.tabs.drain(..).enumerate() {
+            if keep(i) {
+                if i == focus {
+                    new_active = kept.len();
+                }
+                kept.push(tab);
+            } else if let Some(cwd) = tab.focused_term().cwd() {
+                self.closed.push(cwd);
+            }
+        }
+        // Cap the reopen stack, dropping the OLDEST entries (front) so pop() stays most-recent.
+        while self.closed.len() > 20 {
+            self.closed.remove(0);
+        }
+        self.tabs = kept;
+        self.active = new_active;
     }
 
     /// Reopen the most recently closed tab (in its old cwd), if any.
@@ -402,6 +436,64 @@ impl Stdusk {
             }
         } else if !cancel {
             self.renaming = Some((idx, buf, focus)); // keep editing next frame
+        }
+    }
+
+    /// Multiline-paste confirmation (Tabby's warnOnMultilinePaste): preview + Paste/Cancel.
+    /// Shown while `pending_paste` is set; the modal path intentionally skips the trim rules.
+    fn paste_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some(text) = self.pending_paste.take() else {
+            return;
+        };
+        let mut do_paste = false;
+        let mut cancel = false;
+        let lines = text.split('\r').count();
+        egui::Window::new("Paste multiple lines?")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .frame(ui::overlay_frame())
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("Paste {lines} lines?"))
+                        .strong()
+                        .color(colors::fg()),
+                );
+                ui.add_space(4.0);
+                // Preview the first few lines (Tabby shows a 1000-char preview).
+                let preview: String = text
+                    .split('\r')
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .chars()
+                    .take(200)
+                    .collect();
+                ui.label(egui::RichText::new(preview).monospace().small().color(colors::dim()));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui::action_button(ui, "Paste", true).clicked() {
+                        do_paste = true;
+                    }
+                    if ui::action_button(ui, "Cancel", false).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            do_paste = true;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        }
+        if do_paste {
+            let t = self.tabs[self.active].focused_term_mut();
+            t.paste(&text);
+            t.clear_selection();
+            t.scroll_to_bottom();
+        } else if !cancel {
+            self.pending_paste = Some(text); // keep asking next frame
         }
     }
 
@@ -610,6 +702,9 @@ fn tab_menu(
     if ui.button("Rename…").clicked() {
         *action = Some(TabAction::Rename(i));
     }
+    if ui.button("Restart").clicked() {
+        *action = Some(TabAction::Restart(i));
+    }
     ui.menu_button("Color", |ui| {
         // Snug width for the swatch grid (style_menu's 210 leaves dead space here).
         ui.spacing_mut().button_padding = egui::vec2(12.0, 7.0);
@@ -640,6 +735,15 @@ fn tab_menu(
     ui.separator();
     if ui.button("Close").clicked() {
         *action = Some(TabAction::Close(i));
+    }
+    if ui.button("Close other tabs").clicked() {
+        *action = Some(TabAction::CloseOthers(i));
+    }
+    if ui.button("Close tabs to the right").clicked() {
+        *action = Some(TabAction::CloseRight(i));
+    }
+    if ui.button("Close tabs to the left").clicked() {
+        *action = Some(TabAction::CloseLeft(i));
     }
 }
 
@@ -788,6 +892,8 @@ impl eframe::App for Stdusk {
         let mut kb_tab_cycle: Option<i32> = None; // Ctrl+Tab next (+1) / Ctrl+Shift+Tab prev (-1)
         let mut kb_reopen = false; // Cmd+Shift+T: reopen last closed tab
         let mut kb_resize: Option<(pane::SplitDir, f32)> = None; // Cmd+Ctrl+arrow: resize focused pane
+        let mut kb_move_tab: Option<i32> = None; // Cmd+Shift+←/→: move the active tab
+        let mut kb_scroll_edge: Option<bool> = None; // Shift+Home/End: scroll to top (true) / bottom
         ctx.input(|i| {
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
                 kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
@@ -798,6 +904,20 @@ impl eframe::App for Stdusk {
                 }
                 if i.key_pressed(egui::Key::PageDown) {
                     kb_scroll_pages = Some(1);
+                }
+                if i.key_pressed(egui::Key::Home) {
+                    kb_scroll_edge = Some(true);
+                }
+                if i.key_pressed(egui::Key::End) {
+                    kb_scroll_edge = Some(false);
+                }
+                if i.modifiers.command {
+                    if i.key_pressed(egui::Key::ArrowLeft) {
+                        kb_move_tab = Some(-1);
+                    }
+                    if i.key_pressed(egui::Key::ArrowRight) {
+                        kb_move_tab = Some(1);
+                    }
                 }
             }
             if i.modifiers.command {
@@ -977,6 +1097,9 @@ impl eframe::App for Stdusk {
             let len = self.tabs.len() as i32;
             self.active = (self.active as i32 + d).rem_euclid(len) as usize;
         }
+        if let Some(d) = kb_move_tab {
+            self.move_tab(self.active, d);
+        }
         if kb_reopen {
             self.reopen_tab(&ctx);
         }
@@ -994,14 +1117,7 @@ impl eframe::App for Stdusk {
         }
         if let Some(dir) = kb_split {
             let cwd = self.tabs[self.active].focused_term().cwd();
-            let new = PtyTerm::spawn(
-                COLS,
-                ROWS,
-                ctx.clone(),
-                self.cfg.terminal.detect_progress,
-                cwd,
-                self.cfg.terminal.shell_integration,
-            );
+            let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(&self.cfg, cwd));
             let tab = &mut self.tabs[self.active];
             let root = tab.root.take().expect("root");
             let (root, focus) = root.split(&tab.focused, dir, new, false);
@@ -1059,6 +1175,15 @@ impl eframe::App for Stdusk {
                 let page = t.rows().saturating_sub(1) as i32;
                 t.scroll(-dir * page); // PageUp (-1) scrolls up into history
             }
+            if let Some(to_top) = kb_scroll_edge {
+                let t = self.tabs[self.active].focused_term();
+                if to_top {
+                    let (_, history) = t.scroll_state();
+                    t.scroll_to_offset(history);
+                } else {
+                    t.scroll_to_bottom();
+                }
+            }
         }
         match action {
             Some(TabAction::New) => self.new_tab(&ctx),
@@ -1081,6 +1206,20 @@ impl eframe::App for Stdusk {
             Some(TabAction::MoveLeft(i)) => self.move_tab(i, -1),
             Some(TabAction::MoveRight(i)) => self.move_tab(i, 1),
             Some(TabAction::Close(i)) => self.close_tab(i, &ctx),
+            Some(TabAction::CloseOthers(i)) => self.close_tabs_where(|j| j == i, i),
+            Some(TabAction::CloseRight(i)) => self.close_tabs_where(|j| j <= i, i),
+            Some(TabAction::CloseLeft(i)) => self.close_tabs_where(|j| j >= i, i),
+            Some(TabAction::Restart(i)) => {
+                // Fresh shell in the same cwd; keep the tab's identity (title/color/rename).
+                if let Some(old) = self.tabs.get(i) {
+                    let cwd = old.focused_term().cwd();
+                    let mut fresh = spawn_tab(&self.cfg, &ctx, cwd);
+                    fresh.title.clone_from(&old.title);
+                    fresh.renamed = old.renamed;
+                    fresh.color = old.color;
+                    self.tabs[i] = fresh;
+                }
+            }
             None => {}
         }
 
@@ -1088,9 +1227,11 @@ impl eframe::App for Stdusk {
         // pty and don't let the terminal steal egui focus back while one is open. Captured MUST be
         // sampled BEFORE the modals run this frame - else the key that closes a modal (Enter to
         // commit a rename) would leak to the shell once the modal clears its own state.
-        let input_captured = self.search.is_some() || self.renaming.is_some();
+        let input_captured =
+            self.search.is_some() || self.renaming.is_some() || self.pending_paste.is_some();
 
         self.rename_window(&ctx);
+        self.paste_confirm_window(&ctx);
 
         // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.
         if let Some(text) =
@@ -1126,19 +1267,27 @@ impl eframe::App for Stdusk {
                         &self.cfg.terminal.link_modifier,
                     );
 
+                let tcfg = self.cfg.terminal.clone();
                 let tab = &mut self.tabs[self.active];
 
-                // Cmd+C copies the focused pane's selection (Ctrl+C stays SIGINT).
-                let want_copy =
-                    ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+                // Cmd+C copies the focused pane's selection; intelligent Ctrl+C (Tabby) copies
+                // too when a selection exists, else stays SIGINT (handled via collect_input).
+                let has_selection = tab.focused_term().selection_text().is_some();
+                let ctrl_c = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::C));
+                let want_copy = ui
+                    .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+                    || (ctrl_c && has_selection && !input_captured);
                 if want_copy && let Some(txt) = tab.focused_term().selection_text() {
                     ctx.copy_text(txt);
+                    if ctrl_c {
+                        tab.focused_term().clear_selection(); // Tabby clears after Ctrl-C copy
+                    }
                     copied = true;
                 }
 
                 // Keystrokes + paste -> focused pane (unless the find bar owns the keyboard).
                 if !input_captured {
-                    let input = collect_input(ui);
+                    let input = collect_input(ui, tcfg.alt_is_meta, ctrl_c && has_selection);
                     if !input.is_empty() {
                         let t = tab.focused_term_mut();
                         t.send(&input);
@@ -1155,8 +1304,21 @@ impl eframe::App for Stdusk {
                             .collect()
                     });
                     for p in pastes {
+                        // Tabby's paste pipeline: normalize newlines (+optional ->spaces); a
+                        // multiline paste outside the alt screen asks first (modal, untrimmed);
+                        // otherwise apply the trim rules and send.
+                        let s = ui::normalize_paste(&p, tcfg.replace_newlines_on_paste);
+                        let multiline = s.contains('\r');
+                        if multiline
+                            && tcfg.warn_on_multiline_paste
+                            && !tab.focused_term().is_alt_screen()
+                        {
+                            self.pending_paste = Some(s);
+                            continue;
+                        }
+                        let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);
                         let t = tab.focused_term_mut();
-                        t.paste(&p);
+                        t.paste(&s);
                         t.clear_selection();
                         t.scroll_to_bottom();
                     }
@@ -1180,6 +1342,7 @@ impl eframe::App for Stdusk {
                 let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
                 let pointer = ui.input(|i| i.pointer.hover_pos());
                 let mut focus_click: Option<Vec<pane::Side>> = None;
+                let mut middle_paste: Option<(Vec<pane::Side>, String)> = None;
                 for (path, rect) in &layout {
                     {
                         let term = tab.root_mut().leaf_at_mut(path).expect("leaf");
@@ -1200,6 +1363,7 @@ impl eframe::App for Stdusk {
                     let dimmed = multi && path != &tab.focused;
                     let has_sel = term.selection_text().is_some();
                     let cwd = term.cwd();
+                    let blink = tcfg.cursor_blink && !input_captured && path == &tab.focused;
                     let resp = render_grid(
                         ui,
                         path,
@@ -1212,9 +1376,27 @@ impl eframe::App for Stdusk {
                         cursor,
                         dimmed,
                         link_active,
+                        blink,
                     );
                     if bell_on && term.take_bell() {
                         bell_rang = true;
+                    }
+                    // Copy-on-select: whenever a drag/double/triple selection just finished.
+                    if tcfg.copy_on_select
+                        && (resp.drag_stopped() || resp.double_clicked() || resp.triple_clicked())
+                        && let Some(txt) = term.selection_text()
+                        && !txt.trim().is_empty()
+                    {
+                        ctx.copy_text(txt);
+                    }
+                    // Middle-click pastes the clipboard into this pane (and focuses it).
+                    if tcfg.paste_on_middle_click
+                        && resp.hovered()
+                        && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle))
+                        && let Ok(mut cb) = arboard::Clipboard::new()
+                        && let Ok(text) = cb.get_text()
+                    {
+                        middle_paste = Some((path.clone(), text));
                     }
                     if resp.clicked() || resp.drag_started() {
                         focus_click = Some(path.clone());
@@ -1230,6 +1412,18 @@ impl eframe::App for Stdusk {
                 }
                 if let Some(p) = focus_click {
                     tab.focused = p;
+                }
+                // Apply the middle-click paste (deferred: needs &mut past the render borrow).
+                // Runs through the same normalize/trim pipeline; skips the multiline modal like
+                // Tabby (middle-click paste is an X11-style immediate action).
+                if let Some((p, text)) = middle_paste {
+                    tab.focused.clone_from(&p);
+                    let s = ui::normalize_paste(&text, tcfg.replace_newlines_on_paste);
+                    let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);
+                    if let Some(t) = tab.root_mut().leaf_at_mut(&p) {
+                        t.paste(&s);
+                        t.scroll_to_bottom();
+                    }
                 }
 
                 // Draggable splitters between panes (hidden while a pane is maximized).
@@ -1280,14 +1474,7 @@ impl eframe::App for Stdusk {
             }
             Some(PaneAction::Split(p, dir, new_first)) => {
                 let cwd = self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::cwd);
-                let new = PtyTerm::spawn(
-                    COLS,
-                    ROWS,
-                    ctx.clone(),
-                    self.cfg.terminal.detect_progress,
-                    cwd,
-                    self.cfg.terminal.shell_integration,
-                );
+                let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(&self.cfg, cwd));
                 let tab = &mut self.tabs[self.active];
                 let root = tab.root.take().expect("root");
                 let (root, focus) = root.split(&p, dir, new, new_first);
