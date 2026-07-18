@@ -42,8 +42,9 @@ struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
     cfg: Config,
-    _hotkey: GlobalHotKeyManager, // kept alive so the registration persists
-    toggle: Arc<AtomicBool>,      // set by the hotkey thread, consumed in ui()
+    hotkey_mgr: GlobalHotKeyManager, // kept alive so the registration persists
+    registered_hotkey: String, // the hotkey string currently registered (live re-registration)
+    toggle: Arc<AtomicBool>,   // set by the hotkey thread, consumed in ui()
     visible: bool,
     dock_shown: bool, // last-applied Dock-icon state (dynamic dock_when_visible mode)
     was_focused: bool, // gained focus since last show (so blur can hide)
@@ -55,16 +56,19 @@ struct Stdusk {
     settings: settings::SettingsState, // selected section + scheme search/hover state
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     pending_pastes: std::collections::VecDeque<(u64, String)>, // multiline pastes awaiting confirm (tab id, text)
+    pending_close: Option<(u64, String)>, // close-tab confirm: (tab id, running process name)
+    window_top: Option<bool>, // last-applied always-on-top state (re-applied when it changes)
+    fx_opacity: f32, // this frame's effective window opacity (unfocused dim applied); derived
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
-    flash: f64,                   // bell visual-flash expiry (egui time); 0 = none
-    zoom: f32,                    // font-size multiplier (Cmd +/-/0)
-    theme_name: String,           // currently-applied theme (to detect OS light/dark changes)
-    sys: sysinfo::System,         // process table for CLI-awareness scans
-    next_cli_scan: f64,           // egui time of the next throttled procwatch scan
-    next_session_save: f64,       // egui time of the next throttled session persist
+    flash: f64,      // bell visual-flash expiry (egui time); 0 = none
+    zoom: f32,       // font-size multiplier (Cmd +/-/0)
+    theme_name: String, // currently-applied theme (to detect OS light/dark changes)
+    sys: sysinfo::System, // process table for CLI-awareness scans
+    next_cli_scan: f64, // egui time of the next throttled procwatch scan
+    next_session_save: f64, // egui time of the next throttled session persist
     last_session: session::SavedSession, // last persisted session (skip identical writes)
-    tray: Option<tray::Tray>,     // menu-bar status item (kept alive; Some when enabled)
-    screenshot: Option<String>,   // --screenshot PATH: demo tabs, capture, exit
+    tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
+    screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
 }
 
 impl Stdusk {
@@ -189,14 +193,19 @@ impl Stdusk {
             settings.open_section(settings::Section::ColorScheme);
         }
 
+        let registered_hotkey = cfg.quake.hotkey.clone();
+        let fx_opacity = cfg.appearance.opacity;
+        // Initial Dock presence must mirror the launch activation policy (see main()).
+        let dock_shown = !cfg.quake.hide_from_dock || cfg.quake.dock_when_visible;
         Self {
             tabs,
             active,
             cfg,
-            _hotkey: mgr,
+            hotkey_mgr: mgr,
+            registered_hotkey,
             toggle,
             visible: true,
-            dock_shown: true, // launches regular (dynamic mode) / irrelevant otherwise
+            dock_shown,
             was_focused: false, // arm hide-on-blur only after the first focus gain
             sized,
             renaming: None,
@@ -206,6 +215,9 @@ impl Stdusk {
             settings,
             closed: Vec::new(),
             pending_pastes: std::collections::VecDeque::new(),
+            pending_close: None,
+            window_top: None,
+            fx_opacity,
             toast: None,
             flash: 0.0,
             zoom: 1.0,
@@ -219,16 +231,31 @@ impl Stdusk {
         }
     }
 
-    /// In the dynamic `dock_when_visible` mode, keep the Dock icon (+ menu bar) in sync with the
-    /// window's visibility. Only touches the activation policy when it actually changes.
+    /// Keep the Dock icon (+ menu bar) in sync with the config and, in the dynamic
+    /// `dock_when_visible` mode, with the window's visibility. Reconciling desired-vs-applied
+    /// each frame makes the Dock toggles in settings live (no restart). Only touches the
+    /// activation policy when it actually changes.
     fn sync_dock(&mut self) {
-        if self.cfg.quake.hide_from_dock
-            && self.cfg.quake.dock_when_visible
-            && self.visible != self.dock_shown
-        {
-            set_dock_icon(self.visible);
-            self.dock_shown = self.visible;
+        let want =
+            !self.cfg.quake.hide_from_dock || (self.cfg.quake.dock_when_visible && self.visible);
+        if want != self.dock_shown {
+            set_dock_icon(want);
+            self.dock_shown = want;
         }
+    }
+
+    /// Re-register the global quake hotkey when the config string changed (settings live-apply:
+    /// field commit, Save, Revert, Discard). Returns true when a re-registration happened.
+    fn reregister_hotkey(&mut self) -> bool {
+        if self.cfg.quake.hotkey == self.registered_hotkey {
+            return false;
+        }
+        let (mods, code) = config::parse_hotkey(&self.registered_hotkey);
+        let _ = self.hotkey_mgr.unregister(HotKey::new(mods, code));
+        let (mods, code) = config::parse_hotkey(&self.cfg.quake.hotkey);
+        let _ = self.hotkey_mgr.register(HotKey::new(mods, code));
+        self.registered_hotkey = self.cfg.quake.hotkey.clone();
+        true
     }
 }
 
@@ -271,7 +298,7 @@ fn notify_done(title: &str, code: i32) {
     let _ = (title, code);
 }
 
-fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
+pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
     if visible {
         if let Some(m) = mon {
@@ -295,10 +322,44 @@ impl eframe::App for Stdusk {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let height_pct = self.cfg.quake.height_pct;
-        let opacity = self.cfg.appearance.opacity;
+
+        // Effective window opacity: dim while visible-but-unfocused when hide-on-focus-loss is
+        // off (the "keep it around" mode); eased so focus changes fade instead of popping.
+        // The screenshot harness window is never focused - keep it at the configured base.
+        let opacity = if self.screenshot.is_none() {
+            let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+            let target = ui::effective_opacity(
+                self.cfg.appearance.opacity,
+                self.cfg.quake.unfocused_opacity,
+                self.visible,
+                focused,
+                self.cfg.quake.hide_on_focus_loss,
+            );
+            ctx.animate_value_with_time(egui::Id::new("fx_opacity"), target, 0.15)
+        } else {
+            self.cfg.appearance.opacity
+        };
+        self.fx_opacity = opacity;
 
         // Quake window management is skipped in the screenshot harness.
         if self.screenshot.is_none() {
+            // Always-on-top while hide-on-focus-loss is off (the window is meant to stay put
+            // over other apps); Normal otherwise. Re-applied whenever the setting changes.
+            let want_top = !self.cfg.quake.hide_on_focus_loss;
+            if self.window_top != Some(want_top) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if want_top {
+                    egui::WindowLevel::AlwaysOnTop
+                } else {
+                    egui::WindowLevel::Normal
+                }));
+                self.window_top = Some(want_top);
+            }
+            // Menu-bar icon toggle is live: build/drop the tray as the setting flips.
+            if self.cfg.quake.menu_bar_icon && self.tray.is_none() {
+                self.tray = tray::build();
+            } else if !self.cfg.quake.menu_bar_icon && self.tray.is_some() {
+                self.tray = None;
+            }
             // First run: apply full quake sizing once the monitor size is known.
             if !self.sized {
                 if ctx.input(|i| i.viewport().monitor_size).is_some() {
@@ -459,19 +520,28 @@ impl eframe::App for Stdusk {
         let mut kb_move_tab: Option<i32> = None; // Cmd+Shift+←/→: move the active tab
         let mut kb_scroll_edge: Option<bool> = None; // Shift+Home/End: scroll to top (true) / bottom
         let mut kb_palette = false; // Cmd+Shift+P: toggle the command palette
-        // A hard modal (rename / paste confirm / palette) owns the keyboard entirely: tab
-        // switching or Cmd+W while a paste-confirm shows would retarget/kill the tab under it.
-        let text_modal = self.renaming.is_some() || !self.pending_pastes.is_empty();
-        let hard_modal = text_modal || self.palette.is_some();
+        let mut kb_settings = false; // Cmd+,: toggle the settings view
+        // A hard modal (rename / paste confirm / close confirm / palette) owns the keyboard
+        // entirely: tab switching or Cmd+W while a confirm shows would retarget/kill the tab
+        // under it. The settings view suppresses them too - tab/pane mutations under a hidden
+        // workspace would be invisible.
+        let text_modal = self.renaming.is_some()
+            || !self.pending_pastes.is_empty()
+            || self.pending_close.is_some();
+        let hard_modal = text_modal || self.palette.is_some() || self.settings_open;
         ctx.input(|i| {
             // Cmd+Shift+P toggles the palette even while it's open (it's its own dismissal),
-            // but stays suppressed under the rename/paste-confirm modals.
+            // but stays suppressed under the rename/paste-confirm modals. Cmd+, does the same
+            // for the settings view.
             if !text_modal
                 && i.modifiers.command
                 && i.modifiers.shift
                 && i.key_pressed(egui::Key::P)
             {
                 kb_palette = true;
+            }
+            if !text_modal && i.modifiers.command && i.key_pressed(egui::Key::Comma) {
+                kb_settings = true;
             }
             if hard_modal {
                 return;
@@ -653,20 +723,16 @@ impl eframe::App for Stdusk {
         if kb_find && !self.settings_open {
             match self.search.take() {
                 Some(_) => self.tabs[self.active].focused_term().clear_selection(),
-                None => {
-                    self.search = Some(Search {
-                        query: String::new(),
-                        matches: Vec::new(),
-                        current: 0,
-                        focus: true,
-                        opts: search::SearchOpts::default(),
-                    });
-                }
+                None => self.search = Some(Search::new()),
             }
         }
         if kb_palette && self.palette.take().is_none() {
             self.palette = Some(palette::PaletteState::new());
         }
+        if kb_settings {
+            self.toggle_settings();
+        }
+        let now = ctx.input(|i| i.time);
         // Font zoom (harmless anytime). Reset (0), in (1), out (-1); clamped.
         if let Some(z) = kb_zoom {
             self.zoom = match z {
@@ -674,11 +740,28 @@ impl eframe::App for Stdusk {
                 1 => (self.zoom * 1.1).min(3.0),
                 _ => (self.zoom / 1.1).max(0.5),
             };
+            self.toast = Some((format!("Zoom {:.0}%", self.zoom * 100.0), now + 1.4));
         }
-        // Terminal input keybinds - suppressed while a text modal (find/rename) owns the keyboard.
-        if self.search.is_none() && self.renaming.is_none() {
+
+        // A text surface (focused find bar, rename dialog, command palette, settings view, or a
+        // confirm modal) owns the keyboard: don't forward keys to the pty. MUST be sampled
+        // BEFORE the modals run this frame - else the key that closes a modal (Enter to commit
+        // a rename) would leak to the shell once the modal clears its own state. The find bar
+        // captures only while its field has focus, so an open bar doesn't swallow shell input.
+        let input_captured = ui::pty_input_captured(
+            self.search.as_ref().is_some_and(|s| s.field_focused),
+            self.renaming.is_some(),
+            self.palette.is_some(),
+            self.settings_open,
+            !self.pending_pastes.is_empty(),
+            self.pending_close.is_some(),
+        );
+
+        // Terminal input keybinds - suppressed while anything else owns the keyboard.
+        if !input_captured {
             if kb_select_all {
                 self.tabs[self.active].focused_term().select_all();
+                self.toast = Some(("Selected all".into(), now + 1.4));
             }
             if kb_clear {
                 self.tabs[self.active].focused_term_mut().send(b"\x0c"); // Ctrl-L: clear
@@ -700,19 +783,9 @@ impl eframe::App for Stdusk {
         }
         self.apply_tab_action(action, &ctx);
 
-        // A text field (find bar, rename dialog, or command palette) owns the keyboard: don't
-        // forward keys to the pty and don't let the terminal steal egui focus back while one is
-        // open. Captured MUST be
-        // sampled BEFORE the modals run this frame - else the key that closes a modal (Enter to
-        // commit a rename) would leak to the shell once the modal clears its own state.
-        let input_captured = self.search.is_some()
-            || self.renaming.is_some()
-            || self.palette.is_some()
-            || self.settings_open
-            || !self.pending_pastes.is_empty();
-
         self.rename_window(&ctx);
         self.paste_confirm_window(&ctx);
+        self.close_confirm_window(&ctx);
         self.palette_window(&ctx);
 
         // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.
@@ -722,7 +795,6 @@ impl eframe::App for Stdusk {
             ctx.copy_text(text);
         }
 
-        let now = ctx.input(|i| i.time);
         // While settings are open, the settings view takes over the central area (the tab bar
         // stays); the terminal workspace and find bar come back when it closes.
         let out = if self.settings_open {

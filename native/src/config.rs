@@ -88,6 +88,9 @@ pub(crate) struct Quake {
     /// flipping back to accessory when it's hidden. Off by default (pure accessory - no Dock, and
     /// the menu bar belongs to whatever other app is frontmost).
     pub(crate) dock_when_visible: bool,
+    /// Extra opacity multiplier while the window is visible but unfocused (only applies with
+    /// `hide_on_focus_loss = false`). 1.0 = off.
+    pub(crate) unfocused_opacity: f32,
 }
 
 // Independent user toggles, not a mode - a state machine would be more code, not less.
@@ -114,6 +117,7 @@ pub(crate) struct Terminal {
     pub(crate) replace_newlines_on_paste: bool, // newlines -> spaces on paste
     pub(crate) bold_bright: bool,    // draw bold text in the bright ANSI colors
     pub(crate) ligatures: bool, // render common code sequences (-> => != >= <=) as single glyphs
+    pub(crate) warn_on_close_running: bool, // confirm closing a tab with a running process
 }
 
 impl Default for Appearance {
@@ -137,6 +141,7 @@ impl Default for Quake {
             hide_from_dock: true,
             menu_bar_icon: true,
             dock_when_visible: false,
+            unfocused_opacity: 1.0,
         }
     }
 }
@@ -162,6 +167,7 @@ impl Default for Terminal {
             replace_newlines_on_paste: false,
             bold_bright: true,
             ligatures: false,
+            warn_on_close_running: true,
         }
     }
 }
@@ -190,6 +196,12 @@ fn config_path() -> Option<std::path::PathBuf> {
 /// `Config::deserialize` (unit-tested below).
 pub(crate) fn config_to_toml(cfg: &Config) -> String {
     toml::to_string(cfg).unwrap_or_default()
+}
+
+/// Whether two configs differ (settings unsaved-changes guard). Compared via their TOML
+/// serialization so it can't drift from what Save would write.
+pub(crate) fn config_dirty(a: &Config, b: &Config) -> bool {
+    config_to_toml(a) != config_to_toml(b)
 }
 
 /// Return the config path, creating it (with the example content) if it doesn't exist.
@@ -260,7 +272,21 @@ mod tests {
         assert_eq!(c.appearance.opacity, 0.85);
         assert_eq!(c.quake.hotkey, "Ctrl+Grave");
         assert!(c.quake.hide_on_focus_loss);
+        assert_eq!(c.quake.unfocused_opacity, 1.0); // off by default
         assert!(c.terminal.detect_progress);
+        assert!(c.terminal.warn_on_close_running);
+    }
+
+    #[test]
+    fn dirty_detects_any_field_change() {
+        let a = Config::default();
+        let mut b = Config::default();
+        assert!(!config_dirty(&a, &b));
+        b.appearance.opacity = 0.5;
+        assert!(config_dirty(&a, &b));
+        b = Config::default();
+        b.quake.hotkey = "F13".into();
+        assert!(config_dirty(&a, &b));
     }
 
     #[test]

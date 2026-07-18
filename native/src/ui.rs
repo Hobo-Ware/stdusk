@@ -109,6 +109,14 @@ pub(crate) fn key_to_bytes(
         Key::Tab if mods.shift => b"\x1b[Z".to_vec(), // back-tab (CSI Z) - apps cycle on this
         Key::Tab => vec![b'\t'],
         Key::Escape => vec![0x1b],
+        Key::Delete => b"\x1b[3~".to_vec(), // forward delete
+        Key::Insert => b"\x1b[2~".to_vec(),
+        // Shift+Home/End/PageUp/PageDown are app scrollback bindings - don't forward those.
+        Key::Home | Key::End | Key::PageUp | Key::PageDown if mods.shift => return None,
+        Key::Home => b"\x1b[H".to_vec(),
+        Key::End => b"\x1b[F".to_vec(),
+        Key::PageUp => b"\x1b[5~".to_vec(),
+        Key::PageDown => b"\x1b[6~".to_vec(),
         Key::ArrowUp => b"\x1b[A".to_vec(),
         Key::ArrowDown => b"\x1b[B".to_vec(),
         Key::ArrowRight if mods.alt => b"\x1bf".to_vec(), // forward word (readline)
@@ -189,6 +197,39 @@ pub(crate) fn progress_fraction(p: Progress) -> Option<f32> {
 /// Toast opacity (0..=1): full until `remaining_s` drops below `fade_window_s`, then linear out.
 pub(crate) fn toast_alpha(remaining_s: f64, fade_window_s: f64) -> f32 {
     (remaining_s / fade_window_s).clamp(0.0, 1.0) as f32
+}
+
+/// The window opacity for this frame: the configured base, times `unfocused_mult` while the
+/// window is visible but unfocused AND hide-on-focus-loss is off (with it on, an unfocused
+/// window is about to hide anyway).
+pub(crate) fn effective_opacity(
+    base: f32,
+    unfocused_mult: f32,
+    visible: bool,
+    focused: bool,
+    hide_on_focus_loss: bool,
+) -> f32 {
+    if visible && !focused && !hide_on_focus_loss {
+        (base * unfocused_mult.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+    } else {
+        base
+    }
+}
+
+/// Should keystrokes be kept away from the pty this frame? True while any modal text surface
+/// owns the keyboard. The find bar counts only while its text field actually has focus - an
+/// open-but-unfocused find bar must not silently swallow terminal input (that read as
+/// "keys/backspace no longer reach the shell").
+#[allow(clippy::fn_params_excessive_bools)] // independent modal states, table-tested below
+pub(crate) fn pty_input_captured(
+    search_field_focused: bool,
+    renaming: bool,
+    palette: bool,
+    settings_open: bool,
+    pending_pastes: bool,
+    pending_close: bool,
+) -> bool {
+    search_field_focused || renaming || palette || settings_open || pending_pastes || pending_close
 }
 
 /// Cursor blink phase: on for the first half of each ~1.06s cycle (xterm-ish cadence).
@@ -585,32 +626,37 @@ fn draw_mini_layout(ui: &mut egui::Ui, rects: &[egui::Rect], active: bool) {
     }
 }
 
-/// A small brand-colored pill naming a known AI CLI running in the tab (Claude / Gemini / ...).
-fn draw_cli_badge(ui: &mut egui::Ui, cli: crate::procwatch::Cli) {
+/// A compact brand-colored chip marking a known AI CLI running in the tab: a small rounded
+/// square in the CLI's brand color with its initial letter, full name on hover. Drawn BEFORE
+/// the tab title so it can never collide with the close-x at the tab's trailing edge.
+fn draw_cli_chip(ui: &mut egui::Ui, cli: crate::procwatch::Cli) {
     let col = cli.color();
     let label = cli.label();
-    let font = egui::FontId::proportional(10.0);
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), col);
-    let (rect, resp) =
-        ui.allocate_exact_size(galley.size() + egui::vec2(10.0, 4.0), egui::Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+    // Contrast ink by the brand color's luminance so the initial reads on light and dark chips.
+    let lum = 0.299 * f32::from(col.r()) + 0.587 * f32::from(col.g()) + 0.114 * f32::from(col.b());
+    let ink = if lum > 150.0 { egui::Color32::from_rgb(24, 24, 24) } else { egui::Color32::WHITE };
+    let initial = label.chars().next().unwrap_or('?').to_ascii_uppercase();
     let p = ui.painter();
-    p.rect_filled(rect, 4.0, col.gamma_multiply(0.18)); // tinted fill
-    p.rect_stroke(
-        rect,
-        4.0,
-        egui::Stroke::new(1.0, col.gamma_multiply(0.55)),
-        egui::StrokeKind::Inside,
+    p.rect_filled(rect, 4.0, col);
+    p.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        initial,
+        egui::FontId::proportional(10.0),
+        ink,
     );
-    p.text(rect.center(), egui::Align2::CENTER_CENTER, label, font, col);
     resp.on_hover_text(format!("{label} is running in this tab"));
 }
 
 /// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline, a
-/// split-layout preview glyph, and progress as a thin bar on the TOP edge. Returns (click
+/// split-layout preview glyph, and progress as a thin bar on the TOP edge. Returns (click+drag
 /// response, close-clicked). `layout` = `Pane::miniature()` leaf rects (glyph shown when >1).
+/// `tab_id` seeds the interact id so drag-reorder tracking survives index swaps (ui.md).
 pub(crate) fn draw_tab(
     ui: &mut egui::Ui,
     idx: usize,
+    tab_id: u64,
     title: &str,
     active: bool,
     color: Option<egui::Color32>,
@@ -637,12 +683,13 @@ pub(crate) fn draw_tab(
                 if layout.len() > 1 {
                     draw_mini_layout(ui, layout, active);
                 }
+                // CLI chip leads the title (the trailing edge belongs to the close-x).
+                if let Some(cli) = cli {
+                    draw_cli_chip(ui, cli);
+                }
                 let lbl = ui.add(egui::Label::new(rt).selectable(false));
                 if truncated {
                     lbl.on_hover_text(title);
-                }
-                if let Some(cli) = cli {
-                    draw_cli_badge(ui, cli);
                 }
             });
         });
@@ -688,7 +735,13 @@ pub(crate) fn draw_tab(
     // Interact the whole tab FIRST so the close-x (registered after, hence on top) wins its own
     // clicks. Previously the tab's click was registered last and stole the x's click, so clicking
     // the x just focused the tab instead of closing it.
-    let tab_resp = inner.response.interact(egui::Sense::click());
+    //
+    // ONE widget senses click AND drag (activate / double-click rename / context menu / reorder).
+    // Never layer a separate drag-only interact on top: egui's hit test drops the click hit
+    // entirely when the topmost widget under the pointer senses only drags (hit_test.rs), which
+    // is exactly the bug that killed all tab clicks in 0.2.2. Id comes from the stable tab id,
+    // not the loop index, so egui keeps tracking the same drag across reorder swaps.
+    let tab_resp = ui.interact(rect, ui.id().with(("tab", tab_id)), egui::Sense::click_and_drag());
     // Close x: shown on the active tab, or whenever the pointer is anywhere over the tab. Use
     // `contains_pointer` (true across the whole tab rect, incl. the x) rather than `hovered` so
     // moving onto the x doesn't drop the tab's hover state and make the x flicker.
@@ -698,7 +751,9 @@ pub(crate) fn draw_tab(
             egui::pos2(rect.right() - 22.0, rect.center().y - 9.0),
             egui::vec2(18.0, 18.0),
         );
-        let xr = ui.interact(x_rect, ui.id().with(("close", idx)), egui::Sense::click());
+        let xr = ui
+            .interact(x_rect, ui.id().with(("close", idx)), egui::Sense::click())
+            .on_hover_text("Close (Cmd+W)");
         let xh = xr.hovered();
         if xh {
             ui.painter().rect_filled(x_rect, 5.0, colors::hover());
@@ -1197,5 +1252,193 @@ mod tests {
         assert!((toast_alpha(0.175, 0.35) - 0.5).abs() < 1e-6);
         assert_eq!(toast_alpha(0.0, 0.35), 0.0);
         assert_eq!(toast_alpha(-1.0, 0.35), 0.0); // clamped
+    }
+
+    #[test]
+    fn nav_and_edit_keys_map_to_csi() {
+        let none = Modifiers::default();
+        assert_eq!(key_to_bytes(Key::Delete, none, false), Some(b"\x1b[3~".to_vec()));
+        assert_eq!(key_to_bytes(Key::Insert, none, false), Some(b"\x1b[2~".to_vec()));
+        assert_eq!(key_to_bytes(Key::Home, none, false), Some(b"\x1b[H".to_vec()));
+        assert_eq!(key_to_bytes(Key::End, none, false), Some(b"\x1b[F".to_vec()));
+        assert_eq!(key_to_bytes(Key::PageUp, none, false), Some(b"\x1b[5~".to_vec()));
+        assert_eq!(key_to_bytes(Key::PageDown, none, false), Some(b"\x1b[6~".to_vec()));
+        // Shift variants are app scrollback bindings - reserved.
+        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        for k in [Key::Home, Key::End, Key::PageUp, Key::PageDown] {
+            assert_eq!(key_to_bytes(k, shift, false), None, "{k:?} must stay an app bind");
+        }
+    }
+
+    #[test]
+    fn effective_opacity_dims_only_visible_unfocused_no_hide() {
+        // (visible, focused, hide_on_focus_loss) -> expected
+        let cases = [
+            ((true, false, false), 0.45), // the one dimming case: 0.9 * 0.5
+            ((true, true, false), 0.9),   // focused: full
+            ((true, false, true), 0.9),   // hide-on-blur mode: never dim
+            ((false, false, false), 0.9), // hidden: leave alone
+        ];
+        for ((visible, focused, hide), want) in cases {
+            let got = effective_opacity(0.9, 0.5, visible, focused, hide);
+            assert!((got - want).abs() < 1e-6, "v={visible} f={focused} h={hide}: {got}");
+        }
+        // multiplier 1.0 = feature off
+        assert_eq!(effective_opacity(0.9, 1.0, true, false, false), 0.9);
+    }
+
+    #[test]
+    fn pty_capture_requires_a_keyboard_owner() {
+        // Nothing open: keys flow to the shell.
+        assert!(!pty_input_captured(false, false, false, false, false, false));
+        // An open-but-unfocused find bar must NOT capture (the "backspace never reaches the
+        // shell" regression); a focused one must.
+        assert!(pty_input_captured(true, false, false, false, false, false));
+        // Every modal state captures on its own.
+        assert!(pty_input_captured(false, true, false, false, false, false)); // rename
+        assert!(pty_input_captured(false, false, true, false, false, false)); // palette
+        assert!(pty_input_captured(false, false, false, true, false, false)); // settings
+        assert!(pty_input_captured(false, false, false, false, true, false)); // paste confirm
+        assert!(pty_input_captured(false, false, false, false, false, true)); // close confirm
+    }
+
+    // ---- headless egui frames: the tab-bar hit-test regressions (egui 0.35 drops the click
+    // hit when a drag-only widget sits on top - so the tab senses click+drag as ONE widget) ----
+
+    struct TabFrameOut {
+        rects: Vec<egui::Rect>,
+        clicked: Option<usize>,
+        double: Option<usize>,
+        closed: Option<usize>,
+        dragged: Option<usize>,
+        keys: Vec<u8>,
+    }
+
+    /// One frame of a minimal real tab bar (two `draw_tab`s + reorder drag sense) above a
+    /// focused grid running `collect_input` - the exact structure of the app's render loop.
+    fn tab_frame(ctx: &egui::Context, events: Vec<egui::Event>) -> TabFrameOut {
+        let mut out = TabFrameOut {
+            rects: Vec::new(),
+            clicked: None,
+            double: None,
+            closed: None,
+            dragged: None,
+            keys: Vec::new(),
+        };
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            focused: true,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| {
+            egui::Panel::top("tabbar").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for i in 0..2usize {
+                        let (resp, close) = draw_tab(
+                            ui,
+                            i + 1,
+                            i as u64, // stable id
+                            "tab",
+                            i == 0,
+                            None,
+                            Progress::None,
+                            CmdState::Idle,
+                            &[],
+                            None,
+                        );
+                        if close {
+                            out.closed = Some(i);
+                        } else if resp.double_clicked() {
+                            out.double = Some(i);
+                        } else if resp.clicked() {
+                            out.clicked = Some(i);
+                        }
+                        if resp.dragged() && ui.input(|inp| inp.pointer.is_decidedly_dragging()) {
+                            out.dragged = Some(i);
+                        }
+                        out.rects.push(resp.rect);
+                    }
+                });
+            });
+            egui::CentralPanel::default().show(ui, |ui| {
+                let rect = ui.available_rect_before_wrap();
+                let g = ui.interact(rect, egui::Id::new("grid"), egui::Sense::click_and_drag());
+                g.request_focus();
+                out.keys = collect_input(ui, false, false);
+            });
+        });
+        out
+    }
+
+    fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    #[test]
+    fn tab_click_activates_despite_drag_sense() {
+        // Regression: the drag-reorder sense layered over tabs swallowed every click.
+        let ctx = egui::Context::default();
+        let warm = tab_frame(&ctx, vec![]);
+        let p = warm.rects[1].center();
+        tab_frame(&ctx, vec![egui::Event::PointerMoved(p)]);
+        tab_frame(&ctx, vec![press(p, true)]);
+        let up = tab_frame(&ctx, vec![press(p, false)]);
+        assert_eq!(up.clicked, Some(1), "plain click must activate the tab");
+        assert_eq!(up.dragged, None, "a plain click must not read as a drag");
+    }
+
+    #[test]
+    fn tab_drag_reorders_without_clicking() {
+        let ctx = egui::Context::default();
+        let warm = tab_frame(&ctx, vec![]);
+        let p = warm.rects[1].center();
+        tab_frame(&ctx, vec![egui::Event::PointerMoved(p)]);
+        tab_frame(&ctx, vec![press(p, true)]);
+        let moved = tab_frame(&ctx, vec![egui::Event::PointerMoved(p + egui::vec2(40.0, 0.0))]);
+        assert_eq!(moved.dragged, Some(1), "moving past the threshold must report a drag");
+        let up = tab_frame(&ctx, vec![press(p + egui::vec2(40.0, 0.0), false)]);
+        assert_eq!(up.clicked, None, "a decided drag must not also click");
+    }
+
+    #[test]
+    fn close_x_still_wins_its_click() {
+        // The x is registered after the tab, so it stays on top for clicks (LEDGER fix).
+        let ctx = egui::Context::default();
+        let warm = tab_frame(&ctx, vec![]);
+        let r = warm.rects[0]; // active tab always shows its x
+        let x = egui::pos2(r.right() - 13.0, r.center().y);
+        tab_frame(&ctx, vec![egui::Event::PointerMoved(x)]);
+        tab_frame(&ctx, vec![press(x, true)]);
+        let up = tab_frame(&ctx, vec![press(x, false)]);
+        assert_eq!(up.closed, Some(0), "the close-x must win its own click");
+        assert_eq!(up.clicked, None);
+    }
+
+    #[test]
+    fn backspace_reaches_the_pty_through_a_real_frame() {
+        // End-to-end through egui: a Backspace key event in a frame with the grid focused and
+        // no modal open must come out of collect_input as DEL (0x7f).
+        let ctx = egui::Context::default();
+        tab_frame(&ctx, vec![]);
+        let out = tab_frame(
+            &ctx,
+            vec![egui::Event::Key {
+                key: Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::default(),
+            }],
+        );
+        assert_eq!(out.keys, vec![0x7f]);
     }
 }

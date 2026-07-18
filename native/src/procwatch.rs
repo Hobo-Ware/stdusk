@@ -127,11 +127,41 @@ fn strip_ext(seg: &str) -> &str {
     }
 }
 
-/// Live scan: snapshot sysinfo's process table into `Proc`s and run `detect`. Cheap enough for a
-/// ~1 Hz call; sysinfo refresh happens in the caller so one refresh serves every tab.
-pub(crate) fn scan(sys: &sysinfo::System, root: u32) -> Option<Cli> {
-    let procs: Vec<Proc> = sys
-        .processes()
+/// The name of a process still running under `root` (the tab's shell), or `None` when the shell
+/// is idle. Used by the close-tab confirmation. Prefers a recognized CLI's label; otherwise the
+/// deepest descendant (the foreground-most program, e.g. `zsh -> ssh` names `ssh`).
+pub(crate) fn busy_child(procs: &[Proc], root: u32) -> Option<String> {
+    if let Some(cli) = detect(procs, root) {
+        return Some(cli.label().to_owned());
+    }
+    let mut children: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
+    for (i, p) in procs.iter().enumerate() {
+        if let Some(par) = p.parent {
+            children.entry(par).or_default().push(i);
+        }
+    }
+    let mut deepest: Option<(usize, String)> = None;
+    let mut stack = vec![(root, 0usize)];
+    let mut seen = std::collections::HashSet::new();
+    while let Some((pid, depth)) = stack.pop() {
+        if !seen.insert(pid) {
+            continue; // guard against pid-reuse cycles
+        }
+        let Some(kids) = children.get(&pid) else { continue };
+        for &i in kids {
+            let p = &procs[i];
+            if deepest.as_ref().is_none_or(|(d, _)| depth + 1 > *d) {
+                deepest = Some((depth + 1, p.name.clone()));
+            }
+            stack.push((p.pid, depth + 1));
+        }
+    }
+    deepest.map(|(_, name)| name)
+}
+
+/// Snapshot sysinfo's process table into plain `Proc`s (the pure fns work on these).
+fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
+    sys.processes()
         .values()
         .map(|p| Proc {
             pid: p.pid().as_u32(),
@@ -139,8 +169,18 @@ pub(crate) fn scan(sys: &sysinfo::System, root: u32) -> Option<Cli> {
             name: p.name().to_string_lossy().into_owned(),
             cmd: p.cmd().iter().map(|s| s.to_string_lossy().into_owned()).collect(),
         })
-        .collect();
-    detect(&procs, root)
+        .collect()
+}
+
+/// Live scan: snapshot sysinfo's process table into `Proc`s and run `detect`. Cheap enough for a
+/// ~1 Hz call; sysinfo refresh happens in the caller so one refresh serves every tab.
+pub(crate) fn scan(sys: &sysinfo::System, root: u32) -> Option<Cli> {
+    detect(&snapshot(sys), root)
+}
+
+/// Live version of `busy_child` (close-tab confirmation). Refresh happens in the caller.
+pub(crate) fn scan_busy(sys: &sysinfo::System, root: u32) -> Option<String> {
+    busy_child(&snapshot(sys), root)
 }
 
 #[cfg(test)]
@@ -201,5 +241,25 @@ mod tests {
     fn priority_prefers_earlier_table_entry() {
         let procs = vec![p(200, 100, "aider", &["aider"]), p(201, 100, "claude", &["claude"])];
         assert_eq!(detect(&procs, 100), Some(Cli::Claude)); // Claude outranks Aider
+    }
+
+    #[test]
+    fn busy_child_names_the_deepest_descendant() {
+        // shell(100) -> ssh(200) -> vim(300): the foreground-most program wins.
+        let procs = vec![p(200, 100, "ssh", &["ssh"]), p(300, 200, "vim", &["vim"])];
+        assert_eq!(busy_child(&procs, 100), Some("vim".into()));
+    }
+
+    #[test]
+    fn busy_child_prefers_a_recognized_cli_label() {
+        let procs = vec![p(200, 100, "node", &["node", "/x/claude-code/cli.js"])];
+        assert_eq!(busy_child(&procs, 100), Some("claude".into()));
+    }
+
+    #[test]
+    fn idle_shell_has_no_busy_child() {
+        // No descendants of the shell; unrelated trees don't count.
+        let procs = vec![p(300, 1, "Finder", &["Finder"])];
+        assert_eq!(busy_child(&procs, 100), None);
     }
 }

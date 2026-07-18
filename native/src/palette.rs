@@ -7,7 +7,7 @@ use crate::finder::Search;
 use crate::tabs::{TabAction, spawn_opts};
 use crate::terminal::PtyTerm;
 use crate::ui;
-use crate::{COLS, ROWS, Stdusk, colors, config, pane, search};
+use crate::{COLS, ROWS, Stdusk, colors, config, pane};
 
 const MAX_ROWS: usize = 8;
 const ROW_W: f32 = 320.0;
@@ -254,13 +254,7 @@ impl Stdusk {
             PaletteCmd::PrevTab => self.cycle_tab(-1),
             PaletteCmd::Find => {
                 if self.search.is_none() {
-                    self.search = Some(Search {
-                        query: String::new(),
-                        matches: Vec::new(),
-                        current: 0,
-                        focus: true,
-                        opts: search::SearchOpts::default(),
-                    });
+                    self.search = Some(Search::new());
                 }
             }
             PaletteCmd::ZoomIn => self.zoom = (self.zoom * 1.1).min(3.0),

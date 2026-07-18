@@ -102,6 +102,7 @@ pub(crate) enum TabAction {
     CloseOthers(usize),
     CloseRight(usize),
     CloseLeft(usize),
+    OpenPalette, // from the Tabs menu's discoverability row
 }
 
 /// While dragging the tab at `from`, the neighbor to swap with once the pointer's x
@@ -318,10 +319,85 @@ impl Stdusk {
         }
     }
 
+    /// Route a tab close through the running-process check: when the tab's shell has a live
+    /// child (a running command / REPL) and the warning is enabled, ask first via
+    /// `pending_close`; otherwise close immediately.
+    pub(crate) fn request_close_tab(&mut self, i: usize, ctx: &egui::Context) {
+        if self.cfg.terminal.warn_on_close_running
+            && let Some(tab) = self.tabs.get(i)
+        {
+            self.sys.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::All,
+                true,
+                sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
+            );
+            let busy = tab
+                .root()
+                .leaves()
+                .iter()
+                .filter_map(|t| t.shell_pid())
+                .find_map(|pid| procwatch::scan_busy(&self.sys, pid));
+            if let Some(name) = busy {
+                self.pending_close = Some((tab.id, name));
+                return;
+            }
+        }
+        self.close_tab(i, ctx);
+    }
+
+    /// Confirm-close modal, shown while `pending_close` is set: a process is still running in
+    /// the tab being closed. Targets the tab by stable id (indexes can shift meanwhile).
+    pub(crate) fn close_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some((tab_id, name)) = self.pending_close.take() else {
+            return;
+        };
+        let mut confirm = false;
+        let mut cancel = false;
+        egui::Window::new("Close tab?")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .frame(ui::overlay_frame())
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Close tab?").strong().color(colors::fg()));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!("{name} is still running in this tab."))
+                        .color(colors::dim()),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui::action_button(ui, "Close", true).clicked() {
+                        confirm = true;
+                    }
+                    if ui::action_button(ui, "Cancel", false).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        // Keyboard confirm - unless another text modal owns Enter/Esc.
+        if self.renaming.is_none() && self.pending_pastes.is_empty() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                confirm = true;
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+        }
+        if confirm {
+            if let Some(i) = self.tabs.iter().position(|t| t.id == tab_id) {
+                self.close_tab(i, ctx);
+            }
+        } else if !cancel {
+            self.pending_close = Some((tab_id, name)); // keep asking next frame
+        }
+    }
+
     /// The tab-bar panel. Collects tab clicks + menu actions for the caller to apply
     /// after the panel (avoids borrow clashes). Returns (clicked tab, deferred action).
     pub(crate) fn tab_bar(&mut self, ui: &mut egui::Ui) -> (Option<usize>, Option<TabAction>) {
-        let opacity = self.cfg.appearance.opacity;
+        let opacity = self.fx_opacity;
         let mut clicked: Option<usize> = None;
         let mut action: Option<TabAction> = None;
         let bar = egui::Panel::top("tabbar")
@@ -347,9 +423,15 @@ impl Stdusk {
                     let mut drag: Option<(usize, f32)> = None;
                     for (i, tab) in self.tabs.iter().enumerate() {
                         let active = i == self.active;
+                        // ONE response senses click AND drag: activate, double-click rename,
+                        // context menu, and drag-reorder all live on the same widget. A separate
+                        // drag-only interact layered on top made egui 0.35 drop the click hit
+                        // entirely (hit_test: topmost drag-only widget -> click: None), which
+                        // killed every tab click in 0.2.2.
                         let (resp, close) = draw_tab(
                             ui,
                             i + 1,
+                            tab.id,
                             &tab.title,
                             active,
                             tab.color,
@@ -366,21 +448,11 @@ impl Stdusk {
                             clicked = Some(i);
                         }
                         let tab_color = tab.color;
-                        // Drag sense layered over the tab (draw_tab's response is click-only,
-                        // and ui.rs is off-limits). Drag-only widgets don't take clicks, so
-                        // click / double-click / close-x / context menu keep working. Id is
-                        // seeded from the stable tab id, not the index, so egui keeps tracking
-                        // the same drag across swaps (ui.md).
-                        let dr = ui.interact(
-                            resp.rect,
-                            ui.id().with(("tab_drag", tab.id)),
-                            egui::Sense::drag(),
-                        );
-                        // A drag-only sense reports dragged() on bare press; gate on egui's
-                        // decided-drag threshold so a plain click never reorders.
-                        if dr.dragged()
+                        // Gate reorder on egui's decided-drag threshold so a plain click (or a
+                        // sloppy click) never reorders.
+                        if resp.dragged()
                             && ui.input(|inp| inp.pointer.is_decidedly_dragging())
-                            && let Some(p) = dr.interact_pointer_pos()
+                            && let Some(p) = resp.interact_pointer_pos()
                         {
                             drag = Some((i, p.x));
                         }
@@ -415,7 +487,7 @@ impl Stdusk {
                         }
                     }
                     ui.add_space(6.0);
-                    let plus = icon_button(ui, icons::PLUS, "New tab");
+                    let plus = icon_button(ui, icons::PLUS, "New tab (Cmd+T)");
                     if plus.clicked() {
                         action = Some(TabAction::New);
                     }
@@ -434,12 +506,18 @@ impl Stdusk {
                                 clicked = Some(i);
                             }
                         }
+                        ui.separator();
+                        if ui.button("Command palette…   Cmd+Shift+P").clicked() {
+                            action = Some(TabAction::OpenPalette);
+                        }
                     });
                     // Gear pinned to the right edge (spacer, not a nested layout); lit while
                     // the settings view is open.
                     ui.add_space((ui.available_width() - ui::ICON_TOGGLE_W).max(0.0));
-                    if ui::icon_toggle(ui, icons::GEAR, self.settings_open, "Settings").clicked() {
-                        self.settings_open = !self.settings_open;
+                    if ui::icon_toggle(ui, icons::GEAR, self.settings_open, "Settings (Cmd+,)")
+                        .clicked()
+                    {
+                        self.toggle_settings();
                     }
                 });
             });
@@ -484,7 +562,12 @@ impl Stdusk {
             }
             Some(TabAction::MoveLeft(i)) => self.move_tab(i, -1),
             Some(TabAction::MoveRight(i)) => self.move_tab(i, 1),
-            Some(TabAction::Close(i)) => self.close_tab(i, ctx),
+            Some(TabAction::Close(i)) => self.request_close_tab(i, ctx),
+            Some(TabAction::OpenPalette) => {
+                if self.palette.is_none() {
+                    self.palette = Some(crate::palette::PaletteState::new());
+                }
+            }
             Some(TabAction::CloseOthers(i)) => self.close_tabs_where(|j| j == i, i),
             Some(TabAction::CloseRight(i)) => self.close_tabs_where(|j| j <= i, i),
             Some(TabAction::CloseLeft(i)) => self.close_tabs_where(|j| j >= i, i),

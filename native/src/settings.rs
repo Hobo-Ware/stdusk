@@ -71,6 +71,11 @@ pub(crate) struct SettingsState {
     filter: String,
     hover_preview: Option<Theme>, // scheme row hovered last frame; preview card follows it
     scroll_to_active: bool,       // scroll the scheme list to the active row once, on entry
+    baseline: Option<config::Config>, // config as of open/save - the unsaved-changes reference
+    confirm_close: bool,          // the "Unsaved changes" modal is showing
+    dropdown_open: Option<egui::Id>, // which searchable theme dropdown is open, if any
+    dropdown_filter: String,      // the open dropdown's search query
+    dropdown_focus: bool,         // focus the dropdown filter once, on open
 }
 
 impl SettingsState {
@@ -80,6 +85,11 @@ impl SettingsState {
             filter: String::new(),
             hover_preview: None,
             scroll_to_active: false,
+            baseline: None,
+            confirm_close: false,
+            dropdown_open: None,
+            dropdown_filter: String::new(),
+            dropdown_focus: false,
         }
     }
 
@@ -87,6 +97,7 @@ impl SettingsState {
     pub(crate) fn open_section(&mut self, section: Section) {
         self.section = section;
         self.scroll_to_active = section == Section::ColorScheme;
+        self.dropdown_open = None;
     }
 }
 
@@ -216,8 +227,15 @@ fn rows(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-/// One settings row: title (+ optional dim description) left, control right. Call inside `rows`.
-fn row(ui: &mut egui::Ui, name: &str, desc: &str, control: impl FnOnce(&mut egui::Ui)) {
+/// One settings row: title (+ optional dim description + optional italic hint) left, control
+/// right. Call inside `rows`.
+fn row_full(
+    ui: &mut egui::Ui,
+    name: &str,
+    desc: &str,
+    hint: &str,
+    control: impl FnOnce(&mut egui::Ui),
+) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_width(LABEL_W);
@@ -225,21 +243,35 @@ fn row(ui: &mut egui::Ui, name: &str, desc: &str, control: impl FnOnce(&mut egui
             if !desc.is_empty() {
                 ui.label(egui::RichText::new(desc).size(11.0).color(colors::dim()));
             }
+            if !hint.is_empty() {
+                ui.label(egui::RichText::new(hint).size(10.5).italics().color(colors::dim()));
+            }
         });
         ui.add_space(16.0);
         control(ui);
     });
 }
 
-/// A fraction slider displayed as a percentage ("85%").
-fn pct_slider(ui: &mut egui::Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
+/// One settings row: title (+ optional dim description) left, control right. Call inside `rows`.
+fn row(ui: &mut egui::Ui, name: &str, desc: &str, control: impl FnOnce(&mut egui::Ui)) {
+    row_full(ui, name, desc, "", control);
+}
+
+/// A `row` whose setting only takes effect for terminals spawned after the change.
+fn row_new_tabs(ui: &mut egui::Ui, name: &str, desc: &str, control: impl FnOnce(&mut egui::Ui)) {
+    row_full(ui, name, desc, "Applies to new tabs", control);
+}
+
+/// A fraction slider displayed as a percentage ("85%"). Returns true while being changed.
+fn pct_slider(ui: &mut egui::Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
     ui.add(
         egui::Slider::new(value, range)
             .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
             .custom_parser(|s| {
                 s.trim().trim_end_matches('%').parse::<f64>().ok().map(|v| v / 100.0)
             }),
-    );
+    )
+    .changed()
 }
 
 /// A link-style row (About section): icon + title + dim subtitle, whole row clickable.
@@ -409,9 +441,124 @@ fn scheme_row(ui: &mut egui::Ui, name: &str, t: &Theme, active: bool) -> egui::R
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+// ---- searchable scheme dropdown (used by all three theme slots) ----
+
+/// A searchable scheme picker: a combo-style button showing the current value; clicking opens
+/// an overlay with a filter field + the full (virtualized) scheme list. Returns true when a
+/// scheme was picked into `value`. Only one dropdown is open at a time (`st.dropdown_open`).
+fn scheme_dropdown(
+    ui: &mut egui::Ui,
+    st: &mut SettingsState,
+    id_salt: &str,
+    value: &mut String,
+) -> bool {
+    let id = ui.make_persistent_id(id_salt);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(200.0, 28.0), egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let open = st.dropdown_open == Some(id);
+    let p = ui.painter();
+    p.rect_filled(rect, 7.0, colors::bg());
+    let stroke_col = if open || resp.hovered() { colors::accent() } else { colors::border() };
+    p.rect_stroke(rect, 7.0, egui::Stroke::new(1.0, stroke_col), egui::StrokeKind::Inside);
+    p.text(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        value.as_str(),
+        egui::FontId::proportional(13.0),
+        colors::fg(),
+    );
+    p.text(
+        egui::pos2(rect.right() - 12.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        if open { ui::icons::CARET_UP } else { ui::icons::CARET_DOWN },
+        egui::FontId::proportional(12.0),
+        colors::dim(),
+    );
+    if resp.clicked() {
+        st.dropdown_open = if open { None } else { Some(id) };
+        st.dropdown_filter.clear();
+        st.dropdown_focus = true;
+    }
+    if st.dropdown_open != Some(id) {
+        return false;
+    }
+
+    let mut picked = false;
+    let all = themes::all_schemes();
+    let area = egui::Area::new(id.with("popup"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.left_bottom() + egui::vec2(0.0, 4.0))
+        .show(ui.ctx(), |ui| {
+            ui::overlay_frame().show(ui, |ui| {
+                ui.set_width(280.0);
+                let r = ui::text_field(
+                    ui,
+                    &mut st.dropdown_filter,
+                    &format!("Search {} schemes", all.len()),
+                    264.0,
+                    colors::fg(),
+                );
+                if st.dropdown_focus {
+                    r.request_focus();
+                    st.dropdown_focus = false;
+                }
+                ui.add_space(6.0);
+                let shown = filter_schemes(all, &st.dropdown_filter);
+                if shown.is_empty() {
+                    ui.label(egui::RichText::new("No schemes match.").color(colors::dim()));
+                    return;
+                }
+                egui::ScrollArea::vertical().max_height(230.0).show_rows(
+                    ui,
+                    24.0,
+                    shown.len(),
+                    |ui, range| {
+                        for i in range {
+                            let name = all[shown[i]].0.as_str();
+                            let active = name == normalize_name(value);
+                            let (rect, resp) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 24.0),
+                                egui::Sense::click(),
+                            );
+                            let p = ui.painter();
+                            if active {
+                                p.rect_filled(rect, 6.0, colors::selection());
+                            } else if resp.hovered() {
+                                p.rect_filled(rect, 6.0, colors::hover());
+                            }
+                            p.text(
+                                egui::pos2(rect.left() + 8.0, rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                name,
+                                egui::FontId::proportional(13.0),
+                                if active { colors::accent() } else { colors::fg() },
+                            );
+                            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                name.clone_into(value);
+                                picked = true;
+                            }
+                        }
+                    },
+                );
+            });
+        });
+    // Close on pick, Esc, or a press outside both the popup and its button.
+    let dismissed = ui.ctx().input(|i| {
+        i.key_pressed(egui::Key::Escape)
+            || (i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| !area.response.rect.contains(p) && !rect.contains(p)))
+    });
+    if picked || dismissed {
+        st.dropdown_open = None;
+    }
+    picked
+}
+
 // ---- plain sections (pure config edits) ----
 
-fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
+fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut SettingsState) {
     title(ui, "Appearance");
     let a = &mut cfg.appearance;
     rows(ui, |ui| {
@@ -420,14 +567,14 @@ fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
         });
         if a.follow_system {
             row(ui, "Light theme", "Applied while macOS is light", |ui| {
-                ui::text_field(ui, &mut a.theme_light, "scheme name", 180.0, colors::fg());
+                scheme_dropdown(ui, st, "theme_light", &mut a.theme_light);
             });
             row(ui, "Dark theme", "Applied while macOS is dark", |ui| {
-                ui::text_field(ui, &mut a.theme_dark, "scheme name", 180.0, colors::fg());
+                scheme_dropdown(ui, st, "theme_dark", &mut a.theme_dark);
             });
         } else {
-            row(ui, "Theme", "Pick visually in the Color scheme section", |ui| {
-                ui::text_field(ui, &mut a.theme, "scheme name", 180.0, colors::fg());
+            row(ui, "Theme", "Also browsable in the Color scheme section", |ui| {
+                scheme_dropdown(ui, st, "theme_fixed", &mut a.theme);
             });
         }
         row(ui, "Opacity", "Window background transparency", |ui| {
@@ -445,14 +592,22 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
 
     subheading(ui, "Behavior");
     rows(ui, |ui| {
-        row(ui, "Scrollback lines", "History kept per pane", |ui| {
+        row_new_tabs(ui, "Scrollback lines", "History kept per pane", |ui| {
             ui.add(egui::DragValue::new(&mut t.scrollback_lines).range(100..=1_000_000));
         });
-        row(ui, "Shell integration", "OSC 133 command marks for done/failed state", |ui| {
-            ui::toggle_switch(ui, &mut t.shell_integration);
-        });
-        row(ui, "Detect progress", "Track % output as a tab progress bar", |ui| {
+        row_new_tabs(
+            ui,
+            "Shell integration",
+            "OSC 133 command marks for done/failed state",
+            |ui| {
+                ui::toggle_switch(ui, &mut t.shell_integration);
+            },
+        );
+        row_new_tabs(ui, "Detect progress", "Track % output as a tab progress bar", |ui| {
             ui::toggle_switch(ui, &mut t.detect_progress);
+        });
+        row_new_tabs(ui, "Word separators", "Characters that end a double-click selection", |ui| {
+            ui::text_field(ui, &mut t.word_separators, "separators", 180.0, colors::fg());
         });
         row(ui, "AI CLI badges", "Badge tabs running a known AI CLI", |ui| {
             ui::toggle_switch(ui, &mut t.detect_clis);
@@ -463,6 +618,14 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
         row(ui, "Option sends Meta", "ESC-prefixed keys instead of composed chars", |ui| {
             ui::toggle_switch(ui, &mut t.alt_is_meta);
         });
+        row(
+            ui,
+            "Confirm closing busy tabs",
+            "Ask before closing a tab with a running process",
+            |ui| {
+                ui::toggle_switch(ui, &mut t.warn_on_close_running);
+            },
+        );
     });
 
     subheading(ui, "Paste");
@@ -503,33 +666,93 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                         t.cursor = value.into();
                     }
                 }
+                ui.add_space(6.0);
+                cursor_preview(ui, ui::cursor_style(&t.cursor), t.cursor_blink);
             });
         });
         row(ui, "Blink the cursor", "", |ui| {
             ui::toggle_switch(ui, &mut t.cursor_blink);
         });
-        row(ui, "Bold in bright colors", "Draw bold text with the bright ANSI palette", |ui| {
-            ui::toggle_switch(ui, &mut t.bold_bright);
-        });
+        row_new_tabs(
+            ui,
+            "Bold in bright colors",
+            "Draw bold text with the bright ANSI palette",
+            |ui| {
+                ui::toggle_switch(ui, &mut t.bold_bright);
+            },
+        );
         row(ui, "Ligatures", "Draw -> => != >= <= as single glyphs", |ui| {
             ui::toggle_switch(ui, &mut t.ligatures);
         });
     });
 }
 
-fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
+/// Tiny live preview next to the cursor-style chips: a fake prompt with the selected cursor
+/// rendered (blinking when cursor_blink is on, on the same cadence as the real grid).
+fn cursor_preview(ui: &mut egui::Ui, style: ui::CursorStyle, blink: bool) {
+    let font = egui::FontId::monospace(12.5);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(96.0, 26.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 7.0, colors::bg());
+    p.rect_stroke(rect, 7.0, egui::Stroke::new(1.0, colors::border()), egui::StrokeKind::Inside);
+    let text_pos = egui::pos2(rect.left() + 8.0, rect.center().y);
+    let galley = p.layout_no_wrap("~ $ ls".to_owned(), font, colors::fg());
+    let size = galley.size();
+    p.galley(egui::pos2(text_pos.x, text_pos.y - size.y / 2.0), galley, colors::fg());
+    // Blink on egui's clock (never std::time); keep repainting while visible so it ticks.
+    let time = ui.input(|i| i.time);
+    if blink {
+        let next_flip = 0.53 - time.rem_euclid(0.53);
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(next_flip.max(0.01)));
+        if !ui::blink_on(time) {
+            return;
+        }
+    }
+    let (cw, ch) = (7.0, size.y);
+    let cpos = egui::pos2(text_pos.x + size.x + 3.0, text_pos.y - ch / 2.0);
+    let cur = colors::cursor();
+    match style {
+        ui::CursorStyle::Beam => {
+            p.rect_filled(egui::Rect::from_min_size(cpos, egui::vec2(2.0, ch)), 0.0, cur);
+        }
+        ui::CursorStyle::Underline => {
+            let u = egui::pos2(cpos.x, cpos.y + ch - 2.0);
+            p.rect_filled(egui::Rect::from_min_size(u, egui::vec2(cw, 2.0)), 0.0, cur);
+        }
+        ui::CursorStyle::Block => {
+            p.rect_filled(egui::Rect::from_min_size(cpos, egui::vec2(cw, ch)), 0.0, cur);
+        }
+    }
+}
+
+/// Side effects the Quake section needs applied by the caller (which has `&mut Stdusk`).
+struct QuakeFx {
+    hotkey_commit: bool,  // the hotkey field lost focus - re-register if it changed
+    height_changed: bool, // the height slider moved - re-apply the window size live
+}
+
+fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     title(ui, "Quake");
     let q = &mut cfg.quake;
+    let mut fx = QuakeFx { hotkey_commit: false, height_changed: false };
     rows(ui, |ui| {
-        row(ui, "Global hotkey", "Restart to apply", |ui| {
-            ui::text_field(ui, &mut q.hotkey, "e.g. Ctrl+Grave, F13", 180.0, colors::fg());
+        row(ui, "Global hotkey", "Applies when the field loses focus", |ui| {
+            let r = ui::text_field(ui, &mut q.hotkey, "e.g. Ctrl+Grave, F13", 180.0, colors::fg());
+            if r.lost_focus() {
+                fx.hotkey_commit = true;
+            }
         });
         row(ui, "Window height", "Fraction of the screen the window drops down", |ui| {
-            pct_slider(ui, &mut q.height_pct, 0.2..=0.9);
+            fx.height_changed = pct_slider(ui, &mut q.height_pct, 0.2..=0.9);
         });
         row(ui, "Hide on focus loss", "Hide when another app takes focus", |ui| {
             ui::toggle_switch(ui, &mut q.hide_on_focus_loss);
         });
+        if !q.hide_on_focus_loss {
+            row(ui, "Unfocused opacity", "Dim the window while another app has focus", |ui| {
+                pct_slider(ui, &mut q.unfocused_opacity, 0.2..=1.0);
+            });
+        }
         row(ui, "Hide from Dock", "Run as an accessory app (no Dock icon)", |ui| {
             ui::toggle_switch(ui, &mut q.hide_from_dock);
         });
@@ -540,6 +763,7 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
             ui::toggle_switch(ui, &mut q.dock_when_visible);
         });
     });
+    fx
 }
 
 fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
@@ -586,6 +810,37 @@ fn about_section(ui: &mut egui::Ui) {
 // ---- the view ----
 
 impl Stdusk {
+    /// Open the settings view: snapshot the config as the unsaved-changes baseline and dismiss
+    /// the find bar (the workspace it searches is being swapped out).
+    pub(crate) fn open_settings(&mut self) {
+        if self.search.take().is_some() {
+            self.tabs[self.active].focused_term().clear_selection();
+        }
+        self.settings.baseline = Some(self.cfg.clone());
+        self.settings.confirm_close = false;
+        self.settings_open = true;
+    }
+
+    /// Close the settings view - or, with unsaved changes, show the confirm modal instead.
+    pub(crate) fn request_close_settings(&mut self) {
+        let dirty =
+            self.settings.baseline.as_ref().is_some_and(|b| config::config_dirty(b, &self.cfg));
+        if dirty {
+            self.settings.confirm_close = true;
+        } else {
+            self.settings_open = false;
+        }
+    }
+
+    /// Gear / Cmd+, toggle.
+    pub(crate) fn toggle_settings(&mut self) {
+        if self.settings_open {
+            self.request_close_settings();
+        } else {
+            self.open_settings();
+        }
+    }
+
     /// Apply a scheme picked in the browser: recolor live and record it in the config slot
     /// the current mode resolves from (so the per-frame reconcile doesn't fight the pick).
     fn apply_scheme(&mut self, ctx: &egui::Context, name: &str, theme: Theme) {
@@ -599,6 +854,8 @@ impl Stdusk {
             SchemeSlot::Dark => name.clone_into(&mut a.theme_dark),
         }
         name.clone_into(&mut self.theme_name);
+        let now = ctx.input(|i| i.time);
+        self.toast = Some((format!("Theme: {name}"), now + 1.4));
     }
 
     /// The crown-jewel section: search + fake-shell preview card + the full scheme list with
@@ -676,28 +933,43 @@ impl Stdusk {
         }
     }
 
+    /// Write the config file, re-baseline the unsaved-changes guard, and re-register the
+    /// hotkey if it changed. Shared by the footer Save and the unsaved-changes modal.
+    fn save_settings(&mut self, ctx: &egui::Context) {
+        if let Some(p) = config::ensure_and_path()
+            && std::fs::write(p, config::config_to_toml(&self.cfg)).is_ok()
+        {
+            self.settings.baseline = Some(self.cfg.clone());
+            self.reregister_hotkey();
+            let now = ctx.input(|i| i.time);
+            self.toast = Some(("Saved".into(), now + 1.4));
+        }
+    }
+
+    /// Re-resolve + re-apply the active theme from `self.cfg` (after Revert / Discard).
+    fn reapply_appearance(&mut self, ctx: &egui::Context) {
+        let system_light = matches!(ctx.input(|i| i.raw.system_theme), Some(egui::Theme::Light));
+        let want = resolved_theme_name(&self.cfg.appearance, system_light);
+        colors::set(colors::by_name(&want));
+        ui::apply_theme(ctx);
+        self.theme_name = want;
+    }
+
     /// Sticky footer: Save / Close / Revert, right-aligned. Returns true when Close was hit.
     fn settings_footer(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         let mut close = false;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui::action_button(ui, "Save", true).clicked()
-                && let Some(p) = config::ensure_and_path()
-                && std::fs::write(p, config::config_to_toml(&self.cfg)).is_ok()
-            {
-                let now = ctx.input(|i| i.time);
-                self.toast = Some(("Saved".into(), now + 1.4));
+            if ui::action_button(ui, "Save", true).clicked() {
+                self.save_settings(ctx);
             }
             if ui::action_button(ui, "Close", false).clicked() {
                 close = true;
             }
             if ui::action_button(ui, "Revert", false).clicked() {
                 self.cfg = config::Config::load();
-                let system_light =
-                    matches!(ctx.input(|i| i.raw.system_theme), Some(egui::Theme::Light));
-                let want = resolved_theme_name(&self.cfg.appearance, system_light);
-                colors::set(colors::by_name(&want));
-                ui::apply_theme(ctx);
-                self.theme_name = want;
+                self.settings.baseline = Some(self.cfg.clone());
+                self.reapply_appearance(ctx);
+                self.reregister_hotkey();
                 let now = ctx.input(|i| i.time);
                 self.toast = Some(("Reverted".into(), now + 1.4));
             }
@@ -712,11 +984,14 @@ impl Stdusk {
     /// The full settings view, swapped into the central area while `settings_open` (the tab
     /// bar stays above). Nav sidebar left, footer bottom, scrollable content pane center.
     pub(crate) fn settings_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let opacity = self.cfg.appearance.opacity;
+        let opacity = self.fx_opacity;
         let mut close = false;
         // Sampled BEFORE the panels run: a focused text field (scheme search, hotkey) consumes
-        // Esc to drop focus; only the NEXT Esc should close the view.
+        // Esc to drop focus; only the NEXT Esc should close the view. Same for an open theme
+        // dropdown - its own Esc closes the popup, not the view.
         let field_focused = ctx.memory(|m| m.focused().is_some());
+        let dropdown_was_open = self.settings.dropdown_open.is_some();
+        let mut quake_fx: Option<QuakeFx> = None;
 
         let nav = egui::Panel::left("settings_nav")
             .exact_size(NAV_W)
@@ -796,9 +1071,11 @@ impl Stdusk {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                             ui.set_max_width(CONTENT_MAX_W.min(ui.available_width()));
                             match section {
-                                Section::Appearance => appearance_section(ui, &mut self.cfg),
+                                Section::Appearance => {
+                                    appearance_section(ui, &mut self.cfg, &mut self.settings);
+                                }
                                 Section::Terminal => terminal_section(ui, &mut self.cfg),
-                                Section::Quake => quake_section(ui, &mut self.cfg),
+                                Section::Quake => quake_fx = Some(quake_section(ui, &mut self.cfg)),
                                 Section::Session => session_section(ui, &mut self.cfg),
                                 Section::About => about_section(ui),
                                 Section::ColorScheme => unreachable!(),
@@ -809,17 +1086,90 @@ impl Stdusk {
                 }
             });
 
-        // Esc closes - but not while a hard modal (rename/paste/palette) or the find bar owns
-        // it, and not on the press that just unfocused a text field.
+        // Quake-section side effects that need &mut self / the viewport.
+        if let Some(fx) = quake_fx {
+            if fx.hotkey_commit && self.reregister_hotkey() {
+                let now = ctx.input(|i| i.time);
+                self.toast = Some((format!("Hotkey: {}", self.cfg.quake.hotkey), now + 1.4));
+            }
+            if fx.height_changed && self.screenshot.is_none() && self.visible {
+                crate::apply_visibility(ctx, true, self.cfg.quake.height_pct);
+            }
+        }
+
+        // Esc closes - but not while a hard modal (rename/paste/close/palette) or the find bar
+        // owns it, not on the press that just unfocused a text field or closed a dropdown, and
+        // not while the unsaved-changes modal is showing (it owns Esc = keep editing).
         let modal_owns_esc = self.renaming.is_some()
             || !self.pending_pastes.is_empty()
+            || self.pending_close.is_some()
             || self.palette.is_some()
-            || self.search.is_some();
-        if !modal_owns_esc && !field_focused && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            || self.search.is_some()
+            || self.settings.confirm_close;
+        if !modal_owns_esc
+            && !field_focused
+            && !dropdown_was_open
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             close = true;
         }
         if close {
+            self.request_close_settings();
+        }
+        if self.settings.confirm_close {
+            self.unsaved_changes_modal(ctx);
+        }
+    }
+
+    /// "Unsaved changes" confirm, shown when closing settings with edits that differ from the
+    /// baseline: Save / Discard (restore the baseline incl. re-applying looks) / Keep editing.
+    fn unsaved_changes_modal(&mut self, ctx: &egui::Context) {
+        let mut save = false;
+        let mut discard = false;
+        let mut keep = false;
+        egui::Window::new("Unsaved changes")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .frame(ui::overlay_frame())
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Unsaved changes").strong().color(colors::fg()));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Your settings edits haven't been saved.")
+                        .color(colors::dim()),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui::action_button(ui, "Save", true).clicked() {
+                        save = true;
+                    }
+                    if ui::action_button(ui, "Discard", false).clicked() {
+                        discard = true;
+                    }
+                    if ui::action_button(ui, "Keep editing", false).clicked() {
+                        keep = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            keep = true;
+        }
+        if save {
+            self.save_settings(ctx);
+            self.settings.confirm_close = false;
             self.settings_open = false;
+        } else if discard {
+            if let Some(b) = self.settings.baseline.take() {
+                self.cfg = b;
+            }
+            self.reapply_appearance(ctx);
+            self.reregister_hotkey();
+            self.settings.confirm_close = false;
+            self.settings_open = false;
+        } else if keep {
+            self.settings.confirm_close = false;
         }
     }
 }
@@ -890,5 +1240,87 @@ mod tests {
     fn normalize_matches_pack_naming() {
         assert_eq!(normalize_name("One Half_Dark"), "one-half-dark");
         assert_eq!(normalize_name("nord"), "nord");
+    }
+
+    fn run_frame(ctx: &egui::Context, events: Vec<egui::Event>, add: impl FnMut(&mut egui::Ui)) {
+        let mut add = add;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(900.0, 700.0),
+            )),
+            events,
+            focused: true,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| add(ui));
+        });
+    }
+
+    #[test]
+    fn sections_render_headless() {
+        // Smoke: the reworked sections (searchable theme dropdowns, cursor preview, new-tab
+        // hints, quake fx rows) build real frames without panicking.
+        let ctx = egui::Context::default();
+        let mut cfg = config::Config::default();
+        let mut st = SettingsState::new();
+        for _ in 0..2 {
+            run_frame(&ctx, vec![], |ui| {
+                appearance_section(ui, &mut cfg, &mut st);
+                let _fx = quake_section(ui, &mut cfg);
+                terminal_section(ui, &mut cfg);
+            });
+        }
+        assert!(st.dropdown_open.is_none());
+    }
+
+    #[test]
+    fn scheme_dropdown_opens_filters_and_picks() {
+        let ctx = egui::Context::default();
+        let mut st = SettingsState::new();
+        let mut value = "one-half-dark".to_string();
+        // Frame 1: locate the button. Frames 2-3: click it -> the popup opens.
+        run_frame(&ctx, vec![], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+        });
+        let center = egui::pos2(30.0, 22.0); // inside the 200x28 button at the panel origin
+        run_frame(&ctx, vec![egui::Event::PointerMoved(center)], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+        });
+        for pressed in [true, false] {
+            run_frame(
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos: center,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                |ui| {
+                    let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+                },
+            );
+        }
+        assert!(st.dropdown_open.is_some(), "clicking the dropdown must open its popup");
+        // Type a filter that matches exactly one scheme, then Esc closes the popup.
+        st.dropdown_filter = "tokyo-night".into();
+        run_frame(&ctx, vec![], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+        });
+        run_frame(
+            &ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+            |ui| {
+                let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+            },
+        );
+        assert!(st.dropdown_open.is_none(), "Esc must close the popup");
     }
 }

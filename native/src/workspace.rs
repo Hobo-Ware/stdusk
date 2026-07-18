@@ -85,6 +85,13 @@ impl Stdusk {
         let mut copied = false; // set inside the central panel when Cmd+C copies a selection
         let mut bell_rang = false; // any pane rang BEL this frame -> visual flash
         let mut pane_action: Option<PaneAction> = None; // from the pane right-click menu
+        // Any open text surface means the grid must not steal egui focus (see below); pty
+        // input itself is gated on the tighter `input_captured`.
+        let focus_guard = self.search.is_some()
+            || self.renaming.is_some()
+            || self.palette.is_some()
+            || !self.pending_pastes.is_empty()
+            || self.pending_close.is_some();
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
@@ -136,8 +143,13 @@ impl Stdusk {
                     }
                 }
                 // Paste events: processed even while the paste-confirm modal is open (they queue
-                // rather than vanish); only a focused TEXT FIELD (find bar / rename) owns pastes.
-                if self.search.is_none() && self.renaming.is_none() {
+                // rather than vanish); only a focused TEXT FIELD (find bar / rename / palette)
+                // owns pastes. The find bar counts only while its field has focus - an open,
+                // unfocused bar must not eat pastes aimed at the terminal.
+                let paste_owned = self.search.as_ref().is_some_and(|s| s.field_focused)
+                    || self.renaming.is_some()
+                    || self.palette.is_some();
+                if !paste_owned {
                     let pastes: Vec<String> = ui.input(|i| {
                         i.events
                             .iter()
@@ -236,6 +248,7 @@ impl Stdusk {
                         && !txt.trim().is_empty()
                     {
                         ctx.copy_text(txt);
+                        copied = true; // "Copied" toast
                     }
                     // Middle-click pastes the clipboard into this pane (and focuses it).
                     if tcfg.paste_on_middle_click
@@ -252,7 +265,10 @@ impl Stdusk {
                     }
                     // Keep egui keyboard focus on the active terminal, or a typed Space/Enter
                     // would activate a focused tab-bar button (e.g. the gear opening config.toml).
-                    if !input_captured && path == &tab.focused {
+                    // Gated on any text surface being OPEN (not just focused): the grid requests
+                    // focus every frame and would instantly steal it back from a find field the
+                    // user just clicked into.
+                    if !focus_guard && path == &tab.focused {
                         resp.request_focus();
                     }
                     resp.context_menu(|ui| {
@@ -272,6 +288,7 @@ impl Stdusk {
                     if let Some(t) = tab.root_mut().leaf_at_mut(&p) {
                         t.paste(&s);
                         t.scroll_to_bottom();
+                        self.toast = Some(("Pasted".into(), now + 1.4));
                     }
                 }
 

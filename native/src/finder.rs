@@ -14,6 +14,23 @@ pub(crate) struct Search {
     pub(crate) current: usize,
     pub(crate) focus: bool, // request text-field focus on the next frame (set on open / after Enter)
     pub(crate) opts: search::SearchOpts, // case / regex / whole-word toggles
+    /// Whether the query field had egui focus last frame. While true the find bar owns the
+    /// keyboard; once the user clicks back into the terminal the bar stays open but typing
+    /// flows to the shell again (an open bar must never silently swallow terminal input).
+    pub(crate) field_focused: bool,
+}
+
+impl Search {
+    pub(crate) fn new() -> Self {
+        Self {
+            query: String::new(),
+            matches: Vec::new(),
+            current: 0,
+            focus: true,
+            opts: search::SearchOpts::default(),
+            field_focused: true, // owns the keyboard from the frame it opens
+        }
+    }
 }
 
 impl Stdusk {
@@ -88,6 +105,7 @@ impl Stdusk {
         let Some(mut st) = self.search.take() else {
             return;
         };
+        let was_focused = st.field_focused;
         let mut close = false;
         let mut recompute = false;
         let mut step: i32 = 0;
@@ -124,6 +142,9 @@ impl Stdusk {
                             if st.focus {
                                 r.request_focus();
                                 st.focus = false;
+                                st.field_focused = true; // focus lands next frame; capture now
+                            } else {
+                                st.field_focused = r.has_focus();
                             }
                             if r.changed() {
                                 recompute = true;
@@ -184,7 +205,10 @@ impl Stdusk {
                     });
                 });
             });
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // Esc closes the bar only while its field owned the keyboard (sampled BEFORE this
+        // frame's draw - egui clears widget focus on the same Esc press). With the terminal
+        // focused, Esc belongs to the shell; Cmd+F still toggles the bar away.
+        if was_focused && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             close = true;
         }
 
