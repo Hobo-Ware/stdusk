@@ -44,3 +44,10 @@ restore = true            # reopen last session's tabs (cwd/title/color) on laun
 
 # Named launch profiles (Tabby-style). Repeat the [[profiles]] block per profile;
 # only `name` is required - omitted fields fall back to the regular tab defaults.
+# [[profiles]]
+# name = "work"
+# shell = "/bin/zsh"        # override $SHELL for tabs opened with this profile
+# args = []                 # extra shell arguments, appended after the login/interactive flags
+# cwd = "~/Git"             # starting directory; a leading ~ expands to $HOME
+# env = { AWS_PROFILE = "work" }
+# color = "#61afef"         # tab color

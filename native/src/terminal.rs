@@ -112,6 +112,21 @@ pub(crate) struct SpawnOpts {
     pub(crate) word_separators: String,
     pub(crate) bold_bright: bool,
     pub(crate) cwd: Option<String>,
+    pub(crate) profile: Option<crate::config::Profile>, // launch profile overrides (shell/args/cwd/env)
+}
+
+/// Shell for a spawn: profile override first, then $SHELL, then /bin/zsh.
+fn resolve_shell(profile: Option<&crate::config::Profile>, env_shell: Option<String>) -> String {
+    profile.and_then(|p| p.shell.clone()).or(env_shell).unwrap_or_else(|| "/bin/zsh".into())
+}
+
+/// Working-dir candidate (tilde-expanded): the profile's cwd wins over the caller's.
+/// `is_dir` validation stays at the spawn site.
+fn resolve_cwd(
+    profile: Option<&crate::config::Profile>,
+    fallback: Option<String>,
+) -> Option<String> {
+    profile.and_then(|p| p.cwd.clone()).or(fallback).map(|d| crate::config::expand_tilde(&d))
 }
 
 pub(crate) struct PtyTerm {
@@ -127,7 +142,7 @@ pub(crate) struct PtyTerm {
 
 impl PtyTerm {
     pub(crate) fn spawn(cols: usize, rows: usize, ctx: egui::Context, opts: &SpawnOpts) -> Self {
-        let SpawnOpts { detect_progress, shell_integration, cwd, .. } = opts.clone();
+        let SpawnOpts { detect_progress, shell_integration, cwd, profile, .. } = opts.clone();
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -138,13 +153,23 @@ impl PtyTerm {
             })
             .expect("openpty");
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        let shell = resolve_shell(profile.as_ref(), std::env::var("SHELL").ok());
         let mut cmd = CommandBuilder::new(&shell);
-        if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
+        if let Some(dir) =
+            resolve_cwd(profile.as_ref(), cwd).filter(|d| std::path::Path::new(d).is_dir())
+        {
             cmd.cwd(dir);
         }
         // Spawn login+interactive (so PATH-setting profile files run) + optional OSC 133 hooks.
         crate::shell::configure(&mut cmd, &shell, shell_integration);
+        if let Some(p) = &profile {
+            for a in &p.args {
+                cmd.arg(a);
+            }
+            for (k, v) in &p.env {
+                cmd.env(k, v);
+            }
+        }
         let child = pair.slave.spawn_command(cmd).expect("spawn shell");
         let shell_pid = child.process_id();
         drop(child); // pid is stable; the pty keeps the shell alive, so we don't hold the handle
@@ -489,7 +514,8 @@ impl PtyTerm {
 
 #[cfg(test)]
 mod tests {
-    use super::{CmdState, cmd_from_exit};
+    use super::{CmdState, cmd_from_exit, resolve_cwd, resolve_shell};
+    use crate::config::Profile;
 
     #[test]
     fn exit_code_to_state() {
@@ -499,5 +525,52 @@ mod tests {
         assert_eq!(cmd_from_exit(Some(127)), CmdState::Fail);
         assert_eq!(cmd_from_exit(Some(130)), CmdState::Idle); // Ctrl+C (SIGINT)
         assert_eq!(cmd_from_exit(Some(143)), CmdState::Idle); // SIGTERM
+    }
+
+    fn profile(shell: Option<&str>, cwd: Option<&str>) -> Profile {
+        Profile {
+            name: "test".into(),
+            shell: shell.map(Into::into),
+            args: Vec::new(),
+            cwd: cwd.map(Into::into),
+            env: std::collections::HashMap::new(),
+            color: None,
+        }
+    }
+
+    #[test]
+    fn profile_shell_wins_over_env_shell() {
+        let p = profile(Some("/opt/fish"), None);
+        assert_eq!(resolve_shell(Some(&p), Some("/bin/bash".into())), "/opt/fish");
+    }
+
+    #[test]
+    fn shell_falls_back_to_env_then_zsh() {
+        let no_shell = profile(None, None);
+        assert_eq!(resolve_shell(Some(&no_shell), Some("/bin/bash".into())), "/bin/bash");
+        assert_eq!(resolve_shell(None, Some("/bin/bash".into())), "/bin/bash");
+        assert_eq!(resolve_shell(None, None), "/bin/zsh");
+    }
+
+    #[test]
+    fn profile_cwd_wins_over_caller_cwd() {
+        let p = profile(None, Some("/profile/dir"));
+        assert_eq!(
+            resolve_cwd(Some(&p), Some("/caller/dir".into())).as_deref(),
+            Some("/profile/dir")
+        );
+        let no_cwd = profile(None, None);
+        assert_eq!(
+            resolve_cwd(Some(&no_cwd), Some("/caller/dir".into())).as_deref(),
+            Some("/caller/dir")
+        );
+        assert_eq!(resolve_cwd(None, None), None);
+    }
+
+    #[test]
+    fn profile_cwd_tilde_expands_to_home() {
+        let home = std::env::var("HOME").unwrap();
+        let p = profile(None, Some("~/Git"));
+        assert_eq!(resolve_cwd(Some(&p), None), Some(format!("{home}/Git")));
     }
 }

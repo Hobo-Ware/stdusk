@@ -12,6 +12,7 @@ pub(crate) struct Config {
     pub(crate) quake: Quake,
     pub(crate) terminal: Terminal,
     pub(crate) session: Session,
+    pub(crate) profiles: Vec<Profile>,
 }
 
 /// A named launch profile (Tabby-style): per-tab shell/args/cwd/env overrides.
@@ -38,6 +39,15 @@ pub(crate) fn find_profile<'a>(profiles: &'a [Profile], name: &str) -> Option<&'
 }
 
 /// Expand a leading `~` / `~/...` to `$HOME`. `~user` and paths without a leading `~` pass
+/// through unchanged, as does everything when $HOME is unset.
+pub(crate) fn expand_tilde(path: &str) -> String {
+    match path.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            std::env::var("HOME").map_or_else(|_| path.to_string(), |home| format!("{home}{rest}"))
+        }
+        _ => path.to_string(),
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -274,7 +284,60 @@ mod tests {
         assert_eq!(parse_hotkey("nonsense"), (None, Code::Backquote));
     }
 
+    #[test]
+    fn profiles_parse_with_all_fields_and_defaults() {
+        let c: Config = toml::from_str(
+            r##"
+[[profiles]]
+name = "work"
+shell = "/bin/zsh"
+args = ["-c", "echo hi"]
+cwd = "~/Git"
+env = { AWS_PROFILE = "work" }
+color = "#61afef"
 
+[[profiles]]
+name = "ops"
+"##,
+        )
+        .unwrap();
+        assert_eq!(c.profiles.len(), 2);
+        let w = &c.profiles[0];
+        assert_eq!(w.name, "work");
+        assert_eq!(w.shell.as_deref(), Some("/bin/zsh"));
+        assert_eq!(w.args, ["-c", "echo hi"]);
+        assert_eq!(w.cwd.as_deref(), Some("~/Git"));
+        assert_eq!(w.env["AWS_PROFILE"], "work");
+        assert_eq!(w.color.as_deref(), Some("#61afef"));
+        // name-only entry: every optional field defaults
+        let o = &c.profiles[1];
+        assert_eq!(o.name, "ops");
+        assert!(o.shell.is_none() && o.cwd.is_none() && o.color.is_none());
+        assert!(o.args.is_empty() && o.env.is_empty());
+    }
 
+    #[test]
+    fn empty_config_has_no_profiles() {
+        let c: Config = toml::from_str("").unwrap();
+        assert!(c.profiles.is_empty());
+    }
 
+    #[test]
+    fn find_profile_matches_case_insensitively() {
+        let profiles: Vec<Profile> =
+            toml::from_str::<Config>("[[profiles]]\nname = \"Work\"\n").unwrap().profiles;
+        assert_eq!(find_profile(&profiles, "work").map(|p| p.name.as_str()), Some("Work"));
+        assert_eq!(find_profile(&profiles, "WORK").map(|p| p.name.as_str()), Some("Work"));
+        assert!(find_profile(&profiles, "missing").is_none());
+        assert!(find_profile(&[], "work").is_none());
+    }
+
+    #[test]
+    fn tilde_expands_only_at_home_prefix() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(expand_tilde("~/Git"), format!("{home}/Git"));
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("/abs/path"), "/abs/path");
+        assert_eq!(expand_tilde("~user/x"), "~user/x"); // ~user unsupported, passes through
+    }
 }

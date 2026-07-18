@@ -47,6 +47,7 @@ impl Tab {
 pub(crate) fn spawn_opts(cfg: &Config, cwd: Option<String>) -> terminal::SpawnOpts {
     terminal::SpawnOpts {
         detect_progress: cfg.terminal.detect_progress,
+        profile: None,
         shell_integration: cfg.terminal.shell_integration,
         scrollback_lines: cfg.terminal.scrollback_lines,
         word_separators: cfg.terminal.word_separators.clone(),
