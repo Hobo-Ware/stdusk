@@ -261,7 +261,7 @@ impl PtyTerm {
 
     /// Resize the pty + terminal grid to a new cell geometry (no-op if unchanged).
     pub(crate) fn resize(&mut self, cols: usize, rows: usize) {
-        if cols == self.cols && rows == self.rows || cols == 0 || rows == 0 {
+        if (cols == self.cols && rows == self.rows) || cols == 0 || rows == 0 {
             return;
         }
         self.cols = cols;
@@ -331,7 +331,11 @@ impl PtyTerm {
         let term = self.term.lock();
         let selection = term.selection.as_ref().and_then(|s| s.to_range(&term));
         let grid = term.grid();
-        let mut cells = Vec::with_capacity(self.rows * self.cols);
+        // The GRID's dimensions are authoritative - an app can resize it (CSI 8) independently of
+        // our last pty resize, and returning self.cols/rows here would make the renderer index
+        // out of bounds into `cells`.
+        let (cols, rows) = (grid.columns(), grid.screen_lines());
+        let mut cells = Vec::with_capacity(rows * cols);
         let mut top_line = -(grid.display_offset() as i32); // fallback; overwritten by first cell
         // display_iter walks the visible region row-major, accounting for scroll offset.
         for (i, indexed) in grid.display_iter().enumerate() {
@@ -353,13 +357,13 @@ impl PtyTerm {
         let cursor = if grid.display_offset() == 0 {
             let cp = grid.cursor.point;
             Some((
-                (cp.line.0.max(0) as usize).min(self.rows.saturating_sub(1)),
-                cp.column.0.min(self.cols.saturating_sub(1)),
+                (cp.line.0.max(0) as usize).min(rows.saturating_sub(1)),
+                cp.column.0.min(cols.saturating_sub(1)),
             ))
         } else {
             None
         };
-        GridSnap { cols: self.cols, rows: self.rows, cells, cursor, top_line }
+        GridSnap { cols, rows, cells, cursor, top_line }
     }
 
     /// Begin a text selection anchored at a grid point (mapped from mouse coords).
@@ -398,12 +402,12 @@ impl PtyTerm {
     /// Select the entire buffer (scrollback + screen), for Cmd+A then copy.
     pub(crate) fn select_all(&self) {
         let mut t = self.term.lock();
-        let (top, bot) = {
+        let (top, bot, cols) = {
             let g = t.grid();
-            (g.topmost_line().0, g.bottommost_line().0)
+            (g.topmost_line().0, g.bottommost_line().0, g.columns())
         };
         let start = Point::new(Line(top), Column(0));
-        let end = Point::new(Line(bot), Column(self.cols.saturating_sub(1)));
+        let end = Point::new(Line(bot), Column(cols.saturating_sub(1)));
         let mut sel = Selection::new(SelectionType::Simple, start, Side::Left);
         sel.update(end, Side::Right);
         t.selection = Some(sel);
@@ -424,12 +428,14 @@ impl PtyTerm {
     pub(crate) fn buffer_lines(&self) -> Vec<(i32, String)> {
         let term = self.term.lock();
         let grid = term.grid();
+        // Grid dimensions are authoritative (an app may have resized it via CSI 8).
+        let cols = grid.columns();
         let (top, bot) = (grid.topmost_line().0, grid.bottommost_line().0);
         let mut out = Vec::with_capacity((bot - top + 1).max(0) as usize);
         for l in top..=bot {
             let row = &grid[Line(l)];
-            let mut s = String::with_capacity(self.cols);
-            for c in 0..self.cols {
+            let mut s = String::with_capacity(cols);
+            for c in 0..cols {
                 s.push(row[Column(c)].c);
             }
             out.push((l, s.trim_end().to_string()));
