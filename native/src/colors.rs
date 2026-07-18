@@ -297,11 +297,13 @@ pub(crate) fn tokyo_night() -> Theme {
 
 /// Look up a built-in theme by config name (falls back to OneHalfDark).
 pub(crate) fn by_name(name: &str) -> Theme {
-    match name.to_ascii_lowercase().replace([' ', '_'], "-").as_str() {
+    let norm = name.to_ascii_lowercase().replace([' ', '_'], "-");
+    match norm.as_str() {
         "dracula" => dracula(),
         "tokyo-night" | "tokyonight" => tokyo_night(),
         "one-half-light" | "onehalflight" | "light" => one_half_light(),
-        _ => one_half_dark(),
+        // Fall back to the community XRDB pack + user schemes, then the default.
+        _ => crate::themes::lookup(&norm).unwrap_or_else(one_half_dark),
     }
 }
 

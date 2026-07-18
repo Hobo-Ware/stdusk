@@ -3,6 +3,7 @@
 
 [appearance]
 theme = "one-half-dark"   # used when follow_system = false. built-ins: one-half-dark | one-half-light | dracula | tokyo-night
+                          # plus 191 community schemes (e.g. "nord", "solarized-dark") and any XRDB files in ~/.config/stdusk/schemes/
 opacity = 0.85            # window background opacity, 0.0-1.0
 font_size = 13.0
 follow_system = true      # switch theme with the macOS light/dark appearance

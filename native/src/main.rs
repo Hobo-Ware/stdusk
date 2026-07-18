@@ -19,6 +19,7 @@ mod search;
 mod session;
 mod shell;
 mod terminal;
+mod themes;
 mod tray;
 mod ui;
 use config::Config;
