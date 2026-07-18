@@ -69,13 +69,19 @@ fn parse_xrdb(src: &str) -> Option<Theme> {
 /// `#rgb` or `#rrggbb` -> Color32.
 fn parse_hex(s: &str) -> Option<Color32> {
     let hex = s.strip_prefix('#')?;
-    let byte = |h: &str| u8::from_str_radix(h, 16).ok();
-    match hex.len() {
-        3 => {
-            let nibble = |i: usize| byte(&hex[i..=i]).map(|n| n * 17);
-            Some(Color32::from_rgb(nibble(0)?, nibble(1)?, nibble(2)?))
+    // Byte-wise (never slice by byte index into user text: multibyte chars panic on char
+    // boundaries). Non-ASCII-hex input just fails the parse.
+    let b = hex.as_bytes();
+    if !b.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    let nib = |c: u8| (c as char).to_digit(16).map(|n| n as u8);
+    match b.len() {
+        3 => Some(Color32::from_rgb(nib(b[0])? * 17, nib(b[1])? * 17, nib(b[2])? * 17)),
+        6 => {
+            let byte = |i: usize| Some(nib(b[i])? * 16 + nib(b[i + 1])?);
+            Some(Color32::from_rgb(byte(0)?, byte(2)?, byte(4)?))
         }
-        6 => Some(Color32::from_rgb(byte(&hex[0..2])?, byte(&hex[2..4])?, byte(&hex[4..6])?)),
         _ => None,
     }
 }
@@ -83,6 +89,15 @@ fn parse_hex(s: &str) -> Option<Color32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multibyte_hex_values_do_not_panic() {
+        // Adversarial user scheme: multibyte chars where hex is expected used to panic on a
+        // byte-index slice. Must parse to None, never crash.
+        assert_eq!(parse_hex("#\u{fb00}"), None);
+        assert_eq!(parse_hex("#\u{fb00}\u{fb00}\u{fb00}"), None);
+        assert!(parse_xrdb("*.foreground: #\u{fb00}\n*.background: #000000").is_none());
+    }
 
     const FIXTURE: &str = "\
 #define base00 #181818

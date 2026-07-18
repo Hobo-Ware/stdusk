@@ -34,7 +34,11 @@ const ROWS: usize = 24;
 /// Fixed tab-bar row height - keeps every control centered on the same line (no drift).
 const TABBAR_ROW_H: f32 = 34.0;
 
+/// Monotonic tab identity - stable across reorders/closes (used to target deferred actions).
+static NEXT_TAB_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 struct Tab {
+    id: u64,
     title: String,
     color: Option<egui::Color32>, // None = no underline (Tabby default); set via the menu
     renamed: bool,                // once renamed, stop auto-titling from cwd
@@ -75,6 +79,7 @@ fn spawn_opts(cfg: &Config, cwd: Option<String>) -> terminal::SpawnOpts {
 fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
     let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
     Tab {
+        id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
         title: "zsh".into(),
         color: None,
         renamed: false,
@@ -179,17 +184,17 @@ struct Stdusk {
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
-    pending_paste: Option<String>, // multiline paste awaiting the user's confirm (modal)
+    pending_pastes: std::collections::VecDeque<(u64, String)>, // multiline pastes awaiting confirm (tab id, text)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
-    flash: f64,       // bell visual-flash expiry (egui time); 0 = none
-    zoom: f32,        // font-size multiplier (Cmd +/-/0)
-    theme_name: String, // currently-applied theme (to detect OS light/dark changes)
-    sys: sysinfo::System, // process table for CLI-awareness scans
-    next_cli_scan: f64, // egui time of the next throttled procwatch scan
-    next_session_save: f64, // egui time of the next throttled session persist
+    flash: f64,                   // bell visual-flash expiry (egui time); 0 = none
+    zoom: f32,                    // font-size multiplier (Cmd +/-/0)
+    theme_name: String,           // currently-applied theme (to detect OS light/dark changes)
+    sys: sysinfo::System,         // process table for CLI-awareness scans
+    next_cli_scan: f64,           // egui time of the next throttled procwatch scan
+    next_session_save: f64,       // egui time of the next throttled session persist
     last_session: session::SavedSession, // last persisted session (skip identical writes)
-    tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
-    screenshot: Option<String>, // --screenshot PATH: demo tabs, capture, exit
+    tray: Option<tray::Tray>,     // menu-bar status item (kept alive; Some when enabled)
+    screenshot: Option<String>,   // --screenshot PATH: demo tabs, capture, exit
 }
 
 impl Stdusk {
@@ -316,7 +321,7 @@ impl Stdusk {
             renaming: None,
             search: None,
             closed: Vec::new(),
-            pending_paste: None,
+            pending_pastes: std::collections::VecDeque::new(),
             toast: None,
             flash: 0.0,
             zoom: 1.0,
@@ -464,9 +469,10 @@ impl Stdusk {
     }
 
     /// Multiline-paste confirmation (Tabby's warnOnMultilinePaste): preview + Paste/Cancel.
-    /// Shown while `pending_paste` is set; the modal path intentionally skips the trim rules.
+    /// Shown while `pending_pastes` is non-empty (front first); the modal path intentionally
+    /// skips the trim rules. Targets the tab the paste happened in, by stable id.
     fn paste_confirm_window(&mut self, ctx: &egui::Context) {
-        let Some(text) = self.pending_paste.take() else {
+        let Some((tab_id, text)) = self.pending_pastes.pop_front() else {
             return;
         };
         let mut do_paste = false;
@@ -505,19 +511,25 @@ impl Stdusk {
                     }
                 });
             });
-        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-            do_paste = true;
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            cancel = true;
+        // Keyboard confirm - unless the rename modal is also open (rename owns Enter/Esc then).
+        if self.renaming.is_none() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                do_paste = true;
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
         }
         if do_paste {
-            let t = self.tabs[self.active].focused_term_mut();
-            t.paste(&text);
-            t.clear_selection();
-            t.scroll_to_bottom();
+            // Paste into the ORIGINATING tab (by id); if it was closed, drop the paste.
+            if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                let t = tab.focused_term_mut();
+                t.paste(&text);
+                t.clear_selection();
+                t.scroll_to_bottom();
+            }
         } else if !cancel {
-            self.pending_paste = Some(text); // keep asking next frame
+            self.pending_pastes.push_front((tab_id, text)); // keep asking next frame
         }
     }
 
@@ -943,7 +955,13 @@ impl eframe::App for Stdusk {
         let mut kb_resize: Option<(pane::SplitDir, f32)> = None; // Cmd+Ctrl+arrow: resize focused pane
         let mut kb_move_tab: Option<i32> = None; // Cmd+Shift+←/→: move the active tab
         let mut kb_scroll_edge: Option<bool> = None; // Shift+Home/End: scroll to top (true) / bottom
+        // A hard modal (rename / paste confirm) owns the keyboard entirely: tab switching or
+        // Cmd+W while a paste-confirm shows would retarget/kill the tab under the modal.
+        let hard_modal = self.renaming.is_some() || !self.pending_pastes.is_empty();
         ctx.input(|i| {
+            if hard_modal {
+                return;
+            }
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
                 kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
             }
@@ -1277,7 +1295,7 @@ impl eframe::App for Stdusk {
         // sampled BEFORE the modals run this frame - else the key that closes a modal (Enter to
         // commit a rename) would leak to the shell once the modal clears its own state.
         let input_captured =
-            self.search.is_some() || self.renaming.is_some() || self.pending_paste.is_some();
+            self.search.is_some() || self.renaming.is_some() || !self.pending_pastes.is_empty();
 
         self.rename_window(&ctx);
         self.paste_confirm_window(&ctx);
@@ -1321,12 +1339,15 @@ impl eframe::App for Stdusk {
 
                 // Cmd+C copies the focused pane's selection; intelligent Ctrl+C (Tabby) copies
                 // too when a selection exists, else stays SIGINT (handled via collect_input).
-                let has_selection = tab.focused_term().selection_text().is_some();
+                // Selection read ONCE per frame: the reader thread can invalidate it between a
+                // has-selection check and a copy, which would swallow Ctrl-C without copying.
+                let sel_text = tab.focused_term().selection_text();
+                let has_selection = sel_text.is_some();
                 let ctrl_c = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::C));
                 let want_copy = ui
                     .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
                     || (ctrl_c && has_selection && !input_captured);
-                if want_copy && let Some(txt) = tab.focused_term().selection_text() {
+                if want_copy && let Some(txt) = sel_text {
                     ctx.copy_text(txt);
                     if ctrl_c {
                         tab.focused_term().clear_selection(); // Tabby clears after Ctrl-C copy
@@ -1334,7 +1355,7 @@ impl eframe::App for Stdusk {
                     copied = true;
                 }
 
-                // Keystrokes + paste -> focused pane (unless the find bar owns the keyboard).
+                // Keystrokes -> focused pane (unless a text field/modal owns the keyboard).
                 if !input_captured {
                     let input = collect_input(ui, tcfg.alt_is_meta, ctrl_c && has_selection);
                     if !input.is_empty() {
@@ -1343,6 +1364,10 @@ impl eframe::App for Stdusk {
                         t.clear_selection();
                         t.scroll_to_bottom();
                     }
+                }
+                // Paste events: processed even while the paste-confirm modal is open (they queue
+                // rather than vanish); only a focused TEXT FIELD (find bar / rename) owns pastes.
+                if self.search.is_none() && self.renaming.is_none() {
                     let pastes: Vec<String> = ui.input(|i| {
                         i.events
                             .iter()
@@ -1362,7 +1387,8 @@ impl eframe::App for Stdusk {
                             && tcfg.warn_on_multiline_paste
                             && !tab.focused_term().is_alt_screen()
                         {
-                            self.pending_paste = Some(s);
+                            self.pending_pastes.push_back((tab.id, s));
+                            ctx.request_repaint(); // make sure the confirm modal shows this frame
                             continue;
                         }
                         let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);
@@ -1440,6 +1466,7 @@ impl eframe::App for Stdusk {
                     }
                     // Middle-click pastes the clipboard into this pane (and focuses it).
                     if tcfg.paste_on_middle_click
+                        && !input_captured
                         && resp.hovered()
                         && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle))
                         && let Ok(mut cb) = arboard::Clipboard::new()

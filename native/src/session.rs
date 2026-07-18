@@ -48,13 +48,17 @@ pub(crate) fn load() -> SavedSession {
 }
 
 /// Persist the session (best-effort; a failed write is not worth interrupting the user).
+/// Atomic: write a temp file then rename, so a crash mid-write can't truncate the session.
 pub(crate) fn save(s: &SavedSession) {
     let Some(p) = path() else { return };
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(body) = toml::to_string(s) {
-        let _ = std::fs::write(p, body);
+        let tmp = p.with_extension("toml.tmp");
+        if std::fs::write(&tmp, body).is_ok() {
+            let _ = std::fs::rename(&tmp, &p);
+        }
     }
 }
 

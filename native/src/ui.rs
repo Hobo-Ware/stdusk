@@ -75,12 +75,13 @@ pub(crate) fn key_to_bytes(
     }
     // altIsMeta: Option+letter/digit sends ESC-prefixed keys (like xterm macOptionIsMeta) instead
     // of macOS composed characters. Arrows/backspace keep their word-motion mappings below.
-    if alt_is_meta
-        && mods.alt
-        && !mods.command
-        && let Some(n) = ctrl_letter(key)
-    {
-        return Some(vec![0x1b, b'a' + n - 1]);
+    if alt_is_meta && mods.alt && !mods.command {
+        if let Some(n) = ctrl_letter(key) {
+            return Some(vec![0x1b, b'a' + n - 1]);
+        }
+        if let Some(d) = digit(key) {
+            return Some(vec![0x1b, b'0' + d]);
+        }
     }
     let bytes: Vec<u8> = match key {
         // Cmd+Alt+{arrows,Enter} are app pane bindings (nav / maximize) - don't forward to the pty.
@@ -109,6 +110,25 @@ pub(crate) fn key_to_bytes(
         _ => return None,
     };
     Some(bytes)
+}
+
+/// Digit value for `Key::Num0..Num9`, or `None` (for altIsMeta ESC-digit mapping).
+fn digit(key: egui::Key) -> Option<u8> {
+    use egui::Key;
+    let n = match key {
+        Key::Num0 => 0,
+        Key::Num1 => 1,
+        Key::Num2 => 2,
+        Key::Num3 => 3,
+        Key::Num4 => 4,
+        Key::Num5 => 5,
+        Key::Num6 => 6,
+        Key::Num7 => 7,
+        Key::Num8 => 8,
+        Key::Num9 => 9,
+        _ => return None,
+    };
+    Some(n)
 }
 
 /// Control code for `Ctrl+<letter>` (Ctrl-A = 1 .. Ctrl-Z = 26), or `None` for non-letters.
@@ -923,6 +943,7 @@ mod tests {
     fn alt_is_meta_sends_esc_prefixed_letters() {
         let alt = mods(false, true, false);
         assert_eq!(key_to_bytes(Key::B, alt, true), Some(vec![0x1b, b'b']));
+        assert_eq!(key_to_bytes(Key::Num3, alt, true), Some(vec![0x1b, b'3'])); // digits too
         // Off: unmapped (macOS composes a Text event instead).
         assert_eq!(key_to_bytes(Key::B, alt, false), None);
         // Word-motion arrows unchanged even with altIsMeta.
