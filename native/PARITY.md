@@ -36,7 +36,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 | `explode-tab` (panes -> tabs) / `combine-tabs` (tabs -> split) | ⬜ | power-user, low priority |
 | Notify-when-done | ✅ | `terminal.notify_on_done`; osascript notification when a >10s command finishes while hidden. notify-on-activity still ⬜ |
 | Current-process display in menu | ⬜ | have procwatch tree already |
-| Drag-reorder tabs (+ between windows) | ⬜ | single-window; drag-reorder wanted |
+| Drag-reorder tabs | ✅ | midpoint-crossing swaps, mixed widths; between-windows N/A (single window) |
 | `toggle-fullscreen` | ⬜ | |
 | Save-as-profile / save-layout-as-profile | ⛔ | depends on profiles (deferred) |
 
@@ -59,7 +59,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Cursor blink | ✅ | `cursor_blink` (default on); focused pane only, xterm cadence |
 | Font weight / bold weight | ⬜ | single weight |
 | Configurable fallback font + line padding | 🟡 | fallbacks hardcoded; no linePadding |
-| Ligatures | ⬜ | needs shaping (rustybuzz) |
+| Ligatures | 🟡 | `ligatures` (default off): symbol substitution (-> => != >= <= ...); true OpenType shaping still ⬜ (egui limit) |
 | Sixel / inline images | ⛔→FUTURE | alacritty grid has no image model |
 | Bold-in-bright-colors | ✅ | `bold_bright` (default on) |
 | Minimum contrast ratio (auto-contrast) | ⬜ | |
@@ -101,14 +101,14 @@ copy-current-path; ambient AI-CLI awareness badges.
 ## Command palette / discoverability
 | Feature | State | Notes |
 |---|---|---|
-| Command palette (`command-selector`) | ⬜ | fuzzy actions; nice-to-have |
+| Command palette (`command-selector`) | ✅ | Cmd+Shift+P; fuzzy-scored, 19 commands + profile launchers |
 | Profile selector | ⛔ | depends on profiles |
 
 ## Profiles & shell
 | Feature | State | Notes |
 |---|---|---|
 | cwd tracking + new-tab-in-cwd | ✅ | |
-| Named profiles (shell/args/cwd/env/color/icon launchers) | ⬜ | Tabby-core concept; useful post-v1 |
+| Named profiles (shell/args/cwd/env/color) | ✅ | `[[profiles]]`; tab menu + '+' right-click + palette; icon ⬜ |
 | Per-profile env editor / command-line editor | ⬜ | with profiles |
 | `switch-profile` in active pane | ⬜ | with profiles |
 | Shell auto-detection list (zsh/bash/fish/pwsh/...) | 🟡 | uses `$SHELL`; no picker. (Tabby fork ships no concrete ShellProvider either) |
@@ -141,7 +141,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 ## Settings GUI (M11)
 | Feature | State | Notes |
 |---|---|---|
-| egui settings panel | ⬜ | Tabby: Application/Window/Hotkeys/Profiles/Config-file tabs. We ship config.toml + gear-opens-file |
+| egui settings panel | ✅ | gear opens it: Appearance/Terminal/Quake/Session, live-apply + Save-to-toml; hotkey editor ⬜ |
 | Raw config editor / show-defaults | 🟡 | gear opens config.toml in $EDITOR |
 
 ## Session / lifecycle

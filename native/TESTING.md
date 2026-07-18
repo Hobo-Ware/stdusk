@@ -99,3 +99,12 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | `brew upgrade`-style output with `%` | Tab progress bar still tracks |
 | Failed command (`false`) in a background tab | Subtle red left-edge mark on that tab |
 | Run `claude` in a tab | "claude" badge appears on the tab within ~1s |
+
+## 11. 0.2.1 additions
+| Step | Expect |
+|---|---|
+| Cmd+Shift+P, type "spl" | Palette opens; Split Right/Down rank top; Enter splits; Esc closes |
+| Drag a tab sideways past its neighbor | Tabs swap while dragging; click/rename/menu still work |
+| `[terminal] ligatures = true`, restart; `echo '-> => != >= <='` | Single glyphs → ⇒ ≠ ≥ ≤; copy still yields the real chars |
+| Add a `[[profiles]]` block (see config.example), restart; right-click "+" | Profile listed; opens tab with its cwd/env/color/name; also in palette as "New Tab: <name>" |
+| Click the gear | Settings window: change theme/opacity live; Save persists to config.toml; Open config file still works |

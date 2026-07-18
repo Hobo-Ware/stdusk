@@ -464,6 +464,14 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## 0.2.1 - palette, drag-reorder, ligatures, profiles, settings GUI
+Five parallel builder agents + integration. Cmd+Shift+P command palette (fuzzy scorer tested);
+drag-to-reorder tabs (pure midpoint math tested); symbol ligatures (`ligatures`, render-only
+substitution - egui can't shape OpenType); named `[[profiles]]` (shell/args/cwd~/env/color,
+resolution tested) launchable from tab menu / '+' right-click / palette; settings GUI on the
+gear (live-apply, Save serializes Config - round-trip tested). Gotcha: cherry-picking parallel
+work can silently drop hunks in 3-way merges - verify each rebuilt commit compiles in a worktree.
+
 ## Supreme pass (0.2.0) - Tabby-parity input/paste/render suite + session restore + themes
 Multi-agent pass: Tabby re-audit (exact paste/copy semantics extracted from
 baseTerminalTab.component.ts) + code-audit agent (found the grid-dims bugs below) + theme-import
