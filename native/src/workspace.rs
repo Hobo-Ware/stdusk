@@ -1,0 +1,350 @@
+//! Workspace: the central panel that tiles the active tab's pane tree (render,
+//! input/paste routing, splitters), the pane right-click menu, and the deferred
+//! pane-action apply.
+
+use eframe::egui;
+
+use crate::tabs::spawn_opts;
+use crate::terminal::PtyTerm;
+use crate::ui::{self, collect_input, render_grid, style_menu};
+use crate::{COLS, ROWS, Stdusk, colors, pane};
+
+/// Deferred pane action from the right-click menu, applied after the central panel. Each
+/// carries the target pane's path.
+enum PaneAction {
+    Copy(Vec<pane::Side>),
+    CopyPath(Vec<pane::Side>),
+    Split(Vec<pane::Side>, pane::SplitDir, bool), // (path, dir, new_first)
+    Close(Vec<pane::Side>),
+    NewTab,
+}
+
+/// Right-click menu for a terminal pane. Sets `action`; egui auto-closes on a button click.
+fn pane_menu(
+    ui: &mut egui::Ui,
+    path: &[pane::Side],
+    has_selection: bool,
+    cwd: Option<&str>,
+    action: &mut Option<PaneAction>,
+) {
+    style_menu(ui);
+    ui.add_enabled_ui(has_selection, |ui| {
+        if ui.button("Copy").clicked() {
+            *action = Some(PaneAction::Copy(path.to_vec()));
+        }
+    });
+    ui.add_enabled_ui(cwd.is_some(), |ui| {
+        if ui.button("Copy current path").clicked() {
+            *action = Some(PaneAction::CopyPath(path.to_vec()));
+        }
+    });
+    ui.separator();
+    ui.menu_button("Split", |ui| {
+        use pane::SplitDir::{Column, Row};
+        style_menu(ui);
+        if ui.button("Right").clicked() {
+            *action = Some(PaneAction::Split(path.to_vec(), Row, false));
+        }
+        if ui.button("Down").clicked() {
+            *action = Some(PaneAction::Split(path.to_vec(), Column, false));
+        }
+        if ui.button("Left").clicked() {
+            *action = Some(PaneAction::Split(path.to_vec(), Row, true));
+        }
+        if ui.button("Up").clicked() {
+            *action = Some(PaneAction::Split(path.to_vec(), Column, true));
+        }
+    });
+    ui.separator();
+    if ui.button("New tab").clicked() {
+        *action = Some(PaneAction::NewTab);
+    }
+    if ui.button("Close pane").clicked() {
+        *action = Some(PaneAction::Close(path.to_vec()));
+    }
+}
+
+/// Flags the central panel reports back for the caller's bell-flash / toast handling.
+pub(crate) struct CentralOut {
+    pub(crate) copied: bool,
+    pub(crate) bell_rang: bool,
+}
+
+impl Stdusk {
+    /// The terminal workspace: tiles the active tab's pane tree, routes keystrokes and
+    /// pastes to the focused pane, draws splitters, and applies the deferred pane action.
+    pub(crate) fn central_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        input_captured: bool,
+        kb_pane_dir: Option<pane::Dir>,
+        now: f64,
+    ) -> CentralOut {
+        let bell_on = self.cfg.terminal.bell != "off";
+        let mut copied = false; // set inside the central panel when Cmd+C copies a selection
+        let mut bell_rang = false; // any pane rang BEL this frame -> visual flash
+        let mut pane_action: Option<PaneAction> = None; // from the pane right-click menu
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::TRANSPARENT)
+                    .inner_margin(egui::Margin::same(12)),
+            )
+            .show(ui, |ui| {
+                let area = ui.max_rect();
+                let font = egui::FontId::monospace(self.cfg.appearance.font_size * self.zoom);
+                let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
+                let (cw, ch) = (m.size().x, m.size().y);
+                let cursor = ui::cursor_style(&self.cfg.terminal.cursor);
+                // Links are "active" (underline on hover, open on click) when enabled and the
+                // configured modifier is held - default modifier "none" means plain hover, Tabby-style.
+                let link_active = self.cfg.terminal.clickable_links
+                    && ui::link_modifier_held(
+                        ui.input(|i| i.modifiers),
+                        &self.cfg.terminal.link_modifier,
+                    );
+                let tcfg = self.cfg.terminal.clone();
+                let tab = &mut self.tabs[self.active];
+
+                // Cmd+C copies the focused pane's selection; intelligent Ctrl+C (Tabby) copies
+                // too when a selection exists, else stays SIGINT (handled via collect_input).
+                // Selection read ONCE per frame: the reader thread can invalidate it between a
+                // has-selection check and a copy, which would swallow Ctrl-C without copying.
+                let sel_text = tab.focused_term().selection_text();
+                let has_selection = sel_text.is_some();
+                let ctrl_c = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::C));
+                let want_copy = ui
+                    .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+                    || (ctrl_c && has_selection && !input_captured);
+                if want_copy && let Some(txt) = sel_text {
+                    ctx.copy_text(txt);
+                    if ctrl_c {
+                        tab.focused_term().clear_selection(); // Tabby clears after Ctrl-C copy
+                    }
+                    copied = true;
+                }
+
+                // Keystrokes -> focused pane (unless a text field/modal owns the keyboard).
+                if !input_captured {
+                    let input = collect_input(ui, tcfg.alt_is_meta, ctrl_c && has_selection);
+                    if !input.is_empty() {
+                        let t = tab.focused_term_mut();
+                        t.send(&input);
+                        t.clear_selection();
+                        t.scroll_to_bottom();
+                    }
+                }
+                // Paste events: processed even while the paste-confirm modal is open (they queue
+                // rather than vanish); only a focused TEXT FIELD (find bar / rename) owns pastes.
+                if self.search.is_none() && self.renaming.is_none() {
+                    let pastes: Vec<String> = ui.input(|i| {
+                        i.events
+                            .iter()
+                            .filter_map(|e| match e {
+                                egui::Event::Paste(s) => Some(s.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    });
+                    for p in pastes {
+                        // Tabby's paste pipeline: normalize newlines (+optional ->spaces); a
+                        // multiline paste outside the alt screen asks first (modal, untrimmed);
+                        // otherwise apply the trim rules and send.
+                        let s = ui::normalize_paste(&p, tcfg.replace_newlines_on_paste);
+                        let multiline = s.contains('\r');
+                        if multiline
+                            && tcfg.warn_on_multiline_paste
+                            && !tab.focused_term().is_alt_screen()
+                        {
+                            self.pending_pastes.push_back((tab.id, s));
+                            ctx.request_repaint(); // make sure the confirm modal shows this frame
+                            continue;
+                        }
+                        let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);
+                        let t = tab.focused_term_mut();
+                        t.paste(&s);
+                        t.clear_selection();
+                        t.scroll_to_bottom();
+                    }
+                }
+
+                // Keyboard pane navigation (Cmd+Alt+arrow): move focus to the neighbor pane.
+                let full_layout = tab.root().layout(area);
+                if let Some(dir) = kb_pane_dir
+                    && let Some(target) = pane::neighbor(&full_layout, &tab.focused, dir)
+                {
+                    tab.focused = target;
+                }
+
+                // Tile the pane tree; when a pane is maximized, show only the focused one full-area.
+                let layout = if tab.maximized && full_layout.len() > 1 {
+                    vec![(tab.focused.clone(), area)]
+                } else {
+                    full_layout
+                };
+                let multi = layout.len() > 1;
+                let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
+                let pointer = ui.input(|i| i.pointer.hover_pos());
+                let mut focus_click: Option<Vec<pane::Side>> = None;
+                let mut middle_paste: Option<(Vec<pane::Side>, String)> = None;
+                for (path, rect) in &layout {
+                    {
+                        let term = tab.root_mut().leaf_at_mut(path).expect("leaf");
+                        let cols = (rect.width() / cw).floor().max(1.0) as usize;
+                        let rows = (rect.height() / ch).floor().max(1.0) as usize;
+                        term.resize(cols, rows);
+                        // Wheel scroll goes to the pane under the pointer.
+                        if scroll_y != 0.0 && pointer.is_some_and(|p| rect.contains(p)) {
+                            let mut lines = (scroll_y / ch).round() as i32;
+                            if lines == 0 {
+                                lines = scroll_y.signum() as i32;
+                            }
+                            term.scroll(lines);
+                        }
+                    }
+                    let term = tab.root().leaf_at(path).expect("leaf");
+                    let snap = term.grid_snapshot();
+                    let dimmed = multi && path != &tab.focused;
+                    let has_sel = term.selection_text().is_some();
+                    let cwd = term.cwd();
+                    let blink = tcfg.cursor_blink && !input_captured && path == &tab.focused;
+                    let resp = render_grid(
+                        ui,
+                        path,
+                        *rect,
+                        term,
+                        &snap,
+                        cw,
+                        ch,
+                        &font,
+                        cursor,
+                        dimmed,
+                        link_active,
+                        blink,
+                    );
+                    if bell_on && term.take_bell() {
+                        bell_rang = true;
+                    }
+                    // Copy-on-select: whenever a drag/double/triple selection just finished.
+                    if tcfg.copy_on_select
+                        && (resp.drag_stopped() || resp.double_clicked() || resp.triple_clicked())
+                        && let Some(txt) = term.selection_text()
+                        && !txt.trim().is_empty()
+                    {
+                        ctx.copy_text(txt);
+                    }
+                    // Middle-click pastes the clipboard into this pane (and focuses it).
+                    if tcfg.paste_on_middle_click
+                        && !input_captured
+                        && resp.hovered()
+                        && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle))
+                        && let Ok(mut cb) = arboard::Clipboard::new()
+                        && let Ok(text) = cb.get_text()
+                    {
+                        middle_paste = Some((path.clone(), text));
+                    }
+                    if resp.clicked() || resp.drag_started() {
+                        focus_click = Some(path.clone());
+                    }
+                    // Keep egui keyboard focus on the active terminal, or a typed Space/Enter
+                    // would activate a focused tab-bar button (e.g. the gear opening config.toml).
+                    if !input_captured && path == &tab.focused {
+                        resp.request_focus();
+                    }
+                    resp.context_menu(|ui| {
+                        pane_menu(ui, path, has_sel, cwd.as_deref(), &mut pane_action);
+                    });
+                }
+                if let Some(p) = focus_click {
+                    tab.focused = p;
+                }
+                // Apply the middle-click paste (deferred: needs &mut past the render borrow).
+                // Runs through the same normalize/trim pipeline; skips the multiline modal like
+                // Tabby (middle-click paste is an X11-style immediate action).
+                if let Some((p, text)) = middle_paste {
+                    tab.focused.clone_from(&p);
+                    let s = ui::normalize_paste(&text, tcfg.replace_newlines_on_paste);
+                    let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);
+                    if let Some(t) = tab.root_mut().leaf_at_mut(&p) {
+                        t.paste(&s);
+                        t.scroll_to_bottom();
+                    }
+                }
+
+                // Draggable splitters between panes (hidden while a pane is maximized).
+                for (spath, dir, handle, parent) in
+                    if tab.maximized { Vec::new() } else { tab.root().splitters(area) }
+                {
+                    let resp = ui.interact(
+                        handle,
+                        egui::Id::new(("split", &spath)),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let hot = resp.hovered() || resp.dragged();
+                    ui.painter().rect_filled(
+                        handle,
+                        1.0,
+                        if hot { colors::accent() } else { colors::border() },
+                    );
+                    if hot {
+                        ui.ctx().set_cursor_icon(match dir {
+                            pane::SplitDir::Row => egui::CursorIcon::ResizeHorizontal,
+                            pane::SplitDir::Column => egui::CursorIcon::ResizeVertical,
+                        });
+                    }
+                    if resp.dragged()
+                        && let Some(p) = resp.interact_pointer_pos()
+                    {
+                        tab.root_mut().set_ratio(&spath, pane::ratio_from_pointer(parent, dir, p));
+                    }
+                }
+            });
+
+        // Apply the deferred pane action (menu), now that the panel borrow is released.
+        match pane_action {
+            Some(PaneAction::Copy(p)) => {
+                if let Some(txt) =
+                    self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::selection_text)
+                {
+                    ctx.copy_text(txt);
+                    copied = true;
+                }
+            }
+            Some(PaneAction::CopyPath(p)) => {
+                if let Some(path) = self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::cwd)
+                {
+                    ctx.copy_text(path);
+                    self.toast = Some(("Copied path".into(), now + 1.4));
+                }
+            }
+            Some(PaneAction::Split(p, dir, new_first)) => {
+                let cwd = self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::cwd);
+                let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(&self.cfg, cwd));
+                let tab = &mut self.tabs[self.active];
+                let root = tab.root.take().expect("root");
+                let (root, focus) = root.split(&p, dir, new, new_first);
+                tab.root = Some(root);
+                if let Some(f) = focus {
+                    tab.focused = f;
+                }
+            }
+            Some(PaneAction::Close(p)) => {
+                let tab = &mut self.tabs[self.active];
+                if tab.root().leaf_count() > 1 {
+                    let root = tab.root.take().expect("root");
+                    let (root, focus) = root.close(&p);
+                    tab.root = root;
+                    if let Some(f) = focus {
+                        tab.focused = f;
+                    }
+                } else {
+                    self.close_tab(self.active, ctx);
+                }
+            }
+            Some(PaneAction::NewTab) => self.new_tab(ctx),
+            None => {}
+        }
+        CentralOut { copied, bell_rang }
+    }
+}
