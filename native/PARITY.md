@@ -25,14 +25,14 @@ copy-current-path; ambient AI-CLI awareness badges.
 |---|---|---|
 | New / close / switch (1-9) / reorder / rename / color | ✅ | reorder+rename via menu/dbl-click |
 | `next-tab` / `previous-tab` cycle hotkey | ✅ | Ctrl+Tab / Ctrl+Shift+Tab (wraps) |
-| `move-tab-left/right` hotkey | 🟡 | menu only, no hotkey |
+| `move-tab-left/right` hotkey | ✅ | Cmd+Shift+←/→ |
 | Tab jump 10-20 (`tab-10`..`tab-20`) | ⬜ | have 1-9 |
 | `duplicate-tab` (clone incl. cwd) | ✅ | context-menu "Duplicate" |
 | `reopen-tab` (reopen last closed) | ✅ | Cmd+Shift+T; closed-cwd stack (cap 20) |
 | `toggle-last-tab` (alt-tab between two) | ⬜ | |
 | `pin-tab` (pin, guard close) | ⬜ | |
-| `restart-tab` (respawn shell) | ⬜ | |
-| Close other / to-the-right / to-the-left | ⬜ | context-menu items |
+| `restart-tab` (respawn shell) | ✅ | context-menu Restart (same cwd, keeps title/color) |
+| Close other / to-the-right / to-the-left | ✅ | context-menu items (feed the reopen stack) |
 | `explode-tab` (panes -> tabs) / `combine-tabs` (tabs -> split) | ⬜ | power-user, low priority |
 | Notify-when-done | ✅ | `terminal.notify_on_done`; osascript notification when a >10s command finishes while hidden. notify-on-activity still ⬜ |
 | Current-process display in menu | ⬜ | have procwatch tree already |
@@ -56,47 +56,47 @@ copy-current-path; ambient AI-CLI awareness badges.
 | Feature | State | Notes |
 |---|---|---|
 | Truecolor/256/16 + cursor styles | ✅ | |
-| Cursor blink | ⬜ | styles only, no blink |
+| Cursor blink | ✅ | `cursor_blink` (default on); focused pane only, xterm cadence |
 | Font weight / bold weight | ⬜ | single weight |
 | Configurable fallback font + line padding | 🟡 | fallbacks hardcoded; no linePadding |
 | Ligatures | ⬜ | needs shaping (rustybuzz) |
 | Sixel / inline images | ⛔→FUTURE | alacritty grid has no image model |
-| Bold-in-bright-colors | ⬜ | cheap |
+| Bold-in-bright-colors | ✅ | `bold_bright` (default on) |
 | Minimum contrast ratio (auto-contrast) | ⬜ | |
 | Palette generate / harmonious | ⬜ | niche |
 | Light color scheme + follow-OS light/dark | ✅ | `appearance.follow_system` + `theme_light`/`theme_dark`; adaptive chrome; `one-half-light` added |
 | Background: image / vibrancy / blur | ⬜ | opacity only |
-| Configurable scrollback lines (25k default) | 🟡 | fixed ~10k, not configurable |
+| Configurable scrollback lines (25k default) | ✅ | `scrollback_lines` (default 25000) |
 | Wide-char / Unicode 11 widths | 🟡 | verify CJK/emoji cell widths |
 
 ## Input / copy-paste
 | Feature | State | Notes |
 |---|---|---|
 | Copy / paste / bracketed paste / OSC 52 | ✅ | |
-| Intelligent Ctrl-C (copy if selection else SIGINT) | 🟡 | Ctrl-C = SIGINT; Cmd-C copies. verify |
+| Intelligent Ctrl-C (copy if selection else SIGINT) | ✅ | Tabby-parity: copy+clear when selected, else SIGINT |
 | Natural editing keys (home/end/word/line) | ✅ | |
 | `select-all` (Cmd-A) | ✅ | selects whole buffer; Cmd-C copies |
 | `clear` (Cmd-K) | ✅ | sends Ctrl-L (shell clear); scrollback-wipe still ⬜ |
 | Font zoom (`zoom-in/out/reset`) | ✅ | Cmd +/-/0 (runtime `zoom` multiplier) |
-| Copy-on-select | ⬜ | config option |
-| Middle-click paste | ⬜ | |
+| Copy-on-select | ✅ | `copy_on_select`; on selection finish, skips whitespace-only |
+| Middle-click paste | ✅ | `paste_on_middle_click` (default on, arboard clipboard read) |
 | Copy-as-HTML (rich clipboard) | ⬜ | niche |
 | Right-click mode (menu vs paste vs clipboard) | 🟡 | menu only |
-| Multiline-paste warning / paste protection | ⬜ | |
-| Paste transforms (trim ws, newlines->spaces) | ⬜ | |
-| `altIsMeta`, configurable word separator, focus-follows-mouse | ⬜ | config options |
+| Multiline-paste warning / paste protection | ✅ | `warn_on_multiline_paste`; modal w/ preview, suppressed on alt-screen (Tabby-exact) |
+| Paste transforms (trim ws, newlines->spaces) | ✅ | `trim_whitespace_on_paste` (default on) + `replace_newlines_on_paste`; Tabby-exact rules |
+| `altIsMeta` + configurable word separators | ✅ | `alt_is_meta`, `word_separators`; focus-follows-mouse still ⬜ |
 | Alt+scroll -> arrow keys | ⬜ | |
 
 ## Scrolling
 | Feature | State | Notes |
 |---|---|---|
 | Wheel scroll + scrollbar | ✅ | |
-| Scroll hotkeys | 🟡 | Shift+PageUp/Down (page); to-top/bottom + line steps still ⬜ |
+| Scroll hotkeys | ✅ | Shift+PageUp/Down (page) + Shift+Home/End (top/bottom); line steps ⬜ |
 
 ## Links
 | Feature | State | Notes |
 |---|---|---|
-| Clickable links (URL + file paths) | ✅ | `clickable_links` + `link_modifier` (default "none" = hover, Tabby-style); opens via `open`, cwd-relative + `~`. IP-only (no scheme) still ⬜ |
+| Clickable links (URL + IP + file paths) | ✅ | `clickable_links` + `link_modifier` (default "none" = hover, Tabby-style); opens via `open`, cwd-relative + `~`; bare IPv4 literals open as http:// |
 
 ## Command palette / discoverability
 | Feature | State | Notes |
@@ -117,8 +117,8 @@ copy-current-path; ambient AI-CLI awareness badges.
 ## Themes / color schemes
 | Feature | State | Notes |
 |---|---|---|
-| Built-in themes | 🟡 | 4 (one-half dark/light, dracula, tokyo-night); Tabby community pack has **191** XRDB schemes |
-| Import color schemes (XRDB/iTerm/base16) | ⬜ | parse into a theme; 191 XRDB files available to port |
+| Built-in themes | ✅ | 4 built-ins + 191 embedded community XRDB schemes |
+| Import color schemes (XRDB) | ✅ | 191 community schemes embedded + user files in ~/.config/stdusk/schemes/; iTerm/base16 ⬜ |
 | Custom color schemes in config | 🟡 | theme by name only |
 
 ## Quake / window / docking
@@ -147,7 +147,7 @@ copy-current-path; ambient AI-CLI awareness badges.
 ## Session / lifecycle
 | Feature | State | Notes |
 |---|---|---|
-| Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ⬜ | persist tab/cwd state |
+| Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ✅ | `[session] restore`; cwd/title/color, saved every 3s |
 | Behavior on session end (keep/close/restart) | ⬜ | |
 | Dynamic title from shell (OSC 0/2) + disable toggle | 🟡 | cwd title; verify OSC 0/2 title |
 | Save/load terminal output & state (debug) | ⛔ | niche debug tooling |

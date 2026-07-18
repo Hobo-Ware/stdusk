@@ -464,6 +464,37 @@ end-to-end (downloads the universal `.app`, installs, symlinks `stdusk`, `--vers
   `stdusk.app/`, so the formula must `(prefix/"stdusk.app").install "Contents"` (NOT
   `prefix.install "stdusk.app"` - that ENOENTs). Workflow + reference formula + tap all corrected.
 
+## Supreme pass (0.2.0) - Tabby-parity input/paste/render suite + session restore + themes
+Multi-agent pass: Tabby re-audit (exact paste/copy semantics extracted from
+baseTerminalTab.component.ts) + code-audit agent (found the grid-dims bugs below) + theme-import
+builder agent; implementation + integration here.
+- **Bug fixes (regression-tested where pure)**: `grid_snapshot`/`buffer_lines`/`select_all` used
+  `self.cols/rows`, which diverge from the REAL grid dims when an app resizes via CSI 8 -> OOB
+  panics in the renderer. Grid dims (`grid.columns()/screen_lines()`) are now authoritative.
+  `resize()` condition parenthesized.
+- **Paste pipeline (Tabby-exact, `ui::normalize_paste`/`trim_paste`, tested)**: CRLF/LF -> CR;
+  optional newlines->spaces (`replace_newlines_on_paste`); multiline + `warn_on_multiline_paste`
+  + NOT alt-screen -> confirm modal (preview, Paste/Cancel, Enter/Esc; modal path skips trim);
+  else trim rules (`trim_whitespace_on_paste`, default ON: end always, start only single-line).
+- **Intelligent Ctrl-C** (Tabby): selection -> copy + clear; else SIGINT (`collect_input`
+  intercept flag).
+- **Input**: `alt_is_meta` (Option+letter -> ESC+letter, Text events suppressed while Alt held;
+  tested), `word_separators` -> alacritty `semantic_escape_chars`, `scrollback_lines` ->
+  `scrolling_history` (SpawnOpts struct replaced the positional spawn args).
+- **Render**: cursor blink (`cursor_blink`, focused pane only, 1.06s cycle, repaint scheduled at
+  phase flips; `blink_on` tested); bold->bright (`bold_bright`, `colors::cell_fg` tested).
+- **Mouse**: copy-on-select (`copy_on_select`, skips whitespace-only), middle-click paste
+  (`paste_on_middle_click`, arboard clipboard read, deferred apply, focuses the pane).
+- **Scroll**: Shift+Home/End -> top/bottom. **Tabs**: Cmd+Shift+←/→ move tab (reserved in
+  key_to_bytes, tested); Restart / Close-others/right/left menu items (`close_tabs_where`).
+- **Links**: bare IPv4(:port) literals -> http:// (tested).
+- **Session restore** (`session.rs`, tested round-trip): tabs' cwd/title/color + active index ->
+  `~/.config/stdusk/session.toml`, saved every 3s when changed; restored on launch
+  (`[session] restore`, default true).
+- **Community themes** (`themes.rs` + `build.rs`): 191 Tabby XRDB schemes embedded at build time
+  + user files in `~/.config/stdusk/schemes/`; `colors::by_name` falls back to
+  `themes::lookup` (normalized names).
+
 ## Notify-when-done (`terminal.rs`, `main.rs`, `config.rs`)
 - The reader thread times each command via OSC 133 (`Instant` on CommandStart; on CommandEnd, if
   it ran >=10s, set `TabState.done_notify = Some(exit)`). The UI drains it each frame and, when
