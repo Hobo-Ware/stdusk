@@ -20,6 +20,16 @@ pub(crate) mod icons {
     pub(crate) const TEXT_AA: &str = "\u{E6EE}"; // case sensitivity
     pub(crate) const ASTERISK: &str = "\u{E0AA}"; // regex
     pub(crate) const BRACKETS_SQUARE: &str = "\u{E85E}"; // whole word
+    // Settings-view section + row icons.
+    pub(crate) const PALETTE: &str = "\u{E6C8}"; // Appearance
+    pub(crate) const SWATCHES: &str = "\u{E5B8}"; // Color scheme
+    pub(crate) const TERMINAL_WINDOW: &str = "\u{EAE8}"; // Terminal
+    pub(crate) const LIGHTNING: &str = "\u{E2DE}"; // Quake
+    pub(crate) const CLOCK_COUNTER_CLOCKWISE: &str = "\u{E1A0}"; // Session
+    pub(crate) const INFO: &str = "\u{E2CE}"; // About
+    pub(crate) const ARROW_SQUARE_OUT: &str = "\u{E5DE}"; // open-externally rows
+    pub(crate) const FOLDER: &str = "\u{E24A}"; // open config folder
+    pub(crate) const CHECK: &str = "\u{E182}"; // active scheme mark
 }
 
 // ---- pure helpers (no egui state; unit-tested below) ----
@@ -406,9 +416,69 @@ pub(crate) fn style_menu(ui: &mut egui::Ui) {
     s.item_spacing.y = 3.0;
 }
 
+/// A Tabby-style on/off switch: sliding knob on an accent-filled pill while on. The standard
+/// boolean control for settings rows (reads better right-aligned than a checkbox).
+pub(crate) fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
+    let (rect, mut resp) = ui.allocate_exact_size(egui::vec2(38.0, 22.0), egui::Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let t = ui.ctx().animate_bool(resp.id, *on);
+    let mix = |a: egui::Color32, b: egui::Color32| {
+        let l = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t) as u8;
+        egui::Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+    };
+    let p = ui.painter();
+    p.rect_filled(rect, 11.0, mix(colors::elevated(), colors::accent()));
+    p.rect_stroke(
+        rect,
+        11.0,
+        egui::Stroke::new(1.0, mix(colors::border(), colors::accent())),
+        egui::StrokeKind::Inside,
+    );
+    let knob_x = rect.left() + 11.0 + t * (rect.width() - 22.0);
+    p.circle_filled(egui::pos2(knob_x, rect.center().y), 7.5, mix(colors::dim(), colors::bg()));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A small selectable chip (segmented option, e.g. cursor style): accent tint + ring while
+/// selected, hover fill otherwise. Returns the Response.
+pub(crate) fn chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let font = egui::FontId::proportional(13.0);
+    let color = if selected { colors::accent() } else { colors::fg() };
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, color);
+    let (rect, resp) =
+        ui.allocate_exact_size(galley.size() + egui::vec2(24.0, 12.0), egui::Sense::click());
+    let p = ui.painter();
+    if selected {
+        p.rect_filled(rect, 8.0, colors::selection());
+        p.rect_stroke(
+            rect,
+            8.0,
+            egui::Stroke::new(1.0, colors::accent()),
+            egui::StrokeKind::Inside,
+        );
+    } else {
+        if resp.hovered() {
+            p.rect_filled(rect, 8.0, colors::hover());
+        }
+        p.rect_stroke(
+            rect,
+            8.0,
+            egui::Stroke::new(1.0, colors::border()),
+            egui::StrokeKind::Inside,
+        );
+    }
+    p.galley(rect.center() - galley.size() / 2.0, galley, color);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// Tab-bar icon-button size (shared so the tab bar can right-align the gear by a spacer).
 pub(crate) const ICON_BTN_W: f32 = 32.0;
 const ICON_BTN_H: f32 = 30.0;
+/// `icon_toggle` size (shared so the tab bar can right-align the gear by a spacer).
+pub(crate) const ICON_TOGGLE_W: f32 = 28.0;
 
 /// A fixed-size Phosphor-icon button with hover feedback. Returns the Response (so callers
 /// can anchor a popup or read `.clicked()`).
@@ -437,7 +507,8 @@ pub(crate) fn icon_toggle(
     active: bool,
     tip: &str,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ICON_TOGGLE_W, 26.0), egui::Sense::click());
     let hovered = resp.hovered();
     if active {
         ui.painter().rect_filled(rect, 6.0, colors::selection());

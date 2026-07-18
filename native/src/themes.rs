@@ -4,8 +4,34 @@
 use crate::colors::Theme;
 use eframe::egui::Color32;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 include!(concat!(env!("OUT_DIR"), "/schemes.rs"));
+
+/// Every browsable scheme (4 built-ins + the embedded pack), parsed once and cached so the
+/// settings scheme list can draw palette previews every frame without re-parsing. Sorted by
+/// normalized name; built-ins shadow same-named pack entries.
+pub(crate) fn all_schemes() -> &'static [(String, Theme)] {
+    static ALL: LazyLock<Vec<(String, Theme)>> = LazyLock::new(|| {
+        let mut v: Vec<(String, Theme)> = vec![
+            ("dracula".into(), crate::colors::dracula()),
+            ("one-half-dark".into(), crate::colors::one_half_dark()),
+            ("one-half-light".into(), crate::colors::one_half_light()),
+            ("tokyo-night".into(), crate::colors::tokyo_night()),
+        ];
+        for (name, src) in SCHEMES {
+            if v.iter().any(|(n, _)| n == name) {
+                continue;
+            }
+            if let Some(theme) = parse_xrdb(src) {
+                v.push(((*name).to_string(), theme));
+            }
+        }
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    });
+    &ALL
+}
 
 /// Look up a non-built-in scheme by normalized name (lowercase, spaces/underscores -> '-').
 /// Rare (theme switch only), so parse on hit - no cache.
@@ -142,6 +168,18 @@ mod tests {
     #[test]
     fn missing_colors_returns_none() {
         assert!(parse_xrdb("*.foreground: #fff\n*.background: #000\n*.color0: #000\n").is_none());
+    }
+
+    #[test]
+    fn all_schemes_sorted_unique_and_complete() {
+        let all = all_schemes();
+        assert!(all.len() >= 190, "pack + built-ins expected, got {}", all.len());
+        for pair in all.windows(2) {
+            assert!(pair[0].0 < pair[1].0, "not sorted/unique: {} vs {}", pair[0].0, pair[1].0);
+        }
+        for name in ["dracula", "nord", "one-half-dark", "one-half-light", "tokyo-night"] {
+            assert!(all.iter().any(|(n, _)| n == name), "missing {name}");
+        }
     }
 
     #[test]

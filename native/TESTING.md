@@ -107,4 +107,11 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | Drag a tab sideways past its neighbor | Tabs swap while dragging; click/rename/menu still work |
 | `[terminal] ligatures = true`, restart; `echo '-> => != >= <='` | Single glyphs → ⇒ ≠ ≥ ≤; copy still yields the real chars |
 | Add a `[[profiles]]` block (see config.example), restart; right-click "+" | Profile listed; opens tab with its cwd/env/color/name; also in palette as "New Tab: <name>" |
-| Click the gear | Settings window: change theme/opacity live; Save persists to config.toml; Open config file still works |
+| Click the gear | Central area swaps to the full settings view (tab bar stays); gear lights up while open; gear or Esc closes; terminal comes back untouched |
+| Settings sidebar | Six sections (Appearance / Color scheme / Terminal / Quake / Session / About) with icons; selected row highlighted |
+| Color scheme: type "nord" in search | List filters live (case-insensitive); clicking a row recolors the whole app instantly and the row gets an accent border + check |
+| Color scheme: hover rows | The terminal preview card above follows the hovered scheme; reverts to the active one on hover-out |
+| With `follow_system = true`, pick a scheme | Sets `theme_light`/`theme_dark` for the CURRENT macOS appearance (dim hint line explains); the app doesn't snap back next frame |
+| Change opacity / font size / toggles | Live-apply; footer Save persists to config.toml ("Saved" toast); Revert reloads the file and re-applies the theme ("Reverted" toast) |
+| About section | Version shown; Open config file / Open config folder rows work; "the machine speaks back" tagline |
+| `cargo run -- --screenshot-settings /tmp/s.png` | Renders the settings view (Color scheme section, one-half-dark pinned) and exits 0 |

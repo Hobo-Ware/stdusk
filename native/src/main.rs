@@ -51,7 +51,8 @@ struct Stdusk {
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     palette: Option<palette::PaletteState>, // command palette (Cmd+Shift+P), None when closed
-    settings_open: bool, // settings window (tab-bar gear), edits cfg live
+    settings_open: bool, // settings view (tab-bar gear) replaces the workspace, edits cfg live
+    settings: settings::SettingsState, // selected section + scheme search/hover state
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     pending_pastes: std::collections::VecDeque<(u64, String)>, // multiline pastes awaiting confirm (tab id, text)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
@@ -67,7 +68,12 @@ struct Stdusk {
 }
 
 impl Stdusk {
-    fn new(cc: &eframe::CreationContext<'_>, cfg: Config, screenshot: Option<String>) -> Self {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        cfg: Config,
+        screenshot: Option<String>,
+        settings_shot: bool,
+    ) -> Self {
         // Load the Phosphor icon font (used for tab-bar controls + close x) as a fallback
         // in the proportional family, so icon codepoints render in buttons/labels.
         let mut fonts = egui::FontDefinitions::default();
@@ -177,6 +183,12 @@ impl Stdusk {
         let tray = (cfg.quake.menu_bar_icon && screenshot.is_none()).then(tray::build).flatten();
         let theme_name = cfg.appearance.theme.clone();
 
+        // --screenshot-settings: open the settings view on the scheme browser (the money shot).
+        let mut settings = settings::SettingsState::new();
+        if settings_shot {
+            settings.open_section(settings::Section::ColorScheme);
+        }
+
         Self {
             tabs,
             active,
@@ -190,7 +202,8 @@ impl Stdusk {
             renaming: None,
             search: None,
             palette: None,
-            settings_open: false,
+            settings_open: settings_shot,
+            settings,
             closed: Vec::new(),
             pending_pastes: std::collections::VecDeque::new(),
             toast: None,
@@ -637,7 +650,7 @@ impl eframe::App for Stdusk {
                 action = Some(TabAction::Close(self.active));
             }
         }
-        if kb_find {
+        if kb_find && !self.settings_open {
             match self.search.take() {
                 Some(_) => self.tabs[self.active].focused_term().clear_selection(),
                 None => {
@@ -701,7 +714,6 @@ impl eframe::App for Stdusk {
         self.rename_window(&ctx);
         self.paste_confirm_window(&ctx);
         self.palette_window(&ctx);
-        self.settings_window(&ctx);
 
         // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.
         if let Some(text) =
@@ -710,10 +722,16 @@ impl eframe::App for Stdusk {
             ctx.copy_text(text);
         }
 
-        self.find_panel(ui);
-
         let now = ctx.input(|i| i.time);
-        let out = self.central_panel(ui, &ctx, input_captured, kb_pane_dir, now);
+        // While settings are open, the settings view takes over the central area (the tab bar
+        // stays); the terminal workspace and find bar come back when it closes.
+        let out = if self.settings_open {
+            self.settings_view(ui, &ctx);
+            workspace::CentralOut { copied: false, bell_rang: false }
+        } else {
+            self.find_panel(ui);
+            self.central_panel(ui, &ctx, input_captured, kb_pane_dir, now)
+        };
 
         // Bell: a brief translucent flash over the whole window, fading out.
         if out.bell_rang {
@@ -755,13 +773,24 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let cfg = Config::load();
-    colors::init(colors::by_name(&cfg.appearance.theme));
+    let mut cfg = Config::load();
 
     // `--screenshot PATH`: populate demo tabs, render, save the PNG, and exit. Uses eframe's
-    // built-in glow-backend capture via EFRAME_SCREENSHOT_TO.
-    let screenshot =
-        args.iter().position(|a| a == "--screenshot").and_then(|i| args.get(i + 1).cloned());
+    // built-in glow-backend capture via EFRAME_SCREENSHOT_TO. `--screenshot-settings PATH`
+    // does the same but opens the settings view on the Color scheme section, with the theme
+    // pinned (deterministic regardless of the user's config).
+    let settings_shot = args
+        .iter()
+        .position(|a| a == "--screenshot-settings")
+        .and_then(|i| args.get(i + 1).cloned());
+    let screenshot = settings_shot.clone().or_else(|| {
+        args.iter().position(|a| a == "--screenshot").and_then(|i| args.get(i + 1).cloned())
+    });
+    if settings_shot.is_some() {
+        cfg.appearance.follow_system = false;
+        cfg.appearance.theme = "one-half-dark".into();
+    }
+    colors::init(colors::by_name(&cfg.appearance.theme));
     if let Some(path) = &screenshot {
         // SAFE: single-threaded, set before any threads spawn (edition-2024 set_var is unsafe).
         #[allow(unsafe_code)]
@@ -769,7 +798,13 @@ fn main() -> eframe::Result<()> {
             std::env::set_var("EFRAME_SCREENSHOT_TO", path);
         }
     }
-    let size = if screenshot.is_some() { [1400.0, 420.0] } else { [1200.0, 500.0] };
+    let size = if settings_shot.is_some() {
+        [1400.0, 760.0] // tall enough for the sidebar + scheme browser
+    } else if screenshot.is_some() {
+        [1400.0, 420.0]
+    } else {
+        [1200.0, 500.0]
+    };
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_decorations(false)
@@ -805,9 +840,10 @@ fn main() -> eframe::Result<()> {
             let _ = builder;
         }));
     }
+    let settings_shot = settings_shot.is_some();
     eframe::run_native(
         "stdusk",
         options,
-        Box::new(move |cc| Ok(Box::new(Stdusk::new(cc, cfg, screenshot)))),
+        Box::new(move |cc| Ok(Box::new(Stdusk::new(cc, cfg, screenshot, settings_shot)))),
     )
 }

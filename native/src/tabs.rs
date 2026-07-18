@@ -7,7 +7,7 @@ use eframe::egui;
 
 use crate::config::{Config, Profile};
 use crate::terminal::{self, PtyTerm};
-use crate::ui::{self, ICON_BTN_W, color_swatch, draw_tab, icon_button, icons, style_menu, tint};
+use crate::ui::{self, color_swatch, draw_tab, icon_button, icons, style_menu, tint};
 use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch, session};
 
 /// Fixed tab-bar row height - keeps every control centered on the same line (no drift).
@@ -435,9 +435,10 @@ impl Stdusk {
                             }
                         }
                     });
-                    // Gear pinned to the right edge (spacer, not a nested layout).
-                    ui.add_space((ui.available_width() - ICON_BTN_W).max(0.0));
-                    if icon_button(ui, icons::GEAR, "Settings").clicked() {
+                    // Gear pinned to the right edge (spacer, not a nested layout); lit while
+                    // the settings view is open.
+                    ui.add_space((ui.available_width() - ui::ICON_TOGGLE_W).max(0.0));
+                    if ui::icon_toggle(ui, icons::GEAR, self.settings_open, "Settings").clicked() {
                         self.settings_open = !self.settings_open;
                     }
                 });
