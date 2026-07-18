@@ -14,6 +14,7 @@ mod config;
 mod finder;
 mod links;
 mod osc;
+mod palette;
 mod pane;
 mod procwatch;
 mod progress;
@@ -48,6 +49,7 @@ struct Stdusk {
     sized: bool,      // applied quake sizing once the monitor size was known
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
+    palette: Option<palette::PaletteState>, // command palette (Cmd+Shift+P), None when closed
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     pending_pastes: std::collections::VecDeque<(u64, String)>, // multiline pastes awaiting confirm (tab id, text)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
@@ -185,6 +187,7 @@ impl Stdusk {
             sized,
             renaming: None,
             search: None,
+            palette: None,
             closed: Vec::new(),
             pending_pastes: std::collections::VecDeque::new(),
             toast: None,
@@ -439,10 +442,21 @@ impl eframe::App for Stdusk {
         let mut kb_resize: Option<(pane::SplitDir, f32)> = None; // Cmd+Ctrl+arrow: resize focused pane
         let mut kb_move_tab: Option<i32> = None; // Cmd+Shift+←/→: move the active tab
         let mut kb_scroll_edge: Option<bool> = None; // Shift+Home/End: scroll to top (true) / bottom
-        // A hard modal (rename / paste confirm) owns the keyboard entirely: tab switching or
-        // Cmd+W while a paste-confirm shows would retarget/kill the tab under the modal.
-        let hard_modal = self.renaming.is_some() || !self.pending_pastes.is_empty();
+        let mut kb_palette = false; // Cmd+Shift+P: toggle the command palette
+        // A hard modal (rename / paste confirm / palette) owns the keyboard entirely: tab
+        // switching or Cmd+W while a paste-confirm shows would retarget/kill the tab under it.
+        let text_modal = self.renaming.is_some() || !self.pending_pastes.is_empty();
+        let hard_modal = text_modal || self.palette.is_some();
         ctx.input(|i| {
+            // Cmd+Shift+P toggles the palette even while it's open (it's its own dismissal),
+            // but stays suppressed under the rename/paste-confirm modals.
+            if !text_modal
+                && i.modifiers.command
+                && i.modifiers.shift
+                && i.key_pressed(egui::Key::P)
+            {
+                kb_palette = true;
+            }
             if hard_modal {
                 return;
             }
@@ -634,6 +648,9 @@ impl eframe::App for Stdusk {
                 }
             }
         }
+        if kb_palette && self.palette.take().is_none() {
+            self.palette = Some(palette::PaletteState::new());
+        }
         // Font zoom (harmless anytime). Reset (0), in (1), out (-1); clamped.
         if let Some(z) = kb_zoom {
             self.zoom = match z {
@@ -667,15 +684,19 @@ impl eframe::App for Stdusk {
         }
         self.apply_tab_action(action, &ctx);
 
-        // A text field (find bar or rename dialog) owns the keyboard: don't forward keys to the
-        // pty and don't let the terminal steal egui focus back while one is open. Captured MUST be
+        // A text field (find bar, rename dialog, or command palette) owns the keyboard: don't
+        // forward keys to the pty and don't let the terminal steal egui focus back while one is
+        // open. Captured MUST be
         // sampled BEFORE the modals run this frame - else the key that closes a modal (Enter to
         // commit a rename) would leak to the shell once the modal clears its own state.
-        let input_captured =
-            self.search.is_some() || self.renaming.is_some() || !self.pending_pastes.is_empty();
+        let input_captured = self.search.is_some()
+            || self.renaming.is_some()
+            || self.palette.is_some()
+            || !self.pending_pastes.is_empty();
 
         self.rename_window(&ctx);
         self.paste_confirm_window(&ctx);
+        self.palette_window(&ctx);
 
         // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.
         if let Some(text) =
