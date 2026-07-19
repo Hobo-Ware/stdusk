@@ -489,6 +489,9 @@ pub(crate) fn link_modifier_held(mods: egui::Modifiers, setting: &str) -> bool {
 /// keys (letters/digits/punctuation) and nav keys REQUIRE Cmd/Ctrl/Alt (a bare "T" bind
 /// would swallow typing); only F-keys may be bound bare. "+"/"=" both mean `Equals` (they
 /// share the physical key; `hotkey_matches` normalizes the pressed side the same way).
+/// Cmd-modified C/X/V (any extra modifiers included) are REJECTED: egui-winit folds those
+/// presses into `Event::Copy/Cut/Paste` and never emits the `Event::Key`, so such a bind
+/// could never fire - a red field beats a silently dead bind.
 pub(crate) fn parse_hotkey_spec(spec: &str) -> Option<(egui::Modifiers, egui::Key)> {
     let parts: Vec<&str> = spec.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
     let (&key_part, mod_parts) = parts.split_last()?;
@@ -509,6 +512,9 @@ pub(crate) fn parse_hotkey_spec(spec: &str) -> Option<(egui::Modifiers, egui::Ke
     let is_fkey = matches!(key_part.to_ascii_lowercase().strip_prefix('f'), Some(d) if d.parse::<u8>().is_ok());
     if !(is_fkey || mods.command || mods.ctrl || mods.alt) {
         return None; // bare / shift-only single keys would shadow typing
+    }
+    if mods.command && matches!(key, egui::Key::C | egui::Key::X | egui::Key::V) {
+        return None; // folded into Copy/Cut/Paste events - the Key event never arrives
     }
     Some((mods, key))
 }
@@ -1967,6 +1973,21 @@ mod tests {
         assert!(parse_hotkey_spec("F13").is_some());
         assert!(parse_hotkey_spec("Cmd+T").is_some());
         assert!(parse_hotkey_spec("Alt+Space").is_some());
+    }
+
+    #[test]
+    fn cmd_clipboard_chords_are_rejected_as_unmatchable() {
+        // egui-winit folds ANY Cmd-modified C/X/V press into Event::Copy/Cut/Paste and
+        // returns before pushing the Key event (egui-winit 0.35 lib.rs is_copy_command et
+        // al.), so a bind on those chords could never fire. Parse refuses them upfront -
+        // the settings field turns red instead of shipping a silently dead bind.
+        for spec in ["Cmd+C", "Cmd+Shift+C", "Cmd+X", "Cmd+V", "Cmd+Alt+V", "Ctrl+Cmd+X"] {
+            assert_eq!(parse_hotkey_spec(spec), None, "{spec} must be rejected");
+        }
+        // Without Cmd they're ordinary chords (Ctrl+C keeps its copy-or-SIGINT intercept -
+        // a rebind there double-fires by design, same as any terminal-bound chord).
+        assert!(parse_hotkey_spec("Ctrl+C").is_some());
+        assert!(parse_hotkey_spec("Ctrl+Shift+V").is_some());
     }
 
     #[test]

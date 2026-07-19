@@ -277,10 +277,12 @@ impl Stdusk {
             PaletteCmd::ZoomOut => self.zoom = (self.zoom / 1.1).max(0.5),
             PaletteCmd::ZoomReset => self.zoom = 1.0,
             PaletteCmd::ClearTerminal => {
-                // Full clear, Tabby-style: wipe viewport + history, then Ctrl-L for the prompt.
+                // Full clear, Tabby-style: wipe viewport + history, then Ctrl-L for the
+                // prompt. A refused wipe (alt screen) sends nothing either.
                 let t = self.tabs[self.active].focused_term_mut();
-                t.clear_all();
-                t.send(b"\x0c");
+                if t.clear_all() {
+                    t.send(b"\x0c");
+                }
             }
             PaletteCmd::ClearScrollback => {
                 self.tabs[self.active].focused_term().clear_scrollback();

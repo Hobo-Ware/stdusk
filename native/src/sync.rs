@@ -85,6 +85,14 @@ pub(crate) fn should_autosync(auto: bool, repo_set: bool, busy: bool) -> bool {
     auto && repo_set && !busy
 }
 
+/// Is a finished launch-autosync pull STALE? True when the config changed (a Save or a live
+/// settings edit) while the pull ran - the user's version wins; the caller skips the apply
+/// and restores the local file (the pull's hard reset already replaced it on disk). A manual
+/// Pull passes no baseline (`None`) and is never stale: overwriting local is its whole point.
+pub(crate) fn pull_is_stale(launch_baseline: Option<&str>, current_toml: &str) -> bool {
+    launch_baseline.is_some_and(|b| b != current_toml)
+}
+
 /// Result slot the UI polls: set once by the worker thread, taken by the frame loop.
 pub(crate) type SyncSlot = Arc<Mutex<Option<(Op, Result<(), String>)>>>;
 
@@ -157,6 +165,14 @@ mod tests {
                 "auto={auto} repo={repo} busy={busy}"
             );
         }
+    }
+
+    #[test]
+    fn launch_pull_is_stale_only_when_the_config_changed_under_it() {
+        let spawn_time = "a = 1";
+        assert!(!pull_is_stale(Some(spawn_time), "a = 1")); // untouched: apply the pull
+        assert!(pull_is_stale(Some(spawn_time), "a = 2")); // edited/saved meanwhile: skip
+        assert!(!pull_is_stale(None, "a = 2")); // manual Pull: always applies
     }
 
     #[test]

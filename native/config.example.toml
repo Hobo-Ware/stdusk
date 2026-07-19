@@ -61,6 +61,8 @@ auto = false              # with a repo set: pull once on launch, push after eve
 # arrows Home End PageUp PageDown ...). Omitted actions keep these defaults; "" unbinds.
 # Single keys need Cmd/Ctrl/Alt (only F-keys may be bound bare). A chord that collides
 # with a terminal key (e.g. Ctrl+letter) fires the action AND still reaches the shell.
+# Cmd+C / Cmd+X / Cmd+V (with any extra modifiers) can't be bound - macOS folds them into
+# clipboard events before the app ever sees the key, so such a bind is rejected as invalid.
 # Also editable in Settings > Hotkeys. The global summon hotkey stays [quake] hotkey.
 [hotkeys]
 new_tab = "Cmd+T"

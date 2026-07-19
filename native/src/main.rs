@@ -200,7 +200,8 @@ struct Stdusk {
     tray: Option<tray::Tray>,     // menu-bar status item (kept alive; Some when enabled)
     sync_slot: sync::SyncSlot,    // settings-sync worker result, polled each frame
     sync_busy: bool,              // a sync push/pull is in flight (buttons disabled)
-    screenshot: Option<String>,   // --screenshot PATH: demo tabs, capture, exit
+    launch_pull_cfg: Option<String>, // config TOML when the launch autosync pull spawned (staleness gate)
+    screenshot: Option<String>,      // --screenshot PATH: demo tabs, capture, exit
 }
 
 impl Stdusk {
@@ -353,11 +354,13 @@ impl Stdusk {
         let fx_opacity = cfg.appearance.opacity;
         // Autosync: pull once on launch (in the background - startup never blocks on git).
         // The per-frame sync_done handler applies the result like a manual Pull; a failure
-        // toasts once. Pushes happen on settings Save (the only disk write).
+        // toasts once. Pushes happen on settings Save (the only disk write). The config
+        // snapshot gates a SLOW pull against changes made while it ran (sync::pull_is_stale).
         let sync_slot = sync::SyncSlot::default();
         let repo = cfg.sync.repo.trim().to_owned();
         let sync_busy =
             screenshot.is_none() && sync::should_autosync(cfg.sync.auto, !repo.is_empty(), false);
+        let launch_pull_cfg = sync_busy.then(|| config::config_to_toml(&cfg));
         if sync_busy {
             sync::spawn(sync::Op::Pull, repo, &sync_slot, cc.egui_ctx.clone());
         }
@@ -399,6 +402,7 @@ impl Stdusk {
             tray,
             sync_slot,
             sync_busy,
+            launch_pull_cfg,
             screenshot,
         }
     }
@@ -607,14 +611,30 @@ impl eframe::App for Stdusk {
         }
 
         // Settings-sync worker finished: toast the outcome; a successful pull replaced the
-        // config file, so reload + re-apply it (same path as the footer Revert).
+        // config file, so reload + re-apply it (same path as the footer Revert). The LAUNCH
+        // autosync pull is gated for staleness: a slow git round-trip can land after the
+        // user already saved or is mid-edit in settings - their version wins over the pull
+        // (which is only a convenience), and the local file is restored (the worker's hard
+        // reset already replaced it on disk). Manual Pull has no baseline: never stale.
         let sync_done = self.sync_slot.lock().unwrap().take();
         if let Some((op, res)) = sync_done {
             self.sync_busy = false;
+            let launch_baseline = self.launch_pull_cfg.take();
             let now = ctx.input(|i| i.time);
             match (op, res) {
                 (sync::Op::Push, Ok(())) => {
                     self.toast = Some(("Settings pushed".into(), now + 1.8));
+                }
+                (sync::Op::Pull, Ok(()))
+                    if sync::pull_is_stale(
+                        launch_baseline.as_deref(),
+                        &config::config_to_toml(&self.cfg),
+                    ) =>
+                {
+                    if let Some(p) = config::ensure_and_path() {
+                        let _ = std::fs::write(p, config::config_to_toml(&self.cfg));
+                    }
+                    self.toast = Some(("Sync pull skipped (local changes)".into(), now + 2.6));
                 }
                 (sync::Op::Pull, Ok(())) => {
                     self.cfg = Config::load();
@@ -1051,10 +1071,12 @@ impl eframe::App for Stdusk {
             }
             if kb_clear {
                 // Ctrl-L redraws the prompt; the wipe drops the whole scrollback with it
-                // (Tabby's `clear` does both). Wipe first - see PtyTerm::clear_all.
+                // (Tabby's `clear` does both). Wipe first - see PtyTerm::clear_all. A refused
+                // wipe (alt screen) sends nothing either.
                 let t = self.tabs[self.active].focused_term_mut();
-                t.clear_all();
-                t.send(b"\x0c");
+                if t.clear_all() {
+                    t.send(b"\x0c");
+                }
             }
             if let Some(dir) = kb_scroll_pages {
                 let t = self.tabs[self.active].focused_term();

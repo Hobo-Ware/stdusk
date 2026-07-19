@@ -433,12 +433,18 @@ impl PtyTerm {
     /// Full wipe (Cmd+K / "Clear Terminal"): blank the viewport AND drop the history. The
     /// blank comes first on purpose - the caller follows with Ctrl-L, whose `ESC[2J` handler
     /// (alacritty `clear_viewport`) scrolls any still-occupied viewport lines INTO history,
-    /// which would undo the wipe.
-    pub(crate) fn clear_all(&self) {
+    /// which would undo the wipe. Refused (`false`) on the alt screen: `grid_mut()` is the
+    /// ALT grid there - wiping vim's display and mailing it a `^L` (a literal insert in
+    /// insert mode) helps nobody. The caller sends Ctrl-L only when this returns `true`.
+    pub(crate) fn clear_all(&self) -> bool {
         let mut t = self.term.lock();
+        if t.mode().contains(TermMode::ALT_SCREEN) {
+            return false;
+        }
         let g = t.grid_mut();
         g.reset_region(..);
         g.clear_history();
+        true
     }
 
     /// Jump the viewport to an absolute history offset (0 = bottom/live).
@@ -801,7 +807,7 @@ mod tests {
         let term = e2e_term("seq 1 200; sleep 5");
         poll_term(&term, |t| (t.scroll_state().1 >= 195).then_some(()))
             .expect("history never filled");
-        term.clear_all();
+        assert!(term.clear_all(), "primary-screen wipe must be accepted");
         assert_eq!(term.scroll_state(), (0, 0));
         let snap = term.grid_snapshot();
         assert!(
@@ -822,6 +828,23 @@ mod tests {
         assert!(
             snap.cells.iter().any(|c| c.c != ' ' && c.c != '\0'),
             "viewport content must survive a scrollback-only wipe"
+        );
+    }
+
+    #[test]
+    fn real_pty_clear_all_is_refused_on_the_alt_screen() {
+        // `ESC[?1049h` enters the alt screen (vim/less territory): the wipe must refuse -
+        // the app owns that grid, and the follow-up Ctrl-L would land in its input.
+        let term = e2e_term("printf '\\033[?1049hEDITOR'; sleep 5");
+        poll_term(&term, |t| {
+            (t.is_alt_screen() && t.grid_snapshot().cells.iter().any(|c| c.c == 'E')).then_some(())
+        })
+        .expect("alt screen never entered");
+        assert!(!term.clear_all(), "alt-screen wipe must be refused");
+        let snap = term.grid_snapshot();
+        assert!(
+            snap.cells.iter().any(|c| c.c == 'E'),
+            "alt-screen content must be untouched by a refused wipe"
         );
     }
 
