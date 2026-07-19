@@ -453,6 +453,11 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
 - **Headless egui end-to-end tests** (`Context::run_ui` driving real frames) are the sanctioned
   harness for interaction/hit-test/focus regressions - see the tab click/drag/close-x + find-bar
   backspace tests in `src/ui.rs` and the pattern in `.agents/rules/testing.md`.
+- **font-kit on macOS lies about faces**: `select_best_match("Menlo", regular)` returns Menlo
+  *Italic*, and `Font::properties()` reports `Italic, w400` for EVERY Menlo face. Only
+  `full_name()` (and the handle's bytes + `.ttc` face index) are trustworthy - pick faces by
+  name (`face_name_score`), and carry `font_index` into `egui::FontData.index`. Its `matching`
+  module is private, so the scoring is ours.
 
 ## Decisions log
 - Splits (M8) + scrollback search (M7) are v1 must-haves (user).
@@ -521,6 +526,35 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   guard (Save/Discard/Keep editing); close-busy-tab confirm (`procwatch::busy_child`, opt-out
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
+
+## 0.3.1 - "Your font": custom font family + line padding (V1 P0-2)
+- **`appearance.font`** (default "" = bundled default): a font FAMILY name ("Menlo",
+  "JetBrainsMono Nerd Font") resolved to file bytes via **font-kit** (core-text source) and
+  inserted as the TOP font of the **Monospace family only** - chrome text stays bundled, and
+  every fallback (NotoEmoji + Arial Unicode + Apple Symbols) stays behind it so emoji/symbols/
+  Nerd-Font-missing glyphs keep rendering. `appearance.line_padding` (0-8 px, default 0) pads
+  the grid cell height via pure `ui::padded_cell_height` (workspace.rs metrics; pty rows follow).
+- **Font resolution is hand-rolled per face** (`main.rs resolve_font` + `face_name_score`):
+  font-kit's `select_best_match` returned Menlo *Italic* for "Menlo" on macOS, and core-text
+  `Font::properties()` is broken too (every Menlo face reports `Italic, w400`) - so we
+  `select_family_by_name` and pick the face whose `full_name()` scores closest to upright
+  regular (keyword penalties: italic/oblique >> bold/black/thin > medium). The resolved
+  `Handle` carries a `.ttc` face index -> `egui::FontData.index`. Regression-tested against
+  the real system: "Menlo" -> "Menlo Regular", "NoSuchFontXyz" -> None (#[cfg(macos)] tests).
+- **Startup + live-apply share `build_fonts(Option<ResolvedFont>)`**: `Stdusk::reapply_font`
+  rebuilds + `ctx.set_fonts` when `appearance.font` differs from `applied_font` (commit on
+  field blur / dropdown pick / Save / Revert / Discard / sync pull). Unresolvable name = "Font
+  not found: <name>" toast, current fonts kept, never a crash (same path at startup).
+- **Settings > Appearance > Text**: Font text field (applies on lost focus), "Installed fonts"
+  searchable dropdown (font-kit `all_families()`, sorted; leading "Default (bundled)" reset
+  row), Line padding slider. The scheme + font dropdowns now share one `searchable_dropdown`
+  scaffold + `dropdown_row` painter (settings.rs); `filter_names` is the case-insensitive
+  name filter (tested).
+- **Bold faces deferred**: egui has ONE face per family - a real Bold face would need a second
+  family + per-cell font switching in render_grid. `bold_bright` color treatment stands.
+- Pixel-proof: `--screenshot` under a temp HOME with `font="Menlo"` differs from the default
+  capture by 6748 px (prompt glyphs only, verified upright); `line_padding=6` differs by 192 px
+  (taller cursor cell). 156 tests green; both screenshot harnesses exit 0.
 
 ## 0.3.0 - "No dead ends": shell-exit behavior + OSC 0/2 dynamic titles (V1 P0-1 + P0-3)
 - **Shell exit is observed, not ignored** (the dead-frozen-tab bug): the pty child handle now

@@ -102,7 +102,10 @@ impl Stdusk {
                 let area = ui.max_rect();
                 let font = egui::FontId::monospace(self.cfg.appearance.font_size * self.zoom);
                 let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
-                let (cw, ch) = (m.size().x, m.size().y);
+                let (cw, ch) = (
+                    m.size().x,
+                    ui::padded_cell_height(m.size().y, self.cfg.appearance.line_padding),
+                );
                 let cursor = ui::cursor_style(&self.cfg.terminal.cursor);
                 // Links are "active" (underline on hover, open on click) when enabled and the
                 // configured modifier is held - default modifier "none" means plain hover, Tabby-style.

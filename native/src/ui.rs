@@ -247,6 +247,12 @@ pub(crate) fn blink_on(time: f64) -> bool {
     time.rem_euclid(1.06) < 0.53
 }
 
+/// Grid cell height: the measured glyph height plus the user's `appearance.line_padding`,
+/// clamped to the settings slider's 0-8px range (a hand-edited config can hold anything).
+pub(crate) fn padded_cell_height(glyph_h: f32, line_padding: f32) -> f32 {
+    glyph_h + line_padding.clamp(0.0, 8.0)
+}
+
 /// Normalize pasted text the way Tabby does (`baseTerminalTab.paste()`): CRLF/LF -> CR (shells
 /// expect CR), then optionally collapse newline runs to single spaces. Returns the normalized
 /// text; multiline-ness afterwards is simply `contains('\r')`.
@@ -1495,6 +1501,14 @@ mod tests {
         assert!((toast_alpha(0.175, 0.35) - 0.5).abs() < 1e-6);
         assert_eq!(toast_alpha(0.0, 0.35), 0.0);
         assert_eq!(toast_alpha(-1.0, 0.35), 0.0); // clamped
+    }
+
+    #[test]
+    fn padded_cell_height_adds_clamped_padding() {
+        assert_eq!(padded_cell_height(16.0, 0.0), 16.0);
+        assert_eq!(padded_cell_height(16.0, 3.0), 19.0);
+        assert_eq!(padded_cell_height(16.0, 99.0), 24.0); // clamped to 8
+        assert_eq!(padded_cell_height(16.0, -2.0), 16.0); // never shrinks the cell
     }
 
     #[test]

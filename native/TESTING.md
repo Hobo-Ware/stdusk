@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 0.3.0.
+Step-by-step verification for everything shipped through 0.3.1.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -143,3 +143,14 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | `printf '\033]0;\007'` after that | Empty title resets -> title falls back to the cwd basename |
 | `cd /somewhere` while a title is set | Title stays the OSC one (OSC beats cwd) |
 | Settings > Terminal > "Dynamic tab title" off | OSC titles ignored live (no respawn); cwd basename titles return |
+
+## 14. 0.3.1 - custom font + line padding
+| Step | Expect |
+|---|---|
+| Settings > Appearance > Text: type "Menlo" in Font, click elsewhere | Grid re-renders in Menlo Regular (upright, never Italic) the moment the field loses focus; no restart |
+| "Installed fonts" dropdown | Searchable list of every installed family; typing filters; picking applies instantly; "Default (bundled)" (unfiltered top row) resets to the bundled font |
+| With a Nerd Font installed (e.g. "JetBrainsMono Nerd Font") + a powerline/starship prompt | PUA glyphs (\|arrows) render - no tofu; emoji + box-drawing still render (fallbacks kept behind the custom font) |
+| Type a bogus name ("NoSuchFontXyz"), blur the field | "Font not found: NoSuchFontXyz" toast; current font kept; no crash (same on launch with a bad config value) |
+| Line padding slider 0 -> 6 px | Lines space out live (cell height grows); pty rows shrink to fit; Save persists `line_padding` |
+| Save / Revert / Discard after font edits | Each re-applies the font (Revert/Discard restore the previous one) |
+| `[appearance] font = "Menlo"` in config, restart | Launches in Menlo; the settings field shows it |

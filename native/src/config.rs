@@ -74,7 +74,9 @@ impl Default for Session {
 pub(crate) struct Appearance {
     pub(crate) theme: String, // used when follow_system = false
     pub(crate) opacity: f32,
+    pub(crate) font: String, // terminal font family (e.g. "JetBrainsMono Nerd Font"); "" = bundled default
     pub(crate) font_size: f32,
+    pub(crate) line_padding: f32, // extra px added to each cell's height (0-8)
     pub(crate) follow_system: bool, // pick theme_light/theme_dark by the OS appearance
     pub(crate) theme_light: String,
     pub(crate) theme_dark: String,
@@ -137,7 +139,9 @@ impl Default for Appearance {
         Self {
             theme: "one-half-dark".into(),
             opacity: 0.85,
+            font: String::new(),
             font_size: 13.0,
+            line_padding: 0.0,
             follow_system: true,
             theme_light: "one-half-light".into(),
             theme_dark: "one-half-dark".into(),
@@ -286,6 +290,8 @@ mod tests {
         assert_eq!(c.appearance.theme, "one-half-dark");
         assert_eq!(c.appearance.opacity, 0.85);
         assert_eq!(c.appearance.tab_width, "fixed");
+        assert!(c.appearance.font.is_empty()); // "" = bundled default
+        assert_eq!(c.appearance.line_padding, 0.0);
         assert_eq!(c.quake.hotkey, "Ctrl+Grave");
         assert!(c.quake.hide_on_focus_loss);
         assert_eq!(c.quake.unfocused_opacity, 1.0); // off by default
@@ -386,6 +392,8 @@ name = "ops"
         let mut cfg = Config::default();
         cfg.appearance.theme = "dracula".into();
         cfg.appearance.opacity = 0.7;
+        cfg.appearance.font = "JetBrainsMono Nerd Font".into();
+        cfg.appearance.line_padding = 2.0;
         cfg.terminal.ligatures = true;
         cfg.quake.height_pct = 0.6;
         cfg.profiles.push(Profile {
@@ -399,6 +407,8 @@ name = "ops"
         let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
         assert_eq!(back.appearance.theme, "dracula");
         assert_eq!(back.appearance.opacity, 0.7);
+        assert_eq!(back.appearance.font, "JetBrainsMono Nerd Font");
+        assert_eq!(back.appearance.line_padding, 2.0);
         assert!(back.terminal.ligatures);
         assert_eq!(back.quake.height_pct, 0.6);
         assert_eq!(back.profiles.len(), 1);

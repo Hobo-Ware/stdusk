@@ -172,6 +172,17 @@ pub(crate) fn filter_schemes(all: &[(String, Theme)], query: &str) -> Vec<usize>
         .collect()
 }
 
+/// Indices of names containing `query` (case-insensitive); all when empty. Unlike scheme
+/// names, font family names are mixed-case, so both sides are lowercased.
+pub(crate) fn filter_names(all: &[String], query: &str) -> Vec<usize> {
+    let q = query.trim().to_ascii_lowercase();
+    all.iter()
+        .enumerate()
+        .filter(|(_, name)| q.is_empty() || name.to_ascii_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Which config field a picked scheme lands in. With follow-system on, the pick applies to
 /// the theme slot of the CURRENT OS appearance (the fixed `theme` is ignored in that mode).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -491,18 +502,19 @@ fn scheme_row(ui: &mut egui::Ui, name: &str, t: &Theme, active: bool) -> egui::R
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-// ---- searchable scheme dropdown (used by all three theme slots) ----
+// ---- searchable dropdowns (theme slots + font family) ----
 
-/// A searchable scheme picker: a combo-style button showing the current value; clicking opens
-/// an overlay with a filter field + the full (virtualized) scheme list. Hovering a row hands
-/// the scheme to `st.hover_preview` so the section's preview card follows it. Returns true
-/// when a scheme was picked into `value`. Only one dropdown is open at a time
-/// (`st.dropdown_open`).
-fn scheme_dropdown(
+/// Combo-style button + searchable-overlay scaffold shared by the scheme and font dropdowns:
+/// paints the closed button (current `label` + caret), owns the open/filter/focus-once state
+/// (`st.dropdown_*`, one open at a time), and dismisses on pick, Esc, or an outside press.
+/// `list` draws the filtered rows inside the popup and returns true when an item was picked.
+fn searchable_dropdown(
     ui: &mut egui::Ui,
     st: &mut SettingsState,
     id_salt: &str,
-    value: &mut String,
+    label: &str,
+    hint: &str,
+    list: impl FnOnce(&mut egui::Ui, &mut SettingsState) -> bool,
 ) -> bool {
     let id = ui.make_persistent_id(id_salt);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(200.0, 28.0), egui::Sense::click());
@@ -515,7 +527,7 @@ fn scheme_dropdown(
     p.text(
         egui::pos2(rect.left() + 10.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        value.as_str(),
+        label,
         egui::FontId::proportional(13.0),
         colors::fg(),
     );
@@ -536,69 +548,19 @@ fn scheme_dropdown(
     }
 
     let mut picked = false;
-    let all = themes::all_schemes();
     let area = egui::Area::new(id.with("popup"))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.left_bottom() + egui::vec2(0.0, 4.0))
         .show(ui.ctx(), |ui| {
             ui::overlay_frame().show(ui, |ui| {
                 ui.set_width(280.0);
-                let r = ui::text_field(
-                    ui,
-                    &mut st.dropdown_filter,
-                    &format!("Search {} schemes", all.len()),
-                    264.0,
-                    colors::fg(),
-                );
+                let r = ui::text_field(ui, &mut st.dropdown_filter, hint, 264.0, colors::fg());
                 if st.dropdown_focus {
                     r.request_focus();
                     st.dropdown_focus = false;
                 }
                 ui.add_space(6.0);
-                let shown = filter_schemes(all, &st.dropdown_filter);
-                if shown.is_empty() {
-                    ui.label(egui::RichText::new("No schemes match.").color(colors::dim()));
-                    return;
-                }
-                egui::ScrollArea::vertical().max_height(230.0).show_rows(
-                    ui,
-                    24.0,
-                    shown.len(),
-                    |ui, range| {
-                        for i in range {
-                            let (name, theme) = &all[shown[i]];
-                            let name = name.as_str();
-                            let active = name == normalize_name(value);
-                            let (rect, resp) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), 24.0),
-                                egui::Sense::click(),
-                            );
-                            let p = ui.painter();
-                            if active {
-                                p.rect_filled(rect, 6.0, colors::selection());
-                            } else if resp.hovered() {
-                                p.rect_filled(rect, 6.0, colors::hover());
-                            }
-                            p.text(
-                                egui::pos2(rect.left() + 8.0, rect.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                name,
-                                egui::FontId::proportional(13.0),
-                                if active { colors::accent() } else { colors::fg() },
-                            );
-                            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                            if resp.hovered() {
-                                // Live-preview the hovered scheme in the section's preview
-                                // card (same hover handoff as the scheme browser rows).
-                                st.hover_preview = Some(*theme);
-                            }
-                            if resp.clicked() {
-                                name.clone_into(value);
-                                picked = true;
-                            }
-                        }
-                    },
-                );
+                picked = list(ui, st);
             });
         });
     // Close on pick, Esc, or a press outside both the popup and its button.
@@ -615,13 +577,128 @@ fn scheme_dropdown(
     picked
 }
 
+/// One row of a searchable-dropdown popup: selection fill + accent text when active, hover
+/// fill otherwise.
+fn dropdown_row(ui: &mut egui::Ui, text: &str, active: bool) -> egui::Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+    let p = ui.painter();
+    if active {
+        p.rect_filled(rect, 6.0, colors::selection());
+    } else if resp.hovered() {
+        p.rect_filled(rect, 6.0, colors::hover());
+    }
+    p.text(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(13.0),
+        if active { colors::accent() } else { colors::fg() },
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A searchable scheme picker (all three theme slots). Hovering a row hands the scheme to
+/// `st.hover_preview` so the section's preview card follows it. Returns true when a scheme
+/// was picked into `value`.
+fn scheme_dropdown(
+    ui: &mut egui::Ui,
+    st: &mut SettingsState,
+    id_salt: &str,
+    value: &mut String,
+) -> bool {
+    let all = themes::all_schemes();
+    let label = value.clone();
+    let hint = format!("Search {} schemes", all.len());
+    searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st| {
+        let shown = filter_schemes(all, &st.dropdown_filter);
+        if shown.is_empty() {
+            ui.label(egui::RichText::new("No schemes match.").color(colors::dim()));
+            return false;
+        }
+        let mut picked = false;
+        egui::ScrollArea::vertical().max_height(230.0).show_rows(
+            ui,
+            24.0,
+            shown.len(),
+            |ui, range| {
+                for i in range {
+                    let (name, theme) = &all[shown[i]];
+                    let name = name.as_str();
+                    let resp = dropdown_row(ui, name, name == normalize_name(value));
+                    if resp.hovered() {
+                        // Live-preview the hovered scheme in the section's preview card
+                        // (same hover handoff as the scheme browser rows).
+                        st.hover_preview = Some(*theme);
+                    }
+                    if resp.clicked() {
+                        name.clone_into(value);
+                        picked = true;
+                    }
+                }
+            },
+        );
+        picked
+    })
+}
+
+/// A searchable picker over the installed font families, with a leading "Default (bundled)"
+/// reset row while unfiltered. Returns true when a family was picked into `value` ("" =
+/// bundled default).
+fn font_dropdown(
+    ui: &mut egui::Ui,
+    st: &mut SettingsState,
+    id_salt: &str,
+    value: &mut String,
+) -> bool {
+    const DEFAULT_LABEL: &str = "Default (bundled)";
+    let all = crate::installed_families();
+    let label = if value.is_empty() { DEFAULT_LABEL.to_owned() } else { value.clone() };
+    let hint = format!("Search {} font families", all.len());
+    searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st| {
+        let shown = filter_names(all, &st.dropdown_filter);
+        let with_default = st.dropdown_filter.trim().is_empty();
+        if shown.is_empty() && !with_default {
+            ui.label(egui::RichText::new("No fonts match.").color(colors::dim()));
+            return false;
+        }
+        let mut picked = false;
+        let total = shown.len() + usize::from(with_default);
+        egui::ScrollArea::vertical().max_height(230.0).show_rows(ui, 24.0, total, |ui, range| {
+            for i in range {
+                let name = if with_default && i == 0 {
+                    ""
+                } else {
+                    all[shown[i - usize::from(with_default)]].as_str()
+                };
+                let text = if name.is_empty() { DEFAULT_LABEL } else { name };
+                if dropdown_row(ui, text, name == value).clicked() {
+                    name.clone_into(value);
+                    picked = true;
+                }
+            }
+        });
+        picked
+    })
+}
+
 // ---- plain sections (pure config edits) ----
+
+/// Side effects the Appearance section needs applied by the caller (which has `&mut Stdusk`).
+struct AppearanceFx {
+    font_commit: bool, // the font field committed / a family was picked - re-apply fonts live
+}
 
 /// Appearance aggregates EVERYTHING that changes how the terminal looks (theme, opacity,
 /// font, cursor, ligatures) so the single live preview card at the top reflects each control
 /// below it. The card also follows a scheme row hovered in an open theme dropdown.
-fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut SettingsState) {
+fn appearance_section(
+    ui: &mut egui::Ui,
+    cfg: &mut config::Config,
+    st: &mut SettingsState,
+) -> AppearanceFx {
     title(ui, "Appearance");
+    let mut fx = AppearanceFx { font_commit: false };
 
     // One live preview for the whole section: resolved theme + font size + cursor + ligatures,
     // overridden by the dropdown row hovered last frame (same handoff as the scheme browser).
@@ -682,8 +759,34 @@ fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Sett
     subheading(ui, "Text");
     let t = &mut cfg.terminal;
     rows(ui, |ui| {
+        row_full(
+            ui,
+            "Font",
+            "Terminal font family - Nerd Fonts supported",
+            "Empty uses the bundled default; applies when the field loses focus",
+            |ui| {
+                let r = ui::text_field(
+                    ui,
+                    &mut a.font,
+                    "e.g. JetBrainsMono Nerd Font",
+                    200.0,
+                    colors::fg(),
+                );
+                if r.lost_focus() {
+                    fx.font_commit = true;
+                }
+            },
+        );
+        row(ui, "Installed fonts", "Browse the system's font families", |ui| {
+            if font_dropdown(ui, st, "font_family", &mut a.font) {
+                fx.font_commit = true;
+            }
+        });
         row(ui, "Font size", "", |ui| {
             ui::slider(ui, &mut a.font_size, 9.0..=24.0, |v| format!("{v:.0} pt"));
+        });
+        row(ui, "Line padding", "Extra pixels added to each line's height", |ui| {
+            ui::slider(ui, &mut a.line_padding, 0.0..=8.0, |v| format!("{v:.0} px"));
         });
         row(ui, "Ligatures", "Draw common code sequences as single glyphs", |ui| {
             ui::toggle_switch(ui, &mut t.ligatures);
@@ -718,6 +821,7 @@ fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Sett
             ui::toggle_switch(ui, &mut t.cursor_blink);
         });
     });
+    fx
 }
 
 /// Tiny live before/after for the Ligatures row: the raw sequences while off, the single
@@ -1080,6 +1184,7 @@ impl Stdusk {
         {
             self.settings.baseline = Some(self.cfg.clone());
             self.reregister_hotkey();
+            self.reapply_font(ctx);
             let now = ctx.input(|i| i.time);
             self.toast = Some(("Saved".into(), now + 1.4));
         }
@@ -1115,6 +1220,7 @@ impl Stdusk {
                 self.settings.baseline = Some(self.cfg.clone());
                 self.reapply_appearance(ctx);
                 self.reregister_hotkey();
+                self.reapply_font(ctx);
                 let now = ctx.input(|i| i.time);
                 self.toast = Some(("Reverted".into(), now + 1.4));
             }
@@ -1136,6 +1242,7 @@ impl Stdusk {
         // dropdown - its own Esc closes the popup, not the view.
         let field_focused = ctx.memory(|m| m.focused().is_some());
         let dropdown_was_open = self.settings.dropdown_open.is_some();
+        let mut appearance_fx: Option<AppearanceFx> = None;
         let mut quake_fx: Option<QuakeFx> = None;
         let mut sync_op: Option<sync::Op> = None;
 
@@ -1233,11 +1340,11 @@ impl Stdusk {
                                     ui.set_max_width(col_w);
                                     match section {
                                         Section::Appearance => {
-                                            appearance_section(
+                                            appearance_fx = Some(appearance_section(
                                                 ui,
                                                 &mut self.cfg,
                                                 &mut self.settings,
-                                            );
+                                            ));
                                         }
                                         Section::Terminal => terminal_section(ui, &mut self.cfg),
                                         Section::Quake => {
@@ -1257,6 +1364,12 @@ impl Stdusk {
                     }
                 }
             });
+
+        // Appearance-section side effects: a committed font family rebuilds the egui fonts
+        // (no-op when unchanged; "Font not found" toast when unresolvable).
+        if appearance_fx.is_some_and(|fx| fx.font_commit) {
+            self.reapply_font(ctx);
+        }
 
         // Quake-section side effects that need &mut self / the viewport.
         if let Some(fx) = quake_fx {
@@ -1347,6 +1460,7 @@ impl Stdusk {
             }
             self.reapply_appearance(ctx);
             self.reregister_hotkey();
+            self.reapply_font(ctx);
             self.settings.confirm_close = false;
             self.settings_open = false;
         } else if keep {
@@ -1392,6 +1506,19 @@ mod tests {
         assert_eq!(filter_schemes(&all, "  nor "), vec![1]); // trimmed
         assert_eq!(filter_schemes(&all, "o"), vec![1, 2]);
         assert!(filter_schemes(&all, "zzz").is_empty());
+    }
+
+    #[test]
+    fn name_filter_lowercases_both_sides() {
+        let all: Vec<String> = ["Menlo", "JetBrainsMono Nerd Font", "Monaco"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(filter_names(&all, ""), vec![0, 1, 2]);
+        assert_eq!(filter_names(&all, "MENLO"), vec![0]); // query lowercased
+        assert_eq!(filter_names(&all, "nerd"), vec![1]); // name lowercased
+        assert_eq!(filter_names(&all, " mon "), vec![1, 2]); // trimmed substring
+        assert!(filter_names(&all, "zzz").is_empty());
     }
 
     #[test]
@@ -1448,7 +1575,7 @@ mod tests {
         let mut st = SettingsState::new();
         for _ in 0..2 {
             run_frame(&ctx, vec![], |ui| {
-                appearance_section(ui, &mut cfg, &mut st);
+                let _fx = appearance_section(ui, &mut cfg, &mut st);
                 let _fx = quake_section(ui, &mut cfg);
                 terminal_section(ui, &mut cfg);
             });

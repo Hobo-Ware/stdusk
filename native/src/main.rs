@@ -38,6 +38,131 @@ use ui::{apply_theme, auto_title, draw_toast, tint, toast_alpha};
 const COLS: usize = 80;
 const ROWS: usize = 24;
 
+/// A user font resolved to raw file bytes + the face index inside the file (.ttc collections
+/// like Menlo need the index; plain .ttf/.otf use 0).
+struct ResolvedFont {
+    bytes: Vec<u8>,
+    index: u32,
+}
+
+/// Distance of a face from "plain regular", judged by its NAME - lowest wins. Slant keywords
+/// dominate (an italic must never beat any upright face), then weight, then width.
+/// Names, not `Font::properties()`: font-kit's core-text loader reports broken properties
+/// (every Menlo face comes back `Italic, w400`) while `full_name()` is accurate.
+fn face_name_score(name: &str) -> u32 {
+    let n = name.to_ascii_lowercase();
+    [
+        ("italic", 100),
+        ("oblique", 100),
+        ("bold", 10),
+        ("black", 8),
+        ("heavy", 8),
+        ("thin", 8),
+        ("light", 8),
+        ("medium", 4),
+        ("condensed", 2),
+    ]
+    .iter()
+    .filter(|(kw, _)| n.contains(kw))
+    .map(|(_, pts)| pts)
+    .sum()
+}
+
+/// Resolve a font FAMILY name (e.g. "Menlo", "JetBrainsMono Nerd Font") to its font file via
+/// the system font source (core-text on macOS). None for an empty or unknown family.
+/// NOTE: font-kit's `select_best_match` is NOT face-accurate on macOS (it returned Menlo
+/// *Italic* for "Menlo"), so select the family and pick the closest-to-regular face ourselves.
+fn resolve_font(family: &str) -> Option<ResolvedFont> {
+    use font_kit::source::SystemSource;
+    let name = family.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let fam = SystemSource::new().select_family_by_name(name).ok()?;
+    let best = fam
+        .fonts()
+        .iter()
+        .filter_map(|h| h.load().ok().map(|f| (h, face_name_score(&f.full_name()))))
+        .min_by_key(|&(_, score)| score)
+        .map(|(h, _)| h)?;
+    match best.clone() {
+        font_kit::handle::Handle::Path { path, font_index } => {
+            Some(ResolvedFont { bytes: std::fs::read(path).ok()?, index: font_index })
+        }
+        font_kit::handle::Handle::Memory { bytes, font_index } => {
+            Some(ResolvedFont { bytes: (*bytes).clone(), index: font_index })
+        }
+    }
+}
+
+/// Installed font family names, sorted; cached (the font list doesn't change mid-run).
+fn installed_families() -> &'static [String] {
+    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    FAMILIES.get_or_init(|| {
+        let mut names = font_kit::source::SystemSource::new().all_families().unwrap_or_default();
+        names.sort();
+        names.dedup();
+        names
+    })
+}
+
+/// The full font set: egui defaults + Phosphor icons + the user's terminal font (when resolved)
+/// at the TOP of the Monospace family + emoji/symbol fallbacks appended to both families.
+/// Shared by startup and the settings live-apply so the two paths can't drift.
+/// NOTE: one face per family in egui - real bold faces are a future item; bold cells keep the
+/// bright-ANSI color treatment (`terminal.bold_bright`).
+fn build_fonts(custom: Option<ResolvedFont>) -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    // Phosphor icon font (tab-bar controls + close x) as a fallback in the proportional
+    // family, so icon codepoints render in buttons/labels.
+    fonts.font_data.insert(
+        "phosphor".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/Phosphor.ttf")).into(),
+    );
+    if let Some(keys) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        keys.insert(1, "phosphor".to_owned());
+    }
+    // The user's terminal font goes FIRST in Monospace only (chrome text stays the bundled
+    // proportional); every fallback below stays behind it so emoji/symbols keep rendering.
+    if let Some(f) = custom {
+        let mut data = egui::FontData::from_owned(f.bytes);
+        data.index = f.index;
+        fonts.font_data.insert("user-font".to_owned(), data.into());
+        if let Some(keys) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            keys.insert(0, "user-font".to_owned());
+        }
+    }
+    // Full monochrome Noto Emoji (vendored) - egui's bundled emoji font is a subset that
+    // misses most SMP emoji (😀 💰 ...), so append this to both families to fill the gap.
+    // Monochrome (glyf outlines) so egui can rasterize it; color emoji still won't render.
+    fonts.font_data.insert(
+        "noto-emoji".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf")).into(),
+    );
+    for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        if let Some(keys) = fonts.families.get_mut(&fam) {
+            keys.push("noto-emoji".to_owned());
+        }
+    }
+    // Broad monochrome fallbacks (macOS) for arrows / box-drawing / powerline / misc symbols
+    // the bundled fonts miss - appended as lowest priority so the primary fonts win. Loaded
+    // best-effort; absent files (other OSes) are simply skipped.
+    for (name, path) in [
+        ("sys-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        ("sys-symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(bytes).into());
+            for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                if let Some(keys) = fonts.families.get_mut(&fam) {
+                    keys.push(name.to_owned());
+                }
+            }
+        }
+    }
+    fonts
+}
+
 #[allow(clippy::struct_excessive_bools)] // independent app-state flags, not a mode
 struct Stdusk {
     tabs: Vec<Tab>,
@@ -45,6 +170,7 @@ struct Stdusk {
     cfg: Config,
     hotkey_mgr: GlobalHotKeyManager, // kept alive so the registration persists
     registered_hotkey: String, // the hotkey string currently registered (live re-registration)
+    applied_font: String,      // the appearance.font last applied/attempted (live font re-apply)
     toggle: Arc<AtomicBool>,   // set by the hotkey thread, consumed in ui()
     visible: bool,
     dock_shown: bool, // last-applied Dock-icon state (dynamic dock_when_visible mode)
@@ -82,46 +208,11 @@ impl Stdusk {
         screenshot: Option<String>,
         settings_shot: bool,
     ) -> Self {
-        // Load the Phosphor icon font (used for tab-bar controls + close x) as a fallback
-        // in the proportional family, so icon codepoints render in buttons/labels.
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            "phosphor".to_owned(),
-            egui::FontData::from_static(include_bytes!("../assets/Phosphor.ttf")).into(),
-        );
-        if let Some(keys) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            keys.insert(1, "phosphor".to_owned());
-        }
-        // Full monochrome Noto Emoji (vendored) - egui's bundled emoji font is a subset that
-        // misses most SMP emoji (😀 💰 ...), so append this to both families to fill the gap.
-        // Monochrome (glyf outlines) so egui can rasterize it; color emoji still won't render.
-        fonts.font_data.insert(
-            "noto-emoji".to_owned(),
-            egui::FontData::from_static(include_bytes!("../assets/NotoEmoji-Regular.ttf")).into(),
-        );
-        for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            if let Some(keys) = fonts.families.get_mut(&fam) {
-                keys.push("noto-emoji".to_owned());
-            }
-        }
-        // Broad monochrome fallbacks (macOS) for arrows / box-drawing / powerline / misc symbols
-        // the bundled fonts miss - appended as lowest priority so the primary fonts win. Loaded
-        // best-effort; absent files (other OSes) are simply skipped. NOTE: SMP color emoji
-        // (😀 💰) still can't render - egui rasterizes monochrome glyph outlines only.
-        for (name, path) in [
-            ("sys-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-            ("sys-symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
-        ] {
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(bytes).into());
-                for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                    if let Some(keys) = fonts.families.get_mut(&fam) {
-                        keys.push(name.to_owned());
-                    }
-                }
-            }
-        }
-        cc.egui_ctx.set_fonts(fonts);
+        // Fonts: the shared builder (Phosphor icons + `appearance.font` at the top of Monospace
+        // + emoji/symbol fallbacks). An unresolvable family keeps the bundled default + toasts.
+        let custom = resolve_font(&cfg.appearance.font);
+        let font_missing = !cfg.appearance.font.trim().is_empty() && custom.is_none();
+        cc.egui_ctx.set_fonts(build_fonts(custom));
 
         apply_theme(&cc.egui_ctx);
 
@@ -213,6 +304,8 @@ impl Stdusk {
         }
 
         let registered_hotkey = cfg.quake.hotkey.clone();
+        let applied_font = cfg.appearance.font.clone();
+        let toast = font_missing.then(|| (format!("Font not found: {}", cfg.appearance.font), 3.0));
         let fx_opacity = cfg.appearance.opacity;
         // Initial Dock presence must mirror the launch activation policy (see main()).
         let dock_shown = !cfg.quake.hide_from_dock || cfg.quake.dock_when_visible;
@@ -222,6 +315,7 @@ impl Stdusk {
             cfg,
             hotkey_mgr: mgr,
             registered_hotkey,
+            applied_font,
             toggle,
             visible: true,
             dock_shown,
@@ -238,7 +332,7 @@ impl Stdusk {
             window_top: None,
             fx_opacity,
             color_preview: None,
-            toast: None,
+            toast,
             flash: 0.0,
             zoom: 1.0,
             theme_name,
@@ -277,6 +371,25 @@ impl Stdusk {
         let (mods, code) = config::parse_hotkey(&self.cfg.quake.hotkey);
         let _ = self.hotkey_mgr.register(HotKey::new(mods, code));
         self.registered_hotkey = self.cfg.quake.hotkey.clone();
+        true
+    }
+
+    /// Rebuild + apply the egui font set when `appearance.font` changed (settings live-apply:
+    /// field commit, dropdown pick, Save, Revert, Discard, sync pull). An unresolvable family
+    /// keeps the current fonts and toasts "Font not found". Returns true when fonts changed.
+    fn reapply_font(&mut self, ctx: &egui::Context) -> bool {
+        if self.cfg.appearance.font == self.applied_font {
+            return false;
+        }
+        self.applied_font.clone_from(&self.cfg.appearance.font);
+        let name = self.cfg.appearance.font.trim();
+        let custom = resolve_font(name);
+        if !name.is_empty() && custom.is_none() {
+            let now = ctx.input(|i| i.time);
+            self.toast = Some((format!("Font not found: {name}"), now + 3.0));
+            return false;
+        }
+        ctx.set_fonts(build_fonts(custom));
         true
     }
 }
@@ -444,6 +557,7 @@ impl eframe::App for Stdusk {
                     self.cfg = Config::load();
                     self.reapply_appearance(&ctx);
                     self.reregister_hotkey();
+                    self.reapply_font(&ctx);
                     if self.settings_open {
                         self.rebaseline_settings();
                     }
@@ -977,4 +1091,68 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| Ok(Box::new(Stdusk::new(cc, cfg, screenshot, settings_shot)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Font resolution hits the real system source - gate on macOS where Menlo always exists.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn resolve_font_finds_menlo_regular_face() {
+        let f = resolve_font("Menlo").expect("Menlo ships with macOS");
+        assert!(!f.bytes.is_empty());
+        // The face must be the upright Regular, not Italic/Bold (select_best_match regression:
+        // core-text matching handed back Menlo-Italic). Checked by name - core-text loads
+        // report broken `properties()` (see face_name_score).
+        let font = font_kit::font::Font::from_bytes(std::sync::Arc::new(f.bytes), f.index)
+            .expect("resolved bytes load");
+        assert_eq!(font.full_name(), "Menlo Regular");
+    }
+
+    #[test]
+    fn face_name_score_prefers_upright_regular() {
+        assert!(face_name_score("Menlo Regular") < face_name_score("Menlo Bold"));
+        assert!(face_name_score("Menlo Bold") < face_name_score("Menlo Italic"));
+        assert!(face_name_score("Menlo Italic") < face_name_score("Menlo Bold Italic"));
+        assert_eq!(face_name_score("JetBrainsMono Nerd Font"), 0);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn resolve_font_rejects_unknown_and_empty() {
+        assert!(resolve_font("NoSuchFontXyz").is_none());
+        assert!(resolve_font("").is_none());
+        assert!(resolve_font("   ").is_none());
+    }
+
+    #[test]
+    fn build_fonts_without_user_font_keeps_fallbacks() {
+        let fonts = build_fonts(None);
+        assert!(!fonts.font_data.contains_key("user-font"));
+        let mono = &fonts.families[&egui::FontFamily::Monospace];
+        assert!(mono.contains(&"noto-emoji".to_owned()));
+        let prop = &fonts.families[&egui::FontFamily::Proportional];
+        assert_eq!(prop[1], "phosphor");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn build_fonts_puts_user_font_first_in_monospace_only() {
+        let fonts = build_fonts(resolve_font("Menlo"));
+        let mono = &fonts.families[&egui::FontFamily::Monospace];
+        assert_eq!(mono[0], "user-font"); // top priority for the terminal grid
+        assert!(mono.contains(&"noto-emoji".to_owned())); // fallbacks survive behind it
+        let prop = &fonts.families[&egui::FontFamily::Proportional];
+        assert!(!prop.contains(&"user-font".to_owned())); // chrome text untouched
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn installed_families_lists_menlo_sorted() {
+        let all = installed_families();
+        assert!(all.iter().any(|n| n == "Menlo"));
+        assert!(all.windows(2).all(|w| w[0] <= w[1]));
+    }
 }
