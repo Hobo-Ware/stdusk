@@ -121,8 +121,16 @@ pub(crate) fn fg() -> Color32 {
 pub(crate) fn cursor() -> Color32 {
     theme().cursor
 }
+/// Dim chrome/UI text. NOT raw `ansi[8]`: the 0.5.0 a11y audit found 37% of the community
+/// pack has ansi[8] nearly invisible against bg (64% have some ANSI color at ratio ~1.0), so
+/// chrome text gets a 3:1 WCAG floor. Terminal CELLS stay theme-exact - that fidelity knob is
+/// `terminal.minimum_contrast`.
 pub(crate) fn dim() -> Color32 {
-    theme().ansi[8]
+    legible_dim(&theme())
+}
+/// A theme's dim text color, nudged (only when needed) to at least 3:1 against its bg.
+pub(crate) fn legible_dim(t: &Theme) -> Color32 {
+    ensure_contrast(t.ansi[8], t.bg, 3.0)
 }
 pub(crate) fn accent() -> Color32 {
     theme().ansi[4]
@@ -139,7 +147,12 @@ pub(crate) fn yellow() -> Color32 {
 /// True when the theme background is dark (drives the direction of the derived chrome shades, so
 /// the tab strip / active tab / borders read correctly on both light and dark themes).
 pub(crate) fn is_dark() -> bool {
-    let c = theme().bg;
+    theme_is_dark(&theme())
+}
+/// True when a THEME's background is dark (perceived luminance, same rule the chrome shades
+/// use). Also classifies schemes for the browser's All/Light/Dark filter.
+pub(crate) fn theme_is_dark(t: &Theme) -> bool {
+    let c = t.bg;
     0.299 * f32::from(c.r()) + 0.587 * f32::from(c.g()) + 0.114 * f32::from(c.b()) < 128.0
 }
 pub(crate) fn elevated() -> Color32 {
@@ -376,6 +389,27 @@ mod tests {
         assert_eq!(cell_fg(spec, true), Color32::from_rgb(1, 2, 3));
         // Bright colors stay bright.
         assert_eq!(cell_fg(Color::Named(NamedColor::BrightRed), true), t.ansi[9]);
+    }
+
+    #[test]
+    fn dim_text_meets_the_floor_on_every_scheme() {
+        // 0.5.0 a11y audit: 37% of the pack ships ansi[8] nearly invisible against bg (some
+        // at ratio 1.0). Chrome dim text must clear 3:1 on EVERY scheme, built-ins included.
+        for (name, t) in crate::themes::all_schemes() {
+            let ratio = contrast_ratio(legible_dim(t), t.bg);
+            assert!(ratio >= 2.99, "{name}: dim text ratio {ratio}");
+        }
+        for t in [one_half_dark(), one_half_light(), dracula(), tokyo_night()] {
+            assert!(contrast_ratio(legible_dim(&t), t.bg) >= 2.99);
+        }
+    }
+
+    #[test]
+    fn theme_darkness_classifies_builtins() {
+        assert!(theme_is_dark(&one_half_dark()));
+        assert!(theme_is_dark(&dracula()));
+        assert!(theme_is_dark(&tokyo_night()));
+        assert!(!theme_is_dark(&one_half_light()));
     }
 
     #[test]

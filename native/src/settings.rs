@@ -84,6 +84,7 @@ pub(crate) struct SettingsState {
     dropdown_open: Option<egui::Id>, // which searchable theme dropdown is open, if any
     dropdown_filter: String,      // the open dropdown's search query
     dropdown_focus: bool,         // focus the dropdown filter once, on open
+    scheme_bright: Option<BrightFilter>, // brightness chips; None = auto (follow the slot)
     profile_sel: Option<usize>,   // profile expanded in the Profiles editor
     profile_loaded: Option<usize>, // which profile index the edit buffers below reflect
     profile_args: String,         // args line as typed (parsed into the Vec on change)
@@ -102,6 +103,7 @@ impl SettingsState {
             dropdown_open: None,
             dropdown_filter: String::new(),
             dropdown_focus: false,
+            scheme_bright: None,
             profile_sel: None,
             profile_loaded: None,
             profile_args: String::new(),
@@ -115,6 +117,7 @@ impl SettingsState {
         self.section = section;
         self.scroll_to_active = section == Section::ColorScheme;
         self.dropdown_open = None;
+        self.scheme_bright = None; // back to the auto pre-filter on (re)entry
         self.profile_loaded = None;
     }
 
@@ -205,6 +208,33 @@ pub(crate) fn filter_names(all: &[String], query: &str) -> Vec<usize> {
         .filter(|(_, name)| q.is_empty() || name.to_ascii_lowercase().contains(&q))
         .map(|(i, _)| i)
         .collect()
+}
+
+/// Scheme-browser brightness filter (the All / Light / Dark chips).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BrightFilter {
+    All,
+    Light,
+    Dark,
+}
+
+/// The filter the scheme browser opens on: following the system, a pick lands in the CURRENT
+/// OS appearance's slot - pre-filter to schemes of that brightness. Manual mode shows all.
+pub(crate) fn default_bright_filter(follow_system: bool, system_light: bool) -> BrightFilter {
+    match scheme_slot(follow_system, system_light) {
+        SchemeSlot::Fixed => BrightFilter::All,
+        SchemeSlot::Light => BrightFilter::Light,
+        SchemeSlot::Dark => BrightFilter::Dark,
+    }
+}
+
+/// Does a scheme of the given darkness pass the brightness filter?
+pub(crate) fn bright_allows(filter: BrightFilter, dark: bool) -> bool {
+    match filter {
+        BrightFilter::All => true,
+        BrightFilter::Light => !dark,
+        BrightFilter::Dark => dark,
+    }
 }
 
 /// Which config field a picked scheme lands in. With follow-system on, the pick applies to
@@ -580,7 +610,9 @@ fn scheme_row(ui: &mut egui::Ui, name: &str, t: &Theme, active: bool) -> egui::R
         egui::Align2::LEFT_CENTER,
         name,
         egui::FontId::proportional(13.0),
-        t.fg,
+        // UI label, not preview fidelity: a handful of pack schemes ship fg-vs-bg under 3:1
+        // (a11y audit) - nudge so every row name stays readable. The swatches show the truth.
+        colors::ensure_contrast(t.fg, t.bg, 3.0),
     );
     // 16 ANSI swatches, right-aligned.
     let (sw, gap) = (11.0, 3.0);
@@ -1610,6 +1642,11 @@ impl Stdusk {
         );
         ui.add_space(12.0);
 
+        // Brightness chips: pre-filtered to the slot being set while following the system
+        // (picking there can only land in that slot anyway), all schemes in manual mode; the
+        // user can always override. Resets to the auto default on re-entry (open_section).
+        let auto = default_bright_filter(self.cfg.appearance.follow_system, system_light);
+        let mut bright = self.settings.scheme_bright.unwrap_or(auto);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(icons::MAGNIFYING_GLASS).size(15.0).color(colors::dim()));
             ui::text_field(
@@ -1619,12 +1656,26 @@ impl Stdusk {
                 260.0,
                 colors::fg(),
             );
+            ui.add_space(10.0);
+            for (label, f) in [
+                ("All", BrightFilter::All),
+                ("Light", BrightFilter::Light),
+                ("Dark", BrightFilter::Dark),
+            ] {
+                if ui::chip(ui, label, bright == f).clicked() {
+                    self.settings.scheme_bright = Some(f);
+                    bright = f; // applies this frame, not next
+                }
+            }
         });
         ui.add_space(10.0);
 
         // Uniform-height rows through show_rows so 195 palette strips scroll smoothly.
         self.settings.hover_preview = None;
-        let shown = filter_schemes(all, &self.settings.filter);
+        let shown: Vec<usize> = filter_schemes(all, &self.settings.filter)
+            .into_iter()
+            .filter(|&i| bright_allows(bright, colors::theme_is_dark(&all[i].1)))
+            .collect();
         if shown.is_empty() {
             ui.add_space(16.0);
             ui.label(egui::RichText::new("No schemes match your search.").color(colors::dim()));
@@ -2047,6 +2098,32 @@ mod tests {
         assert_eq!(filter_names(&all, "nerd"), vec![1]); // name lowercased
         assert_eq!(filter_names(&all, " mon "), vec![1, 2]); // trimmed substring
         assert!(filter_names(&all, "zzz").is_empty());
+    }
+
+    #[test]
+    fn bright_filter_defaults_to_the_slot_being_set() {
+        // Following the system, a pick can only land in the current appearance's slot -
+        // pre-filter to that brightness. Manual mode starts on All.
+        assert_eq!(default_bright_filter(true, true), BrightFilter::Light);
+        assert_eq!(default_bright_filter(true, false), BrightFilter::Dark);
+        assert_eq!(default_bright_filter(false, true), BrightFilter::All);
+        assert_eq!(default_bright_filter(false, false), BrightFilter::All);
+    }
+
+    #[test]
+    fn bright_filter_partitions_light_and_dark() {
+        // (filter, scheme is dark) -> shown?
+        let cases = [
+            (BrightFilter::All, true, true),
+            (BrightFilter::All, false, true),
+            (BrightFilter::Dark, true, true),
+            (BrightFilter::Dark, false, false),
+            (BrightFilter::Light, true, false),
+            (BrightFilter::Light, false, true),
+        ];
+        for (f, dark, want) in cases {
+            assert_eq!(bright_allows(f, dark), want, "{f:?} dark={dark}");
+        }
     }
 
     #[test]
