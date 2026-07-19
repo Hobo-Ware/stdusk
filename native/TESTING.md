@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 0.4.0.
+Step-by-step verification for everything shipped through 0.4.1.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -189,3 +189,21 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | Close a pinned tab (x / Cmd+W) with nothing running | "This tab is pinned." confirm appears; Enter closes, Esc keeps |
 | Pin a tab, quit, relaunch (`session.restore` on) | The tab comes back pinned, still first |
 | Right-click tab -> Unpin | Pin glyph gone; the tab lands at the start of the unpinned group |
+
+## 17. 0.4.1 - panes & tabs polish
+| Step | Expect |
+|---|---|
+| Split a tab (Cmd+D), press Cmd+Shift+I | "Broadcast input on" toast; EVERY pane gets an accent border and the unfocused fade drops |
+| Type `echo hi` + Enter | The command runs in BOTH panes |
+| Cmd+V a single line | Pastes into both panes; a multiline paste confirms once, then lands in both |
+| Cmd+Shift+I again | "Broadcast input off" toast; borders gone, unfocused pane dims again; typing hits only the focused pane |
+| Broadcast on, switch to another tab and back | Mode is OFF (switching tabs exits it) |
+| Cmd+Shift+P -> "Broadcast Input" | Same toggle as the hotkey |
+| Split a tab, run `brew upgrade`-style output (with %) in the UNFOCUSED pane | The tab's top progress bar tracks it even though the pane isn't focused |
+| Two panes with progress (e.g. two downloads) | The bar shows the FURTHEST one; a failing OSC 9;4 error state turns it red regardless |
+| Run `false` in a background pane, focus the other pane | The tab still shows the red left-edge fail mark |
+| Run `sleep 100`, right-click the tab | Disabled dim first row "Running: sleep"; with `claude` open it says "Running: claude"; idle shell = no row |
+| Right-click tab -> Notify on activity (check appears), switch to another tab, run output in the first (e.g. `sleep 2 && echo hi` before switching) | ONE macOS notification "<tab>: new output"; more output stays quiet |
+| View the tab, switch away again, produce output | Notification fires again (viewing re-armed it) |
+| Toggle "Notify on activity" off | Check gone; no notifications |
+| `STDUSK_SHOT_BROADCAST=1 cargo run -- --screenshot /tmp/s.png` | Renders a split active tab with the broadcast border on both panes and exits 0 |

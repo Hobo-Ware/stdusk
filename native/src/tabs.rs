@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use eframe::egui;
 
 use crate::config::{Config, Profile};
+use crate::progress::Progress;
 use crate::terminal::{self, PtyTerm};
 use crate::ui::{self, color_swatch, draw_tab, icon_button, icons, style_menu, tint};
 use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch, session};
@@ -17,6 +18,7 @@ const BAR_CONTROLS_W: f32 = 6.0 + ui::ICON_BTN_W * 2.0 + ui::ICON_TOGGLE_W + 3.0
 /// Monotonic tab identity - stable across reorders/closes (used to target deferred actions).
 static NEXT_TAB_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+#[allow(clippy::struct_excessive_bools)] // independent per-tab flags, not a mode
 pub(crate) struct Tab {
     pub(crate) id: u64,
     pub(crate) title: String,
@@ -25,8 +27,12 @@ pub(crate) struct Tab {
     pub(crate) root: Option<pane::Pane<PtyTerm>>, // Option so whole-tree transforms can `take()` it
     pub(crate) focused: Vec<pane::Side>,     // path to the focused leaf (its identity)
     pub(crate) cli: Option<procwatch::Cli>,  // a known AI CLI detected running in the tab (badge)
-    pub(crate) maximized: bool, // zoom the focused pane to fill the tab (hide the other panes)
-    pub(crate) pinned: bool,    // pinned tabs sort first, guard close, persist in session.toml
+    pub(crate) proc: Option<String>, // running child's name (~1 Hz cache; menu "Running:" row)
+    pub(crate) maximized: bool,      // zoom the focused pane to fill the tab (hide the other panes)
+    pub(crate) pinned: bool,         // pinned tabs sort first, guard close, persist in session.toml
+    pub(crate) broadcast: bool,      // route keystrokes/paste to EVERY pane (Tabby pane-focus-all)
+    pub(crate) notify_activity: bool, // menu toggle: notify on new output while unviewed
+    pub(crate) activity_notified: bool, // notify-on-activity fired; re-armed when viewed
 }
 
 impl Tab {
@@ -68,8 +74,12 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
         root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
         cli: None,
+        proc: None,
         maximized: false,
         pinned: false,
+        broadcast: false,
+        notify_activity: false,
+        activity_notified: false,
     }
 }
 
@@ -100,8 +110,12 @@ pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Pro
         root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
         cli: None,
+        proc: None,
         maximized: false,
         pinned: false,
+        broadcast: false,
+        notify_activity: false,
+        activity_notified: false,
     }
 }
 
@@ -115,6 +129,35 @@ pub(crate) fn pin_target(pins: &[bool], i: usize) -> (bool, usize) {
     (pin, target)
 }
 
+/// The tab bar's progress across ALL of a tab's panes: an error state wins outright (the red
+/// full bar must not be masked by a neighbor's percentage); otherwise the active progress with
+/// the largest fill fraction (ties keep the first, i.e. leaf order). All-idle stays `None`.
+pub(crate) fn aggregate_progress(items: &[Progress]) -> Progress {
+    if let Some(e) = items.iter().find(|p| matches!(p, Progress::Error(_))) {
+        return *e;
+    }
+    let mut best = Progress::None;
+    let mut best_frac = 0.0_f32;
+    for &p in items {
+        if let Some(f) = ui::progress_fraction(p)
+            && f > best_frac
+        {
+            (best, best_frac) = (p, f);
+        }
+    }
+    best
+}
+
+/// The tab bar's command state across ALL of a tab's panes: a Fail anywhere shows the red mark
+/// (a background pane's failure must not hide behind the focused pane); otherwise the focused
+/// pane's state stands (only Fail is drawn today, but keep the semantics honest).
+pub(crate) fn aggregate_cmd(
+    focused: terminal::CmdState,
+    all: &[terminal::CmdState],
+) -> terminal::CmdState {
+    if all.contains(&terminal::CmdState::Fail) { terminal::CmdState::Fail } else { focused }
+}
+
 /// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
 pub(crate) enum TabAction {
     New,
@@ -123,6 +166,7 @@ pub(crate) enum TabAction {
     Rename(usize),
     Restart(usize),
     TogglePin(usize),
+    ToggleNotifyActivity(usize),
     SetColor(usize, Option<egui::Color32>),
     MoveLeft(usize),
     MoveRight(usize),
@@ -158,17 +202,28 @@ fn profile_menu_rows(ui: &mut egui::Ui, profiles: &[Profile], action: &mut Optio
 
 /// Right-click tab context menu. Sets `action`; egui auto-closes the menu on any button click.
 /// Hovering a color swatch (or "No color") previews it on the tab via `color_preview`.
+#[allow(clippy::too_many_arguments)] // one deferred-menu builder; a param struct would be more code
 fn tab_menu(
     ui: &mut egui::Ui,
     i: usize,
     tab_id: u64,
     current: Option<egui::Color32>,
     pinned: bool,
+    proc: Option<&str>,
+    notify_activity: bool,
     profiles: &[Profile],
     action: &mut Option<TabAction>,
     color_preview: &mut Option<(u64, Option<egui::Color32>)>,
 ) {
     style_menu(ui);
+    // Current process (Tabby tabContextMenu's disabled "Current process: {name}" row): the
+    // running child from the ~1 Hz procwatch cache - never a synchronous scan on menu open.
+    if let Some(name) = proc {
+        ui.add_enabled_ui(false, |ui| {
+            ui::menu_item(ui, &format!("Running: {name}"), "");
+        });
+        ui.separator();
+    }
     if ui::menu_item(ui, "New tab", "Cmd+T").clicked() {
         *action = Some(TabAction::New);
     }
@@ -189,6 +244,13 @@ fn tab_menu(
     }
     if ui::menu_item(ui, if pinned { "Unpin" } else { "Pin" }, "").clicked() {
         *action = Some(TabAction::TogglePin(i));
+    }
+    // Notify on activity (Tabby's checkbox row): checked = the Phosphor check in the
+    // shortcut slot. Per-tab, not persisted; one notification per unviewed stretch.
+    if ui::menu_item(ui, "Notify on activity", if notify_activity { icons::CHECK } else { "" })
+        .clicked()
+    {
+        *action = Some(TabAction::ToggleNotifyActivity(i));
     }
     ui.menu_button("Color", |ui| {
         // Snug width for the swatch grid (style_menu's 210 leaves dead space here).
@@ -381,6 +443,16 @@ impl Stdusk {
         self.active = ui::moved_index(i, target, self.active);
     }
 
+    /// Toggle broadcast input (Tabby `pane-focus-all`) on the ACTIVE tab: while on, keystrokes
+    /// and pastes route to EVERY pane in the tab; each pane wears an accent border. Toggling
+    /// off or switching tabs exits the mode (`main.rs` clears it on every non-active tab).
+    pub(crate) fn toggle_broadcast(&mut self, now: f64) {
+        let tab = &mut self.tabs[self.active];
+        tab.broadcast = !tab.broadcast;
+        let msg = if tab.broadcast { "Broadcast input on" } else { "Broadcast input off" };
+        self.toast = Some((msg.into(), now + 1.4));
+    }
+
     /// Modal rename field, shown while `self.renaming` is set.
     pub(crate) fn rename_window(&mut self, ctx: &egui::Context) {
         let Some((idx, mut buf, mut focus)) = self.renaming.take() else {
@@ -568,6 +640,16 @@ impl Stdusk {
                         // drag-only interact layered on top made egui 0.35 drop the click hit
                         // entirely (hit_test: topmost drag-only widget -> click: None), which
                         // killed every tab click in 0.2.2.
+                        // Progress + command state fold ALL panes, not just the focused one
+                        // (a background pane's build/error must stay visible on the tab).
+                        let leaves = tab.root().leaves();
+                        let progress = aggregate_progress(
+                            &leaves.iter().map(|t| t.progress()).collect::<Vec<_>>(),
+                        );
+                        let cmd = aggregate_cmd(
+                            tab.focused_term().cmd_state(),
+                            &leaves.iter().map(|t| t.cmd_state()).collect::<Vec<_>>(),
+                        );
                         let (resp, close) = draw_tab(
                             ui,
                             i + 1,
@@ -576,8 +658,8 @@ impl Stdusk {
                             active,
                             tab.pinned,
                             shown_color,
-                            tab.focused_term().progress(),
-                            tab.focused_term().cmd_state(),
+                            progress,
+                            cmd,
                             &tab.root().miniature(),
                             tab.cli,
                             tab_width,
@@ -592,6 +674,8 @@ impl Stdusk {
                         let tab_color = tab.color;
                         let tab_id = tab.id;
                         let tab_pinned = tab.pinned;
+                        let tab_proc = tab.proc.clone();
+                        let tab_notify = tab.notify_activity;
                         // Gate reorder on egui's decided-drag threshold so a plain click (or a
                         // sloppy click) never reorders.
                         if resp.dragged()
@@ -608,6 +692,8 @@ impl Stdusk {
                                 tab_id,
                                 tab_color,
                                 tab_pinned,
+                                tab_proc.as_deref(),
+                                tab_notify,
                                 &self.cfg.profiles,
                                 &mut action,
                                 &mut color_preview,
@@ -719,6 +805,12 @@ impl Stdusk {
             Some(TabAction::MoveLeft(i)) => self.move_tab(i, -1),
             Some(TabAction::MoveRight(i)) => self.move_tab(i, 1),
             Some(TabAction::TogglePin(i)) => self.toggle_pin(i),
+            Some(TabAction::ToggleNotifyActivity(i)) => {
+                if let Some(t) = self.tabs.get_mut(i) {
+                    t.notify_activity = !t.notify_activity;
+                    t.activity_notified = false; // fresh arm (Tabby clears activity on toggle)
+                }
+            }
             Some(TabAction::Close(i)) => self.request_close_tab(i, ctx),
             Some(TabAction::OpenPalette) => {
                 if self.palette.is_none() {
@@ -737,6 +829,7 @@ impl Stdusk {
                     fresh.renamed = old.renamed;
                     fresh.color = old.color;
                     fresh.pinned = old.pinned;
+                    fresh.notify_activity = old.notify_activity;
                     self.tabs[i] = fresh;
                 }
             }
@@ -796,6 +889,38 @@ mod tests {
         ];
         for (pins, i, want) in cases {
             assert_eq!(pin_target(pins, i), want, "pins {pins:?} toggle {i}");
+        }
+    }
+
+    #[test]
+    fn aggregate_progress_takes_max_fraction_and_error_wins() {
+        use Progress::{Error, Indeterminate, None, Normal, Paused};
+        let cases: [(&[Progress], Progress); 8] = [
+            (&[], None),
+            (&[None, None], None),                         // all idle: no bar
+            (&[Normal(30), None, Normal(70)], Normal(70)), // max fraction across panes
+            (&[Paused(80), Normal(20)], Paused(80)),       // paused still carries its fraction
+            (&[Normal(50), Indeterminate], Indeterminate), // indeterminate fills fully (1.0)
+            (&[Normal(90), Error(10), Normal(95)], Error(10)), // error wins outright
+            (&[Error(5), Error(80)], Error(5)),            // first error kept
+            (&[Normal(40), Normal(40)], Normal(40)),       // tie keeps the first (leaf order)
+        ];
+        for (items, want) in cases {
+            assert_eq!(aggregate_progress(items), want, "{items:?}");
+        }
+    }
+
+    #[test]
+    fn aggregate_cmd_fails_on_any_pane() {
+        use terminal::CmdState::{Fail, Idle, Ok, Running};
+        let cases: [(terminal::CmdState, &[terminal::CmdState], terminal::CmdState); 4] = [
+            (Ok, &[Ok, Fail], Fail),     // a background pane's failure surfaces
+            (Idle, &[Idle, Idle], Idle), // nothing failed: focused state stands
+            (Running, &[Running, Ok], Running),
+            (Fail, &[Fail], Fail),
+        ];
+        for (focused, all, want) in cases {
+            assert_eq!(aggregate_cmd(focused, all), want, "{focused:?} {all:?}");
         }
     }
 

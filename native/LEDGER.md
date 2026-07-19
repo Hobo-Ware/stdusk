@@ -527,6 +527,39 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 0.4.1 - "Panes & tabs polish": broadcast input, aggregated tab state, menu polish (V1 P1s)
+- **Broadcast input (Tabby `pane-focus-all`)**: Cmd+Shift+I (Tabby's exact default binding) or
+  palette "Broadcast Input" toggles `Tab.broadcast` on the CURRENT tab - keystrokes AND pastes
+  (incl. a confirmed multiline paste) fan out to EVERY pane via new `Pane::leaves_mut()`
+  (tested). Visual: every pane wears a 1.5px accent border and the unfocused fade is dropped
+  (Tabby `_allFocusMode` marks all panes focused, splitTab.component:950). Switching tabs exits
+  the mode (an end-of-frame sweep clears `broadcast` on every non-active tab - covers click,
+  keybind, palette, close). Mouse paste (middle/right-click) stays single-pane, like Tabby
+  (multifocus taps `frontend.input$`, not mouse paste). Cmd+I produces no pty bytes, so no
+  `key_to_bytes` reservation needed. **focus-all-TABS (multi-tab broadcast, Cmd+Alt+Shift+I)
+  skipped on purpose** - PARITY row says so. Broadcast shot: `STDUSK_SHOT_BROADCAST=1
+  --screenshot` splits the demo tab + forces the mode (border screenshot-verified).
+- **Aggregated tab progress + cmd state**: the tab bar now folds ALL panes, not just the
+  focused one. `tabs::aggregate_progress` (pure, table-tested): an `Error` anywhere wins
+  outright; otherwise the active progress with the max fill fraction (Indeterminate counts
+  as 1.0; ties keep leaf order). `tabs::aggregate_cmd` (tested): `Fail` on ANY pane shows the
+  red mark, else the focused pane's state. Title stays the focused pane's on purpose (cwd/OSC
+  of the pane you're in). CLI badge already aggregated via pids.
+- **"Running: <name>" tab-menu row** (Tabby tabContextMenu's disabled "Current process" row):
+  a disabled first row + separator, fed by `Tab.proc` - cached in the existing ~1 Hz CLI scan
+  (never a synchronous scan on menu open; needs `terminal.detect_clis` on, its loop). The scan
+  now snapshots the process table ONCE per tick (`procwatch::snapshot` exposed) and runs the
+  pure `detect`/`busy_child` per tab on it; the per-pid `scan()` wrapper is gone.
+- **Notify on activity** (0.3.0 rider, Tabby's checkbox row): per-tab menu toggle (check glyph
+  in the shortcut slot), NOT persisted. The reader thread flags `TabState.activity` on every
+  output chunk (`take_activity`, real-pty e2e'd); while the tab is unviewed (not active, or
+  window hidden) the first output posts ONE notification via the shared `notify()` osascript
+  path (refactored out of notify_done), then re-arms only when the tab is viewed
+  (`ui::activity_notification`, pure decision, table-tested). Flags consumed with `|=` per
+  pane, never `any()` - a short-circuit would leave stale flags that mis-fire on enable.
+- 179 tests green (+5); clippy -D warnings + fmt clean; all three screenshot harnesses
+  verified (default unchanged, broadcast border, 0.4.1 in the settings footer). No new config.
+
 ## 0.4.0 - "Input & scroll parity": alt+scroll, right-click modes, wipe, tab leftovers (V1 P1s)
 - **Alt+scroll -> arrow keys**: the workspace wheel handler sends SS3 arrows (`ESC O A`/`B`,
   one per wheel line) instead of scrolling while Alt is held. Tabby's exact gate is **Alt
@@ -865,6 +898,6 @@ builder agent; implementation + integration here.
   push with a PAT). `.app` is unsigned/un-notarized - fine via brew formula (no Gatekeeper
   quarantine); a signed bundle is a later polish item.
 - **Live-verify**: M5-M9 interactions, M10 CLI-badge detection against real claude/gemini/etc.
-- Backlog: M8 (pane reorder, broadcast input, pane zoom, aggregated tab progress). (Settings
-  GUI shipped 0.2.1-0.2.2; all-match search highlight shipped 0.3.2; the headless `run_ui`
-  harness replaced the egui_kittest idea.)
+- Backlog: M8 pane reorder (drag-to-rearrange). (Broadcast input + aggregated tab progress
+  shipped 0.4.1; pane zoom shipped M12; settings GUI 0.2.1-0.2.2; all-match search highlight
+  0.3.2; the headless `run_ui` harness replaced the egui_kittest idea.)

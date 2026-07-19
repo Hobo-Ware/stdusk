@@ -88,11 +88,18 @@ impl Stdusk {
         }
         if do_paste {
             // Paste into the ORIGINATING tab (by id); if it was closed, drop the paste.
+            // Broadcast mode fans the confirmed paste out to every pane, like live input.
             if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-                let t = tab.focused_term_mut();
-                t.paste(&text);
-                t.clear_selection();
-                t.scroll_to_bottom();
+                let targets = if tab.broadcast {
+                    tab.root_mut().leaves_mut()
+                } else {
+                    vec![tab.focused_term_mut()]
+                };
+                for t in targets {
+                    t.paste(&text);
+                    t.clear_selection();
+                    t.scroll_to_bottom();
+                }
             }
         } else if !cancel {
             self.pending_pastes.push_front((tab_id, text)); // keep asking next frame

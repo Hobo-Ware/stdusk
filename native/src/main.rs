@@ -285,6 +285,19 @@ impl Stdusk {
             tabs[0].pinned = true; // demo the pinned-tab marker
             active = 1;
             sized = true;
+            // STDUSK_SHOT_BROADCAST: split the active demo tab and force broadcast mode, so
+            // the per-pane accent border (and the dropped unfocused fade) is capturable.
+            if std::env::var("STDUSK_SHOT_BROADCAST").is_ok() {
+                let tab = &mut tabs[active];
+                let new = PtyTerm::spawn(COLS, ROWS, cc.egui_ctx.clone(), &spawn_opts(&cfg, None));
+                let root = tab.root.take().expect("root");
+                let (root, focus) = root.split(&tab.focused, pane::SplitDir::Row, new, false);
+                tab.root = Some(root);
+                if let Some(f) = focus {
+                    tab.focused = f;
+                }
+                tab.broadcast = true;
+            }
         }
 
         // Menu-bar status item is the accessory app's presence + control; skip it in the
@@ -425,18 +438,22 @@ fn set_dock_icon(visible: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon(_visible: bool) {}
 
-/// Post a desktop notification that a long command finished (macOS `osascript`).
-fn notify_done(title: &str, code: i32) {
+/// Post a desktop notification (macOS `osascript`); `body` is the visible line. Shared by
+/// notify-when-done and notify-on-activity so the osascript plumbing can't drift.
+fn notify(body: &str) {
     #[cfg(target_os = "macos")]
     {
-        let status =
-            if code == 0 { "finished".to_owned() } else { format!("failed (exit {code})") };
-        let body = format!("{title}: command {status}");
         let script = format!("display notification {body:?} with title \"stdusk\"");
         let _ = std::process::Command::new("osascript").args(["-e", &script]).spawn();
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = (title, code);
+    let _ = body;
+}
+
+/// Notify that a long command finished (exit-code aware body).
+fn notify_done(title: &str, code: i32) {
+    let status = if code == 0 { "finished".to_owned() } else { format!("failed (exit {code})") };
+    notify(&format!("{title}: command {status}"));
 }
 
 pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
@@ -648,22 +665,44 @@ impl eframe::App for Stdusk {
 
         // Notify-when-done: a long command finished. Consume the flag always (so it doesn't fire
         // late), but only post a notification when stdusk is hidden - no nagging while you watch.
-        for tab in &self.tabs {
+        // Notify-on-activity (per-tab menu toggle): new output while the tab is unviewed (not
+        // active, or the window hidden) fires ONE notification, re-armed when the tab is viewed.
+        let visible = self.visible;
+        let active = self.active;
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
             if let Some(code) = tab.focused_term().take_done_notify()
                 && self.cfg.terminal.notify_on_done
-                && !self.visible
+                && !visible
             {
                 notify_done(&tab.title, code);
             }
+            // Consume every pane's activity flag (|=, not any(): a short-circuit would leave
+            // stale flags that mis-fire the moment the toggle is enabled later).
+            let mut output = false;
+            for t in tab.root().leaves() {
+                output |= t.take_activity();
+            }
+            let viewed = i == active && visible;
+            let (fire, notified) = ui::activity_notification(
+                tab.notify_activity,
+                viewed,
+                tab.activity_notified,
+                output,
+            );
+            if fire {
+                notify(&format!("{}: new output", tab.title));
+            }
+            tab.activity_notified = notified;
         }
 
         // Shell-exit handling: apply `terminal.on_exit` (close pane / keep with overlay /
         // respawn) to any pane whose shell exited - a dead pty must never leave a frozen tab.
         self.handle_shell_exits(&ctx);
 
-        // CLI awareness: ~1 Hz, refresh the process table and badge each tab with any known AI CLI
-        // running in it (scanned across all of the tab's panes). Skipped in the screenshot harness
-        // (it sets demo badges directly).
+        // CLI awareness: ~1 Hz, refresh the process table once and badge each tab with any known
+        // AI CLI running in it (scanned across all of the tab's panes), caching the running
+        // child's name alongside (the tab menu's "Running:" row - never a synchronous scan on
+        // menu open). Skipped in the screenshot harness (it sets demo badges directly).
         if self.cfg.terminal.detect_clis && self.screenshot.is_none() {
             let now = ctx.input(|i| i.time);
             if now >= self.next_cli_scan {
@@ -674,10 +713,13 @@ impl eframe::App for Stdusk {
                     sysinfo::ProcessRefreshKind::nothing()
                         .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
                 );
+                // ONE table snapshot serves every tab (detect/busy_child are pure walks on it).
+                let procs = procwatch::snapshot(&self.sys);
                 for tab in &mut self.tabs {
                     let pids: Vec<u32> =
                         tab.root().leaves().iter().filter_map(|t| t.shell_pid()).collect();
-                    tab.cli = pids.iter().find_map(|&pid| procwatch::scan(&self.sys, pid));
+                    tab.cli = pids.iter().find_map(|&pid| procwatch::detect(&procs, pid));
+                    tab.proc = pids.iter().find_map(|&pid| procwatch::busy_child(&procs, pid));
                 }
                 // Keep the cadence ticking even when the window is otherwise idle.
                 ctx.request_repaint_after(std::time::Duration::from_millis(1100));
@@ -706,6 +748,7 @@ impl eframe::App for Stdusk {
         let mut kb_scroll_edge: Option<bool> = None; // Shift+Home/End: scroll to top (true) / bottom
         let mut kb_palette = false; // Cmd+Shift+P: toggle the command palette
         let mut kb_settings = false; // Cmd+,: toggle the settings view
+        let mut kb_broadcast = false; // Cmd+Shift+I: broadcast input to all panes (pane-focus-all)
         // A hard modal (rename / paste confirm / close confirm / palette) owns the keyboard
         // entirely: tab switching or Cmd+W while a confirm shows would retarget/kill the tab
         // under it. The settings view suppresses them too - tab/pane mutations under a hidden
@@ -828,6 +871,11 @@ impl eframe::App for Stdusk {
                         kb_new = true; // Cmd+T
                     }
                 }
+                // Broadcast input (Tabby's default pane-focus-all binding, ⌘-Shift-I).
+                // Cmd+I produces no pty bytes, so no key_to_bytes reservation is needed.
+                if i.modifiers.shift && i.key_pressed(egui::Key::I) {
+                    kb_broadcast = true;
+                }
                 // Toggle-last-tab. Tabby ships `toggle-last-tab` unbound on every platform, so
                 // there is no default to mirror - Cmd+O is stdusk's (conflict-free) choice.
                 if i.key_pressed(egui::Key::O) {
@@ -936,6 +984,10 @@ impl eframe::App for Stdusk {
             self.toggle_settings();
         }
         let now = ctx.input(|i| i.time);
+        // Broadcast input toggle (Cmd+Shift+I / palette): the current tab only.
+        if kb_broadcast {
+            self.toggle_broadcast(now);
+        }
         // Font zoom (harmless anytime). Reset (0), in (1), out (-1); clamped.
         if let Some(z) = kb_zoom {
             self.zoom = match z {
@@ -1047,6 +1099,13 @@ impl eframe::App for Stdusk {
         // index-based `lastTabIndex`; a stale index after closes clamps to tab 1 at use).
         if self.active != active_at_frame_start {
             self.prev_active = active_at_frame_start;
+        }
+        // Broadcast mode is bound to the CURRENT tab: switching away (any path - click, keybind,
+        // palette, close) exits it, so keys can never fan out in a tab you're not looking at.
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            if i != self.active {
+                tab.broadcast = false;
+            }
         }
     }
 }

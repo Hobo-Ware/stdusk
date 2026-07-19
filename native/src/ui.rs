@@ -448,6 +448,23 @@ pub(crate) fn close_confirm_message(pinned: bool, busy: Option<&str>) -> Option<
     }
 }
 
+/// Notify-on-activity step: `(fire a notification now?, notified-flag after)`. Viewing the tab
+/// (active + window visible) re-arms; away, the FIRST output after arming fires exactly once
+/// and stays quiet until the tab is viewed again (per-tab `enabled` is the menu toggle).
+#[allow(clippy::fn_params_excessive_bools)] // independent per-tab states, table-tested below
+pub(crate) fn activity_notification(
+    enabled: bool,
+    viewed: bool,
+    notified: bool,
+    output: bool,
+) -> (bool, bool) {
+    if viewed {
+        return (false, false); // viewing re-arms; nothing fires for a tab you're watching
+    }
+    let fire = enabled && output && !notified;
+    (fire, notified || fire)
+}
+
 /// Is the configured link-activation modifier satisfied? `"none"` (or unknown) means links react
 /// on plain hover/click (Tabby default); otherwise the named modifier must be held.
 pub(crate) fn link_modifier_held(mods: egui::Modifiers, setting: &str) -> bool {
@@ -1696,6 +1713,27 @@ mod tests {
             close_confirm_message(true, Some("vim")).as_deref(),
             Some("This tab is pinned.") // pinned always asks, with the pin as the reason
         );
+    }
+
+    #[test]
+    fn activity_notification_fires_once_and_rearms_on_view() {
+        // (enabled, viewed, notified, output) -> (fire, notified after)
+        let cases = [
+            (true, false, false, true, (true, true)), // away + output: fire once
+            (true, false, true, true, (false, true)), // already fired: stay quiet
+            (true, false, false, false, (false, false)), // no output: armed, silent
+            (true, true, true, true, (false, false)), // viewing re-arms (and never fires)
+            (true, true, false, false, (false, false)),
+            (false, false, false, true, (false, false)), // toggle off: never fires
+            (false, false, true, true, (false, true)),   // off doesn't clear a stale flag
+        ];
+        for (enabled, viewed, notified, output, want) in cases {
+            assert_eq!(
+                activity_notification(enabled, viewed, notified, output),
+                want,
+                "enabled={enabled} viewed={viewed} notified={notified} output={output}"
+            );
+        }
     }
 
     #[test]

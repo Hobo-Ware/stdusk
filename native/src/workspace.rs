@@ -139,14 +139,21 @@ impl Stdusk {
                     copied = true;
                 }
 
-                // Keystrokes -> focused pane (unless a text field/modal owns the keyboard).
+                // Keystrokes -> focused pane (unless a text field/modal owns the keyboard);
+                // broadcast mode (Tabby pane-focus-all) fans them out to EVERY pane instead.
                 if !input_captured {
                     let input = collect_input(ui, tcfg.alt_is_meta, ctrl_c && has_selection);
                     if !input.is_empty() {
-                        let t = tab.focused_term_mut();
-                        t.send(&input);
-                        t.clear_selection();
-                        t.scroll_to_bottom();
+                        let targets = if tab.broadcast {
+                            tab.root_mut().leaves_mut()
+                        } else {
+                            vec![tab.focused_term_mut()]
+                        };
+                        for t in targets {
+                            t.send(&input);
+                            t.clear_selection();
+                            t.scroll_to_bottom();
+                        }
                     }
                 }
                 // Paste events: processed even while the paste-confirm modal is open (they queue
@@ -181,10 +188,16 @@ impl Stdusk {
                             continue;
                         }
                         let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);
-                        let t = tab.focused_term_mut();
-                        t.paste(&s);
-                        t.clear_selection();
-                        t.scroll_to_bottom();
+                        let targets = if tab.broadcast {
+                            tab.root_mut().leaves_mut()
+                        } else {
+                            vec![tab.focused_term_mut()]
+                        };
+                        for t in targets {
+                            t.paste(&s);
+                            t.clear_selection();
+                            t.scroll_to_bottom();
+                        }
                     }
                 }
 
@@ -241,7 +254,9 @@ impl Stdusk {
                     }
                     let term = tab.root().leaf_at(path).expect("leaf");
                     let snap = term.grid_snapshot();
-                    let dimmed = multi && path != &tab.focused;
+                    // Broadcast mode reads every pane as focused (Tabby _allFocusMode drops the
+                    // unfocused fade on all panes), so no pane looks like it won't get the keys.
+                    let dimmed = multi && path != &tab.focused && !tab.broadcast;
                     let has_sel = term.selection_text().is_some();
                     let cwd = term.cwd();
                     let blink = tcfg.cursor_blink && !input_captured && path == &tab.focused;
@@ -265,6 +280,16 @@ impl Stdusk {
                         // The find bar searches the focused pane only.
                         if path == &tab.focused { &search_marks } else { &[] },
                     );
+                    // Broadcast mode: an accent border on EVERY pane makes the keys-go-everywhere
+                    // state unmistakable (Tabby paints an app-wide red border + a banner).
+                    if tab.broadcast {
+                        ui.painter().rect_stroke(
+                            *rect,
+                            4.0,
+                            egui::Stroke::new(1.5, colors::accent()),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
                     if bell_on && term.take_bell() {
                         bell_rang = true;
                     }

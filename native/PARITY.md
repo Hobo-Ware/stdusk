@@ -43,8 +43,8 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | `restart-tab` (respawn shell) | ✅ | context-menu Restart (same cwd, keeps title/color) |
 | Close other / to-the-right / to-the-left | ✅ | context-menu items (feed the reopen stack) |
 | `explode-tab` (panes -> tabs) / `combine-tabs` (tabs -> split) | ⬜ | power-user, low priority |
-| Notify-when-done | ✅ | `terminal.notify_on_done`; osascript notification when a >10s command finishes while hidden. notify-on-activity still ⬜ |
-| Current-process display in menu | ⬜ | have procwatch tree already |
+| Notify-when-done | ✅ | `terminal.notify_on_done`; osascript notification when a >10s command finishes while hidden. Notify-on-activity ✅ (per-tab menu toggle, one shot per unviewed stretch, re-armed on view) |
+| Current-process display in menu | ✅ | disabled "Running: <name>" first row, fed by the ~1 Hz procwatch cache (needs `detect_clis` on) |
 | Drag-reorder tabs | ✅ | midpoint-crossing swaps, mixed widths; between-windows N/A (single window) |
 | Warn when closing a tab with a running process | ✅ | `terminal.warn_on_close_running` (default on) + confirm modal |
 | `toggle-fullscreen` | ⬜ | |
@@ -57,9 +57,9 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Keyboard pane nav (directional) | ✅ | Cmd+Alt+arrows (`pane::neighbor`); prev/next + 1-9 still ⬜ |
 | Keyboard pane resize (`pane-increase/decrease-*`, step) | ✅ | Cmd+Ctrl+arrows (Right/Down grow, Left/Up shrink) |
 | `pane-maximize` / zoom | ✅ | Cmd+Alt+Enter toggles `tab.maximized` |
-| Broadcast input (`pane-focus-all`, `focus-all-tabs`) | ⬜ | multifocus |
+| Broadcast input (`pane-focus-all`) | ✅ | Cmd+Shift+I (Tabby's default bind) + palette "Broadcast Input"; keystrokes/paste to every pane, accent border per pane, exits on toggle/tab switch. `focus-all-tabs` (multi-TAB broadcast) skipped on purpose - a quake terminal rarely wants cross-tab fan-out; revisit on demand |
 | `rearrange-panes` (labelled move mode) | ⬜ | |
-| Aggregated tab progress/title across panes | 🟡 | shows focused pane only |
+| Aggregated tab progress/title across panes | ✅ | progress = max-fraction across panes (error wins); cmd Fail on any pane shows the red mark; CLI badge aggregates via pids. Title stays the FOCUSED pane's on purpose (the cwd/OSC you're working in) |
 | Drag tab into a split (drop zones) | ⬜ | |
 
 ## Rendering

@@ -39,6 +39,7 @@ pub(crate) enum PaletteCmd {
     SplitRight,
     SplitDown,
     MaximizePane,
+    BroadcastInput,
     NextTab,
     PrevTab,
     ToggleLastTab,
@@ -54,7 +55,7 @@ pub(crate) enum PaletteCmd {
 }
 
 impl PaletteCmd {
-    const ALL: [Self; 21] = [
+    const ALL: [Self; 22] = [
         Self::NewTab,
         Self::CloseTab,
         Self::DuplicateTab,
@@ -64,6 +65,7 @@ impl PaletteCmd {
         Self::SplitRight,
         Self::SplitDown,
         Self::MaximizePane,
+        Self::BroadcastInput,
         Self::NextTab,
         Self::PrevTab,
         Self::ToggleLastTab,
@@ -93,6 +95,7 @@ impl PaletteCmd {
             Self::SplitRight => "Split Right",
             Self::SplitDown => "Split Down",
             Self::MaximizePane => "Maximize Pane",
+            Self::BroadcastInput => "Broadcast Input",
             Self::NextTab => "Next Tab",
             Self::PrevTab => "Previous Tab",
             Self::ToggleLastTab => "Toggle Last Tab",
@@ -255,6 +258,10 @@ impl Stdusk {
             PaletteCmd::MaximizePane => {
                 let tab = &mut self.tabs[self.active];
                 tab.maximized = !tab.maximized;
+            }
+            PaletteCmd::BroadcastInput => {
+                let now = ctx.input(|i| i.time);
+                self.toggle_broadcast(now);
             }
             PaletteCmd::NextTab => self.cycle_tab(1),
             PaletteCmd::PrevTab => self.cycle_tab(-1),

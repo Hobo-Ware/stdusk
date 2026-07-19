@@ -132,6 +132,7 @@ pub(crate) struct TabState {
     pub(crate) clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
     pub(crate) cmd: CmdState,             // OSC 133 last-command state (tab dot)
     pub(crate) bell: bool,                // BEL rung since last consumed (drives the visual flash)
+    pub(crate) activity: bool,            // output since last consumed (notify-on-activity)
     pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
     pub(crate) exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
     pub(crate) title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
@@ -329,6 +330,7 @@ impl PtyTerm {
                         {
                             let mut s = state_reader.lock().unwrap();
                             s.progress = progress;
+                            s.activity = true; // any output chunk counts (notify-on-activity)
                             if let Some(c) = cwd_update {
                                 s.cwd = Some(c);
                             }
@@ -464,6 +466,11 @@ impl PtyTerm {
     /// Take a pending "long command finished" notification (exit code), if any.
     pub(crate) fn take_done_notify(&self) -> Option<i32> {
         self.state.lock().unwrap().done_notify.take()
+    }
+
+    /// Take the pending output-activity flag (any output since last call) - notify-on-activity.
+    pub(crate) fn take_activity(&self) -> bool {
+        std::mem::take(&mut self.state.lock().unwrap().activity)
     }
 
     pub(crate) fn cwd(&self) -> Option<String> {
@@ -816,6 +823,14 @@ mod tests {
             snap.cells.iter().any(|c| c.c != ' ' && c.c != '\0'),
             "viewport content must survive a scrollback-only wipe"
         );
+    }
+
+    #[test]
+    fn real_pty_output_sets_activity() {
+        // Any output flags activity; take_activity consumes it (one-shot until more output).
+        let term = e2e_term("printf 'hello'; sleep 5");
+        poll_term(&term, |t| t.take_activity().then_some(())).expect("activity never flagged");
+        assert!(!term.take_activity(), "take_activity must consume the flag");
     }
 
     #[test]

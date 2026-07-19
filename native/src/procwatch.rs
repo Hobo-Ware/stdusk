@@ -159,8 +159,9 @@ pub(crate) fn busy_child(procs: &[Proc], root: u32) -> Option<String> {
     deepest.map(|(_, name)| name)
 }
 
-/// Snapshot sysinfo's process table into plain `Proc`s (the pure fns work on these).
-fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
+/// Snapshot sysinfo's process table into plain `Proc`s (the pure fns work on these). The ~1 Hz
+/// scan loop snapshots ONCE and runs `detect`/`busy_child` per tab on the same table.
+pub(crate) fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
     sys.processes()
         .values()
         .map(|p| Proc {
@@ -170,12 +171,6 @@ fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
             cmd: p.cmd().iter().map(|s| s.to_string_lossy().into_owned()).collect(),
         })
         .collect()
-}
-
-/// Live scan: snapshot sysinfo's process table into `Proc`s and run `detect`. Cheap enough for a
-/// ~1 Hz call; sysinfo refresh happens in the caller so one refresh serves every tab.
-pub(crate) fn scan(sys: &sysinfo::System, root: u32) -> Option<Cli> {
-    detect(&snapshot(sys), root)
 }
 
 /// Live version of `busy_child` (close-tab confirmation). Refresh happens in the caller.

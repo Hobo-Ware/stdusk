@@ -97,6 +97,18 @@ impl<T> Pane<T> {
         }
     }
 
+    /// Every leaf value mutably, left-to-right (broadcast input writes to every pane).
+    pub(crate) fn leaves_mut(&mut self) -> Vec<&mut T> {
+        match self {
+            Pane::Leaf(t) => vec![t],
+            Pane::Split { a, b, .. } => {
+                let mut v = a.leaves_mut();
+                v.extend(b.leaves_mut());
+                v
+            }
+        }
+    }
+
     /// Path of every leaf, left-to-right (parallel to `leaves`) - for whole-tree scans that
     /// must address a leaf afterwards (shell-exit handling).
     pub(crate) fn leaf_paths(&self) -> Vec<Vec<Side>> {
@@ -503,6 +515,19 @@ mod tests {
         assert_eq!(paths, vec![vec![Side::A], vec![Side::B, Side::A], vec![Side::B, Side::B]]);
         let leaves: Vec<u32> = paths.iter().map(|p| *tree.leaf_at(p).unwrap()).collect();
         assert_eq!(leaves, vec![1, 2, 3]); // same order as leaves()
+    }
+
+    #[test]
+    fn leaves_mut_matches_leaves_order() {
+        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false);
+        let (mut tree, _) = tree.split(&[Side::B], SplitDir::Column, 3, false);
+        let snapshot: Vec<u32> = tree.leaves().into_iter().copied().collect();
+        for v in tree.leaves_mut() {
+            *v += 10; // a broadcast write reaches every leaf
+        }
+        let after: Vec<u32> = tree.leaves().into_iter().copied().collect();
+        assert_eq!(snapshot, vec![1, 2, 3]);
+        assert_eq!(after, vec![11, 12, 13]); // same order, every leaf touched
     }
 
     #[test]
