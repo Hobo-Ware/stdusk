@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 0.2.4.
+Step-by-step verification for everything shipped through 0.3.0.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -129,3 +129,17 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | Settings -> Session -> Sync: set a (private!) repo, hit Push | Buttons disabled while the field is empty or a sync runs; Push saves first, then commits + pushes config.toml + custom schemes; session.toml + shell hooks are NOT in the repo |
 | On another machine (or after local edits), hit Pull | Repo settings overwrite local; theme + hotkey re-apply live, no restart |
 | `STDUSK_SHOT_SECTION=quake cargo run -- --screenshot-settings /tmp/s.png` | Renders that settings section instead of the scheme browser and exits 0 |
+
+## 13. 0.3.0 - shell exit + dynamic titles
+| Step | Expect |
+|---|---|
+| `exit` in a single-pane tab (default `on_exit = "close"`) | The tab closes, no frozen leftover; other tabs untouched |
+| `exit` in the LAST remaining tab | A fresh tab spawns in its place (app stays alive, never a zombie) |
+| Split a tab, `exit` in one pane | Only that pane closes; the sibling expands and takes focus |
+| `on_exit = "keep"`: `exit` | Pane dims with "[process exited: 0]"; Enter (while focused) or a click respawns the shell in the same cwd |
+| `on_exit = "restart"`: `exit` | Shell respawns in place instantly |
+| `on_exit = "restart"` with a crash-looping shell (e.g. a profile whose shell dies at once) | Two quick deaths (<2s from spawn) -> falls back to the keep overlay instead of looping |
+| `printf '\033]0;hello\007'` | Tab title becomes "hello" (a user rename still wins) |
+| `printf '\033]0;\007'` after that | Empty title resets -> title falls back to the cwd basename |
+| `cd /somewhere` while a title is set | Title stays the OSC one (OSC beats cwd) |
+| Settings > Terminal > "Dynamic tab title" off | OSC titles ignored live (no respawn); cwd basename titles return |

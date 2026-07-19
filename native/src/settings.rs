@@ -9,7 +9,7 @@ use eframe::egui;
 
 use crate::colors::{self, Theme};
 use crate::ui::{self, icons};
-use crate::{Stdusk, config, sync, themes};
+use crate::{Stdusk, config, sync, terminal, themes};
 
 /// Left nav width (outer, incl. margins).
 const NAV_W: f32 = 184.0;
@@ -754,6 +754,21 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
         });
         row_new_tabs(ui, "Word separators", "Characters that end a double-click selection", |ui| {
             ui::text_field(ui, &mut t.word_separators, "separators", 180.0, colors::fg());
+        });
+        row(ui, "On shell exit", "Close the pane, keep it with a banner, or respawn", |ui| {
+            ui.horizontal(|ui| {
+                for (label, value) in [("Close", "close"), ("Keep", "keep"), ("Restart", "restart")]
+                {
+                    let selected =
+                        terminal::on_exit_mode(&t.on_exit) == terminal::on_exit_mode(value);
+                    if ui::chip(ui, label, selected).clicked() {
+                        t.on_exit = value.into();
+                    }
+                }
+            });
+        });
+        row(ui, "Dynamic tab title", "Follow the title the shell sets (OSC 0/2)", |ui| {
+            ui::toggle_switch(ui, &mut t.dynamic_title);
         });
         row(ui, "AI CLI badges", "Badge tabs running a known AI CLI", |ui| {
             ui::toggle_switch(ui, &mut t.detect_clis);

@@ -71,6 +71,19 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
     }
 }
 
+/// Fresh shell in place of a dead pane's (same cwd), carrying the crash-loop counter: a death
+/// within `RAPID_EXIT_SECS` of spawn increments it, anything longer-lived resets it.
+pub(crate) fn respawn_term(cfg: &Config, ctx: &egui::Context, term: &mut PtyTerm) {
+    let cwd = term.cwd();
+    let rapid = match term.exited() {
+        Some(e) if e.uptime_secs < terminal::RAPID_EXIT_SECS => term.rapid_exits() + 1,
+        _ => 0,
+    };
+    let mut fresh = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
+    fresh.set_rapid_exits(rapid);
+    *term = fresh;
+}
+
 /// Spawn a tab from a launch profile: shell/args/cwd/env overrides, titled after the profile
 /// (renamed, so cwd auto-titling stays off) and colored per its `color`.
 pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Profile) -> Tab {
@@ -233,6 +246,57 @@ impl Stdusk {
             self.tabs.push(tab);
         }
         self.active = self.active.min(self.tabs.len() - 1);
+    }
+
+    /// Apply `terminal.on_exit` to panes whose shell has exited: close the pane (tab on its
+    /// last pane; the last tab respawns fresh via `close_tab` - never a zombie) or respawn it
+    /// in place. Keep-mode panes are left alone - the workspace draws their overlay and owns
+    /// the Enter/click restart. ONE structural action per frame (a close invalidates the other
+    /// collected paths); the queued repaint drains the rest.
+    pub(crate) fn handle_shell_exits(&mut self, ctx: &egui::Context) {
+        let mode = terminal::on_exit_mode(&self.cfg.terminal.on_exit);
+        let mut target: Option<(usize, Vec<pane::Side>, terminal::ExitAction)> = None;
+        'tabs: for (ti, tab) in self.tabs.iter().enumerate() {
+            for path in tab.root().leaf_paths() {
+                let term = tab.root().leaf_at(&path).expect("leaf");
+                if let Some(exit) = term.exited() {
+                    match terminal::exit_action(mode, exit.uptime_secs, term.rapid_exits()) {
+                        terminal::ExitAction::Keep => {} // overlay handled in the workspace
+                        act => {
+                            target = Some((ti, path, act));
+                            break 'tabs;
+                        }
+                    }
+                }
+            }
+        }
+        let Some((ti, path, act)) = target else { return };
+        match act {
+            terminal::ExitAction::Keep => {} // filtered above
+            terminal::ExitAction::Restart => {
+                if let Some(t) = self.tabs[ti].root_mut().leaf_at_mut(&path) {
+                    respawn_term(&self.cfg, ctx, t);
+                }
+            }
+            terminal::ExitAction::ClosePane => {
+                let tab = &mut self.tabs[ti];
+                if tab.root().leaf_count() > 1 {
+                    let root = tab.root.take().expect("root");
+                    let (root, focus) = root.close(&path);
+                    tab.root = root;
+                    if let Some(f) = focus {
+                        tab.focused = f;
+                    }
+                } else {
+                    let was_active = self.active;
+                    self.close_tab(ti, ctx);
+                    if ti < was_active {
+                        self.active = was_active - 1; // removal shifted the tabs left
+                    }
+                }
+            }
+        }
+        ctx.request_repaint(); // drain any further exited panes next frame
     }
 
     /// Close every tab whose index fails `keep`, remembering cwds for reopen. The tab at

@@ -44,6 +44,15 @@ pub(crate) fn basename(p: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
+/// Auto-title for an unrenamed tab: the shell's OSC 0/2 title (when dynamic titles are on
+/// and it's non-empty) beats the cwd basename; `None` = leave the current title alone.
+pub(crate) fn auto_title(dynamic: bool, osc: Option<&str>, cwd: Option<&str>) -> Option<String> {
+    match osc {
+        Some(t) if dynamic && !t.is_empty() => Some(t.to_string()),
+        _ => cwd.map(basename),
+    }
+}
+
 /// Truncate to `max` chars with an ellipsis; returns (shown, was_truncated).
 pub(crate) fn ellipsize(s: &str, max: usize) -> (String, bool) {
     if s.chars().count() <= max {
@@ -742,6 +751,27 @@ pub(crate) fn draw_toast(ui: &egui::Ui, msg: &str, fade: f32) {
     p.text(center, egui::Align2::CENTER_CENTER, msg, font, a(colors::fg(), 255));
 }
 
+/// Dim scrim + centered "[process exited]" banner over a dead pane (`on_exit = "keep"` or the
+/// restart crash-loop fallback). Enter / click handling lives at the pane response.
+pub(crate) fn draw_exit_overlay(ui: &egui::Ui, rect: egui::Rect, code: i32) {
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 0.0, egui::Color32::from_black_alpha(110));
+    p.text(
+        rect.center() - egui::vec2(0.0, 11.0),
+        egui::Align2::CENTER_CENTER,
+        format!("[process exited: {code}]"),
+        egui::FontId::proportional(14.0),
+        colors::fg(),
+    );
+    p.text(
+        rect.center() + egui::vec2(0.0, 11.0),
+        egui::Align2::CENTER_CENTER,
+        "press Enter or click to restart",
+        egui::FontId::proportional(11.5),
+        colors::dim(),
+    );
+}
+
 /// `(fraction, color)` for the tab progress bar, or `None` to hide it.
 fn progress_bar(p: Progress) -> Option<(f32, egui::Color32)> {
     let frac = progress_fraction(p)?;
@@ -1227,6 +1257,16 @@ mod tests {
         assert_eq!(basename("foo"), "foo");
         assert_eq!(basename("/"), "/");
         assert_eq!(basename(""), "/");
+    }
+
+    #[test]
+    fn auto_title_prefers_osc_then_cwd() {
+        assert_eq!(auto_title(true, Some("vim"), Some("/tmp/x")), Some("vim".into()));
+        assert_eq!(auto_title(false, Some("vim"), Some("/tmp/x")), Some("x".into())); // dynamic off
+        assert_eq!(auto_title(true, Some(""), Some("/tmp/x")), Some("x".into())); // empty = reset
+        assert_eq!(auto_title(true, None, Some("/tmp/x")), Some("x".into()));
+        assert_eq!(auto_title(true, Some("vim"), None), Some("vim".into()));
+        assert_eq!(auto_title(true, None, None), None); // nothing known: leave the title alone
     }
 
     #[test]

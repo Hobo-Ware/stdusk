@@ -42,6 +42,57 @@ pub(crate) fn cmd_from_exit(code: Option<i32>) -> CmdState {
     }
 }
 
+/// The dead shell's exit report, set once by the reader thread when the pty EOFs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ExitInfo {
+    pub(crate) code: i32,
+    pub(crate) uptime_secs: f32, // spawn -> exit; feeds the crash-loop guard
+}
+
+/// `terminal.on_exit` parsed: what happens to a pane when its shell exits.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum OnExit {
+    Close,
+    Keep,
+    Restart,
+}
+
+pub(crate) fn on_exit_mode(s: &str) -> OnExit {
+    match s.to_ascii_lowercase().as_str() {
+        "keep" => OnExit::Keep,
+        "restart" => OnExit::Restart,
+        _ => OnExit::Close, // default
+    }
+}
+
+/// An exit within this many seconds of spawn counts as a crash (restart-mode loop guard).
+pub(crate) const RAPID_EXIT_SECS: f32 = 2.0;
+
+/// What the UI applies to an exited pane.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ExitAction {
+    ClosePane,
+    Keep,
+    Restart,
+}
+
+/// Decide the action for an exited pane. `rapid_exits` counts consecutive deaths within
+/// `RAPID_EXIT_SECS` of spawn; a restart-mode shell that dies rapidly twice in a row is
+/// crash-looping, so it falls back to Keep instead of respawning forever.
+pub(crate) fn exit_action(mode: OnExit, uptime_secs: f32, rapid_exits: u32) -> ExitAction {
+    match mode {
+        OnExit::Close => ExitAction::ClosePane,
+        OnExit::Keep => ExitAction::Keep,
+        OnExit::Restart => {
+            if uptime_secs < RAPID_EXIT_SECS && rapid_exits >= 1 {
+                ExitAction::Keep
+            } else {
+                ExitAction::Restart
+            }
+        }
+    }
+}
+
 /// One styled cell for the renderer. `bg == None` means the terminal default (transparent).
 pub(crate) struct CellSnap {
     pub(crate) c: char,
@@ -68,6 +119,8 @@ pub(crate) struct TabState {
     pub(crate) cmd: CmdState,             // OSC 133 last-command state (tab dot)
     pub(crate) bell: bool,                // BEL rung since last consumed (drives the visual flash)
     pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
+    pub(crate) exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
+    pub(crate) title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
 }
 
 /// Grid sizing. History (scrollback) comes from `Config::scrolling_history`, not here.
@@ -138,6 +191,7 @@ pub(crate) struct PtyTerm {
     rows: usize,
     shell_pid: Option<u32>, // for CLI-awareness process scanning (procwatch)
     bold_bright: bool,      // draw bold text in bright ANSI colors
+    rapid_exits: u32,       // consecutive <RAPID_EXIT_SECS deaths, carried across respawns
 }
 
 impl PtyTerm {
@@ -176,9 +230,10 @@ impl PtyTerm {
                 cmd.env(k, v);
             }
         }
-        let child = pair.slave.spawn_command(cmd).expect("spawn shell");
+        // The child handle moves into the reader thread so the real exit status can be reaped
+        // when the pty EOFs (dropping it would lose the exit code to a detached zombie wait).
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn shell");
         let shell_pid = child.process_id();
-        drop(child); // pid is stable; the pty keeps the shell alive, so we don't hold the handle
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().expect("reader");
@@ -199,6 +254,7 @@ impl PtyTerm {
         let term_reader = term.clone();
         let state_reader = state.clone();
         thread::spawn(move || {
+            let spawned = std::time::Instant::now(); // for ExitInfo.uptime_secs
             let mut parser: Processor = Processor::new();
             let mut prog = ProgressScanner::new(detect_progress);
             let mut osc = OscScanner::new();
@@ -221,10 +277,12 @@ impl PtyTerm {
                         let mut cwd_update = None;
                         let mut clip_update = None;
                         let mut cmd_update = None;
+                        let mut title_update = None; // Some(title); empty resets
                         let mut notify = None; // Some(exit) when a long command just finished
                         for ev in osc_events {
                             match ev {
                                 OscEvent::Progress(p) => progress = p, // OSC 9;4 wins over %-scrape
+                                OscEvent::Title(t) => title_update = Some(t),
                                 OscEvent::Cwd(c) => cwd_update = Some(c),
                                 OscEvent::Clipboard(b64) => {
                                     if let Ok(bytes) =
@@ -266,6 +324,9 @@ impl PtyTerm {
                             if let Some(c) = cmd_update {
                                 s.cmd = c;
                             }
+                            if let Some(t) = title_update {
+                                s.title_osc = (!t.is_empty()).then_some(t);
+                            }
                             if let Some(code) = notify {
                                 s.done_notify = Some(code);
                             }
@@ -274,6 +335,12 @@ impl PtyTerm {
                     }
                 }
             }
+            // EOF/err: the shell's side of the pty closed, so the shell is gone and wait()
+            // returns promptly. Reap the real exit code and flag the pane as exited.
+            let code = child.wait().map_or(-1, |st| st.exit_code() as i32);
+            state_reader.lock().unwrap().exited =
+                Some(ExitInfo { code, uptime_secs: spawned.elapsed().as_secs_f32() });
+            ctx.request_repaint();
         });
 
         Self {
@@ -285,6 +352,7 @@ impl PtyTerm {
             rows,
             shell_pid,
             bold_bright: opts.bold_bright,
+            rapid_exits: 0,
         }
     }
 
@@ -370,6 +438,26 @@ impl PtyTerm {
 
     pub(crate) fn cwd(&self) -> Option<String> {
         self.state.lock().unwrap().cwd.clone()
+    }
+
+    /// Exit report for a dead shell (pty EOF observed + reaped), if any. Stays set until the
+    /// pane is respawned or closed - the UI reads it every frame to apply `on_exit`.
+    pub(crate) fn exited(&self) -> Option<ExitInfo> {
+        self.state.lock().unwrap().exited
+    }
+
+    /// The shell's OSC 0/2 window title, if it set one (an empty title resets to None).
+    pub(crate) fn title_osc(&self) -> Option<String> {
+        self.state.lock().unwrap().title_osc.clone()
+    }
+
+    /// Consecutive rapid deaths so far (crash-loop guard); carried across in-place respawns.
+    pub(crate) fn rapid_exits(&self) -> u32 {
+        self.rapid_exits
+    }
+
+    pub(crate) fn set_rapid_exits(&mut self, n: u32) {
+        self.rapid_exits = n;
     }
 
     /// Take a pending OSC 52 clipboard payload (set by the shell), if any.
@@ -520,7 +608,10 @@ impl PtyTerm {
 
 #[cfg(test)]
 mod tests {
-    use super::{CmdState, cmd_from_exit, resolve_cwd, resolve_shell};
+    use super::{
+        CmdState, ExitAction, OnExit, PtyTerm, SpawnOpts, cmd_from_exit, exit_action, on_exit_mode,
+        resolve_cwd, resolve_shell,
+    };
     use crate::config::Profile;
 
     #[test]
@@ -578,5 +669,81 @@ mod tests {
         let home = std::env::var("HOME").unwrap();
         let p = profile(None, Some("~/Git"));
         assert_eq!(resolve_cwd(Some(&p), None), Some(format!("{home}/Git")));
+    }
+
+    #[test]
+    fn on_exit_mode_parses_with_close_default() {
+        assert_eq!(on_exit_mode("close"), OnExit::Close);
+        assert_eq!(on_exit_mode("Keep"), OnExit::Keep);
+        assert_eq!(on_exit_mode("restart"), OnExit::Restart);
+        assert_eq!(on_exit_mode("nonsense"), OnExit::Close);
+        assert_eq!(on_exit_mode(""), OnExit::Close);
+    }
+
+    #[test]
+    fn exit_action_decision_table() {
+        use ExitAction::{ClosePane, Keep, Restart};
+        let cases = [
+            (OnExit::Close, 100.0, 0, ClosePane),
+            (OnExit::Close, 0.1, 5, ClosePane), // close ignores the loop guard
+            (OnExit::Keep, 0.1, 0, Keep),
+            (OnExit::Keep, 100.0, 3, Keep),
+            (OnExit::Restart, 100.0, 0, Restart),
+            (OnExit::Restart, 1.0, 0, Restart), // FIRST rapid death still restarts
+            (OnExit::Restart, 1.0, 1, Keep),    // second in a row = crash loop -> keep
+            (OnExit::Restart, 1.0, 7, Keep),
+            (OnExit::Restart, 100.0, 3, Restart), // a long-lived run clears the concern
+        ];
+        for (mode, uptime, rapid, want) in cases {
+            assert_eq!(exit_action(mode, uptime, rapid), want, "{mode:?} up={uptime} n={rapid}");
+        }
+    }
+
+    /// Spawn a REAL pty running `/bin/sh -c <script>` (no integration hooks) and poll `check`
+    /// until it returns Some or the timeout hits.
+    fn spawn_and_poll<T>(script: &str, check: impl Fn(&PtyTerm) -> Option<T>) -> Option<T> {
+        let opts = SpawnOpts {
+            detect_progress: false,
+            shell_integration: false,
+            scrollback_lines: 100,
+            word_separators: " ".into(),
+            bold_bright: false,
+            cwd: None,
+            profile: Some(Profile {
+                name: "e2e".into(),
+                shell: Some("/bin/sh".into()),
+                args: vec!["-c".into(), script.into()],
+                cwd: None,
+                env: std::collections::HashMap::new(),
+                color: None,
+            }),
+        };
+        let term = PtyTerm::spawn(20, 5, egui::Context::default(), &opts);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if let Some(v) = check(&term) {
+                return Some(v);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        None
+    }
+
+    #[test]
+    fn real_pty_exit_reports_code_and_uptime() {
+        let exit = spawn_and_poll("exit 3", PtyTerm::exited).expect("exit never observed");
+        assert_eq!(exit.code, 3);
+        assert!(
+            exit.uptime_secs < 10.0,
+            "uptime must reflect spawn->exit, got {}",
+            exit.uptime_secs
+        );
+    }
+
+    #[test]
+    fn real_pty_osc_title_propagates() {
+        let title =
+            spawn_and_poll("printf '\\033]0;from-the-shell\\007'; sleep 5", PtyTerm::title_osc);
+        assert_eq!(title.as_deref(), Some("from-the-shell"));
     }
 }

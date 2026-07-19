@@ -128,6 +128,8 @@ pub(crate) struct Terminal {
     pub(crate) bold_bright: bool,    // draw bold text in the bright ANSI colors
     pub(crate) ligatures: bool, // render common code sequences (-> => != >= <=) as single glyphs
     pub(crate) warn_on_close_running: bool, // confirm closing a tab with a running process
+    pub(crate) on_exit: String, // pane when its shell exits: "close" | "keep" | "restart"
+    pub(crate) dynamic_title: bool, // tab titles follow the shell's OSC 0/2 title
 }
 
 impl Default for Appearance {
@@ -179,6 +181,8 @@ impl Default for Terminal {
             bold_bright: true,
             ligatures: false,
             warn_on_close_running: true,
+            on_exit: "close".into(),
+            dynamic_title: true,
         }
     }
 }
@@ -287,6 +291,8 @@ mod tests {
         assert_eq!(c.quake.unfocused_opacity, 1.0); // off by default
         assert!(c.terminal.detect_progress);
         assert!(c.terminal.warn_on_close_running);
+        assert_eq!(c.terminal.on_exit, "close");
+        assert!(c.terminal.dynamic_title);
     }
 
     #[test]

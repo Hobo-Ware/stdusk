@@ -200,6 +200,7 @@ impl Stdusk {
                 let pointer = ui.input(|i| i.pointer.hover_pos());
                 let mut focus_click: Option<Vec<pane::Side>> = None;
                 let mut middle_paste: Option<(Vec<pane::Side>, String)> = None;
+                let mut restart_pane: Option<Vec<pane::Side>> = None;
                 for (path, rect) in &layout {
                     {
                         let term = tab.root_mut().leaf_at_mut(path).expect("leaf");
@@ -260,6 +261,17 @@ impl Stdusk {
                     {
                         middle_paste = Some((path.clone(), text));
                     }
+                    // Dead pane (on_exit = keep / restart's crash-loop fallback): dim overlay;
+                    // Enter (while focused) or a click respawns the shell in the same cwd.
+                    if let Some(exit) = term.exited() {
+                        ui::draw_exit_overlay(ui, *rect, exit.code);
+                        let enter = path == &tab.focused
+                            && !input_captured
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if resp.clicked() || enter {
+                            restart_pane = Some(path.clone());
+                        }
+                    }
                     if resp.clicked() || resp.drag_started() {
                         focus_click = Some(path.clone());
                     }
@@ -281,6 +293,12 @@ impl Stdusk {
                 // Apply the middle-click paste (deferred: needs &mut past the render borrow).
                 // Runs through the same normalize/trim pipeline; skips the multiline modal like
                 // Tabby (middle-click paste is an X11-style immediate action).
+                // Respawn a dead pane (deferred: needs &mut past the render borrow).
+                if let Some(p) = restart_pane
+                    && let Some(t) = tab.root_mut().leaf_at_mut(&p)
+                {
+                    crate::tabs::respawn_term(&self.cfg, ctx, t);
+                }
                 if let Some((p, text)) = middle_paste {
                     tab.focused.clone_from(&p);
                     let s = ui::normalize_paste(&text, tcfg.replace_newlines_on_paste);

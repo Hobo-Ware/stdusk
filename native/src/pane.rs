@@ -97,6 +97,20 @@ impl<T> Pane<T> {
         }
     }
 
+    /// Path of every leaf, left-to-right (parallel to `leaves`) - for whole-tree scans that
+    /// must address a leaf afterwards (shell-exit handling).
+    pub(crate) fn leaf_paths(&self) -> Vec<Vec<Side>> {
+        match self {
+            Pane::Leaf(_) => vec![Vec::new()],
+            Pane::Split { a, b, .. } => {
+                let mut v: Vec<Vec<Side>> =
+                    a.leaf_paths().into_iter().map(|p| prepend(Side::A, p)).collect();
+                v.extend(b.leaf_paths().into_iter().map(|p| prepend(Side::B, p)));
+                v
+            }
+        }
+    }
+
     /// Path to the first (all-`A`) leaf - the focus target after a collapse.
     pub(crate) fn first_leaf_path(&self) -> Vec<Side> {
         let mut path = Vec::new();
@@ -478,6 +492,17 @@ mod tests {
         // Nested (row then column on B) -> three leaf rects.
         let (tree, _) = tree.split(&[Side::B], SplitDir::Column, 3, false);
         assert_eq!(tree.miniature().len(), 3);
+    }
+
+    #[test]
+    fn leaf_paths_parallel_leaves() {
+        assert_eq!(Pane::leaf(1u32).leaf_paths(), vec![Vec::<Side>::new()]);
+        let (tree, _) = Pane::leaf(1u32).split(&[], SplitDir::Row, 2, false);
+        let (tree, _) = tree.split(&[Side::B], SplitDir::Column, 3, false);
+        let paths = tree.leaf_paths();
+        assert_eq!(paths, vec![vec![Side::A], vec![Side::B, Side::A], vec![Side::B, Side::B]]);
+        let leaves: Vec<u32> = paths.iter().map(|p| *tree.leaf_at(p).unwrap()).collect();
+        assert_eq!(leaves, vec![1, 2, 3]); // same order as leaves()
     }
 
     #[test]

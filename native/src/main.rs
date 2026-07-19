@@ -33,7 +33,7 @@ use config::Config;
 use finder::Search;
 use tabs::{Tab, TabAction, spawn_opts, spawn_tab};
 use terminal::PtyTerm;
-use ui::{apply_theme, basename, draw_toast, tint, toast_alpha};
+use ui::{apply_theme, auto_title, draw_toast, tint, toast_alpha};
 
 const COLS: usize = 80;
 const ROWS: usize = 24;
@@ -482,12 +482,18 @@ impl eframe::App for Stdusk {
             }
         }
 
-        // Auto-title unrenamed tabs from their cwd (basename).
+        // Auto-title unrenamed tabs: the shell's OSC 0/2 title (when dynamic_title) beats the
+        // cwd basename; a user rename always wins.
         for tab in &mut self.tabs {
-            if !tab.renamed
-                && let Some(c) = tab.focused_term().cwd()
-            {
-                tab.title = basename(&c);
+            if !tab.renamed {
+                let term = tab.focused_term();
+                if let Some(t) = auto_title(
+                    self.cfg.terminal.dynamic_title,
+                    term.title_osc().as_deref(),
+                    term.cwd().as_deref(),
+                ) {
+                    tab.title = t;
+                }
             }
         }
 
@@ -526,6 +532,10 @@ impl eframe::App for Stdusk {
                 notify_done(&tab.title, code);
             }
         }
+
+        // Shell-exit handling: apply `terminal.on_exit` (close pane / keep with overlay /
+        // respawn) to any pane whose shell exited - a dead pty must never leave a frozen tab.
+        self.handle_shell_exits(&ctx);
 
         // CLI awareness: ~1 Hz, refresh the process table and badge each tab with any known AI CLI
         // running in it (scanned across all of the tab's panes). Skipped in the screenshot harness

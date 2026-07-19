@@ -39,6 +39,8 @@ trim_whitespace_on_paste = true # strip surrounding whitespace from pastes (sing
 replace_newlines_on_paste = false # newlines -> spaces on paste
 bold_bright = true        # draw bold text in the bright ANSI colors
 ligatures = false         # draw -> => != >= <= ... as single symbol glyphs (visual only)
+on_exit = "close"         # pane when its shell exits: "close" | "keep" (banner, Enter restarts) | "restart" (auto-respawn)
+dynamic_title = true      # tab titles follow the shell's OSC 0/2 title (cwd basename fallback)
 
 [session]
 restore = true            # reopen last session's tabs (cwd/title/color) on launch

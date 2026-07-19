@@ -522,6 +522,29 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 0.3.0 - "No dead ends": shell-exit behavior + OSC 0/2 dynamic titles (V1 P0-1 + P0-3)
+- **Shell exit is observed, not ignored** (the dead-frozen-tab bug): the pty child handle now
+  moves into the reader thread (it was dropped at spawn); on read EOF/err the thread reaps the
+  REAL exit code (`child.wait()` returns promptly once the fd closed) into
+  `TabState.exited = ExitInfo { code, uptime_secs }` and repaints.
+- `terminal.on_exit = "close" (default) | "keep" | "restart"` (Settings > Terminal > Behavior
+  chips). Decision logic is pure + table-tested (`terminal::exit_action`/`on_exit_mode`):
+  close = the PANE closes (tab on its last pane; the last tab respawns fresh via `close_tab` -
+  never a zombie); keep = dim "[process exited: code]" overlay (`ui::draw_exit_overlay`), Enter
+  (focused) or click respawns in the same cwd; restart = in-place respawn with a crash-loop
+  guard - two consecutive deaths within `RAPID_EXIT_SECS` (2s) of spawn fall back to keep
+  (`PtyTerm.rapid_exits` carried across respawns by `tabs::respawn_term`).
+- `Stdusk::handle_shell_exits` applies ONE structural action per frame (a close invalidates the
+  other collected paths; the queued repaint drains the rest). `pane::leaf_paths()` added (tested).
+- **OSC 0/2 dynamic tab titles**: `OscScanner` emits `OscEvent::Title` (OSC 1 icon-only + bare
+  `]0` ignored; empty title = reset); the reader stores `TabState.title_osc`; auto-titling is
+  user rename > OSC title > cwd basename (`ui::auto_title`, tested) behind
+  `terminal.dynamic_title` (default true; live Settings toggle - gated at consumption, so no
+  respawn needed). The chunk-split proptest invariant covers the new event for free.
+- Real-pty e2e (inline `#[cfg(test)]`, real `/bin/sh` - a tests/ dir can't reach a binary
+  crate's internals): `sh -c 'exit 3'` reports code 3 + a sane uptime; a printf'd OSC 0 title
+  propagates to `title_osc`. 148 tests green; both screenshot harnesses verified.
+
 ## 0.2.5 - color-support env, settings redistribution, tab-bar rework
 - TERM=xterm-256color + COLORTERM=truecolor + TERM_PROGRAM=stdusk on every spawn (Finder launches
   had NO TERM -> child programs disabled ANSI colors entirely). Profile env still wins (map insert).

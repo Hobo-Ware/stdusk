@@ -1,6 +1,7 @@
 //! OSC sequence scanner. Frames `ESC ] ... (BEL | ST)` across chunk boundaries (mirrors
 //! Tabby's middleware/oscProcessing.ts) and emits the events we care about:
 //!
+//!   - OSC 0 / OSC 2                  -> window title (dynamic tab titles)
 //!   - OSC 7  / OSC 1337 CurrentDir=  -> cwd
 //!   - OSC 52 c;<base64>              -> clipboard (raw payload; decoded at use site, M6)
 //!   - OSC 9;4;state;pct              -> precise progress (ConEmu protocol)
@@ -10,6 +11,7 @@ use crate::progress::Progress;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum OscEvent {
+    Title(String), // OSC 0/2 window title; empty = reset
     Cwd(String),
     Clipboard(String),
     Progress(Progress),
@@ -82,6 +84,12 @@ fn parse_osc(payload: &[u8]) -> Option<OscEvent> {
     let text = String::from_utf8_lossy(payload);
     let fields: Vec<&str> = text.split(';').collect();
     match *fields.first()? {
+        // 0 (icon + title) / 2 (title): the window title. OSC 1 (icon only) is ignored, and a
+        // bare "0" with no `;` sets nothing; an empty title resets it.
+        "0" | "2" => {
+            fields.get(1)?;
+            Some(OscEvent::Title(fields[1..].join(";")))
+        }
         "1337" => {
             let rest = fields[1..].join(";");
             let dir = rest.strip_prefix("CurrentDir=")?;
@@ -218,7 +226,27 @@ mod tests {
     fn ignores_plain_text_and_unknown_osc() {
         let mut sc = OscScanner::new();
         assert_eq!(sc.feed(b"hello world"), vec![]);
-        assert_eq!(sc.feed(b"\x1b]0;window title\x07"), vec![]);
+        assert_eq!(sc.feed(b"\x1b]777;whatever\x07"), vec![]);
+    }
+
+    #[test]
+    fn title_osc_0_and_2() {
+        let cases: [(&[u8], &str); 4] = [
+            (b"\x1b]0;hello\x07", "hello"),
+            (b"\x1b]2;a;b\x1b\\", "a;b"), // semicolons in the title survive
+            (b"\x1b]0;\x07", ""),         // empty title = reset
+            (b"\x1b]2;~/Git\x07", "~/Git"), // titles are opaque text (no ~ expansion)
+        ];
+        for (input, want) in cases {
+            assert_eq!(
+                OscScanner::new().feed(input),
+                vec![OscEvent::Title(want.into())],
+                "{input:?}"
+            );
+        }
+        // OSC 1 (icon-only) and a bare "0" without a `;` are ignored.
+        assert_eq!(OscScanner::new().feed(b"\x1b]1;icon\x07"), vec![]);
+        assert_eq!(OscScanner::new().feed(b"\x1b]0\x07"), vec![]);
     }
 
     #[test]
