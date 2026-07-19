@@ -170,7 +170,7 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 |---|---|---|
 | Homebrew cask -> /Applications + `stdusk` CLI, Spotlight-findable | ✅ | `brew install hobo-ware/tap/stdusk` |
 | Universal (arm64+x86_64) `.app` built + released on tag | ✅ | native-release.yml |
-| Developer ID signing + notarization | ⬜ | needs Apple Developer acct; cask `postflight` strips quarantine as a stopgap |
+| Developer ID signing + notarization | 🟡 | CI scaffold ready (optional sign/notarize/staple step; cask drops the quarantine postflight when signed) - blocked only on the Apple Developer account secrets (packaging/README.md) |
 
 ## Dropped (out of scope - PLAN §1/§9)
 ⛔ SSH client + profiles/SFTP · ⛔ Serial · ⛔ Telnet · ⛔ Plugin system + marketplace ·

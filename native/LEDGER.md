@@ -42,13 +42,13 @@ cargo test             # unit + headless integration
 | M2.5 | Clickable links | todo |
 | M3 | Quake: configurable global hotkey (default Ctrl+`) | ✅ done, human-verified (toggle + hide/show + first-run sizing) |
 | M4 | Theming + config.toml (Tabby-default parity) | ✅ done, human-verified (themes + opacity + hotkey + font/height/progress) |
-| M5 | Tab mgmt: context menu, color, rename, reorder, keybinds, cwd | 🟡 code done, builds + 17 tests green, pending human verify |
-| M6 | Resize + scrollback + paste + OSC52 + bracketed-paste | 🟡 code done, builds + 17 tests green, pending human verify |
-| M6.5 | Mouse text selection + Cmd+C copy | 🟡 code done, builds + 17 tests green, pending human verify |
-| M7 | Scrollback search (Cmd+F) | 🟡 code done, builds + 34 tests green, pending human verify |
-| M8 | Split panes (pane tree, focus, drag-resize, per-pane pty) | 🟡 code done, builds + 46 tests green, pending human verify |
+| M5 | Tab mgmt: context menu, color, rename, reorder, keybinds, cwd | ✅ done; headless click / drag-reorder / close-x regression tests (0.2.3) + shipped through 0.1.0-0.5.0 daily use |
+| M6 | Resize + scrollback + paste + OSC52 + bracketed-paste | ✅ done; real-pty e2e (scrollback fill/wipe, CSI-8 grid dims) + Tabby-exact paste pipeline table-tested; live clipboard round-trip in the 1.0.0-rc human shortlist |
+| M6.5 | Mouse text selection + Cmd+C copy | ✅ done; hit-test/selection math unit-tested; live pasteboard copy in the 1.0.0-rc human shortlist |
+| M7 | Scrollback search (Cmd+F) | ✅ done; find bar screenshot-verified, headless backspace e2e, 9 search unit tests |
+| M8 | Split panes (pane tree, focus, drag-resize, per-pane pty) | ✅ done; pane math unit-tested + split layouts screenshot-verified (3-pane + broadcast shots) |
 | M9 | Shell integration (OSC 133) + exit dot; bell; cursor styles | ✅ done: auto-injected shell hooks, bell flash, cursor styles (running/ok tab indicators later dropped as noise - see M10) |
-| M10 | Ambient CLI awareness (tab badges for claude/gemini/...) | 🟡 code done, builds + 60 tests green + clippy clean, badges screenshot-verified; live detection pending human verify |
+| M10 | Ambient CLI awareness (tab badges for claude/gemini/...) | ✅ done; detect/classify unit-tested, badges screenshot-verified; live process detection in the 1.0.0-rc human shortlist |
 | M11 | Polish + settings GUI | ✅ done (0.2.1-0.2.4): full settings view, palette, profiles, sync |
 
 **M10 pivot (user):** the original M10 "first-party AI chat agent" was built then **dropped** -
@@ -531,6 +531,72 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.0.0 - "Trusted daily driver": the v1 tag
+Ships everything from the 1.0.0-rc prep section below plus the post-0.5.0 addenda
+(scheme-brightness filter chips + auto pre-filter, a11y dim-text 3:1 floor across all
+194 schemes). Released UNSIGNED: the signing/notarization scaffold is live in CI but
+dormant until the five Apple Developer secrets exist (see packaging/README.md); the
+cask's quarantine-strip postflight remains the stopgap and drops automatically on the
+first signed release. 199 tests, clippy -D warnings, fmt, all 10 screenshot harnesses
+green at tag time. Remaining work is the human-verify shortlist (below) - none of it
+blocks the tag; regressions there would have been caught by the automated layers.
+
+## 1.0.0-rc prep - adversarial sweep, signing scaffold, verify pass (version stays 0.5.0)
+V1.md's final milestone, minus the tag: the 1.0.0 bump is a coordinator decision. Version
+stays 0.5.0; everything below is on the tree ready for the release commit.
+- **Adversarial sweep of 0.4.0-0.5.0** (right-click press tracking, broadcast fan-out,
+  pin/move boundary math, hotkey matcher, autosync, scrollback wipe, aggregation fns).
+  Three confirmed bugs, fixed with regression tests; everything else survived scrutiny:
+  1. **Cmd+C/X/V `[hotkeys]` binds were silently dead** - egui-winit folds ANY Cmd-modified
+     C/X/V press into `Event::Copy/Cut/Paste` and returns before pushing the Key event
+     (the M6.5 gotcha, now load-bearing), so such a bind could never fire - exactly the
+     "silently dead bind" the Hotkeys struct design promises never happens.
+     `ui::parse_hotkey_spec` now REJECTS them (red field + "Invalid hotkey" toast);
+     `cmd_clipboard_chords_are_rejected_as_unmatchable`.
+  2. **Cmd+K / "Clear Terminal" on the alt screen wiped the app's grid + mailed it a `^L`**
+     (a literal insert in vim's insert mode). `PtyTerm::clear_all` now returns `bool` and
+     refuses on `ALT_SCREEN` (the grid there belongs to the app; there's no scrollback to
+     drop); callers send Ctrl-L only on `true`. `real_pty_clear_all_is_refused_on_the_alt_screen`.
+  3. **The launch-autosync pull could clobber concurrent local changes**: a slow
+     `git fetch + reset --hard` can land minutes after launch; the handler blindly
+     `Config::load()`d + rebaselined, discarding a Save (already hard-reset on disk) or
+     live settings edits. The launch pull now snapshots the config TOML at spawn
+     (`Stdusk.launch_pull_cfg`); a result arriving after the config changed is skipped
+     (`sync::pull_is_stale`, tested) and the LOCAL version is written back to disk (the
+     reset already replaced it) with a "Sync pull skipped (local changes)" toast. Manual
+     Pull passes no baseline - overwriting local stays its whole point.
+  - Verified-clean (no code change): right-press path tracking (stale press dropped on
+    off-pane release), broadcast exit-on-switch sweep + confirmed-paste fan-out,
+    `pin_target`/`moved_index` boundary math, first-match-wins hotkey precedence,
+    aggregation fns, wipe-before-Ctrl-L ordering, push-failure toast path. Known accepted
+    edges: a rebind onto a FIXED chord (Cmd+1-9, Ctrl+Tab) double-fires app-side (cousin of
+    the documented terminal-chord collision); the scheme-filter + a11y-dim addenda reviewed
+    clean.
+- **Signing/notarization scaffold** (`native-release.yml`): a new optional "Sign & notarize"
+  step runs when all five secrets exist (`MACOS_CERT_P12`/`MACOS_CERT_PASSWORD`/
+  `NOTARY_KEY_ID`/`NOTARY_ISSUER`/`NOTARY_KEY`): throwaway keychain, `codesign --deep
+  --options runtime --timestamp`, `notarytool submit --wait` (API key), `stapler staple`,
+  `spctl --assess`; missing secrets = a log line + the exact old ad-hoc behavior. The zip +
+  sha256 moved AFTER signing (the sha must cover the stapled bits). The generated cask
+  drops the quarantine-strip `postflight` when signed (gated on the step's `signed`
+  output; both variants dry-run verified). Full cert-export + App Store Connect API key
+  setup documented in packaging/README.md.
+- **Verify sweep (all green)**: 199 tests (196 + the 3 regression tests above); clippy -D
+  warnings; fmt; `--version` = 0.5.0; all 10 screenshot harnesses exit 0 and were visually
+  checked (default incl. pin glyph + badges, broadcast borders, every STDUSK_SHOT_SECTION
+  incl. profiles/hotkeys + the new scheme-brightness chips); fresh HOME-override e2e:
+  corrupt config.toml -> defaults + clean launch, corrupt session.toml -> clean launch,
+  complete user XRDB scheme -> applied w/ adaptive chrome (NOTE: `parse_xrdb` requires
+  color0-7 - a partial scheme file falls back by design).
+- **Human-verify shortlist for the 1.0.0 tag** (everything else is automated): live quake
+  toggling (global hotkey + hide-on-blur), notifications (notify-when-done / on-activity
+  osascript), clipboard round-trips (Cmd+C/V pasteboard, OSC 52, middle-click,
+  copy-on-select), live AI-CLI badge detection (real `claude`/`gemini`), and - once the
+  Apple Developer secrets exist - one signed-build `brew install` (no quarantine strip).
+- **1.0 gate**: Developer ID signing is the ONLY remaining external blocker; it needs the
+  user's Apple Developer account ($99/yr). The workflow + cask + docs are ready - add the
+  five secrets, tag, done.
+
 ## 0.5.0 - "Make it yours": profiles editor GUI, hotkey remapping, autosync (V1 P1s)
 - **Profiles editor (Settings > Profiles**, sidebar between Terminal and Quake, Phosphor
   identification-badge E6F6): list of configured profiles (color dot + name + shell summary,
@@ -590,18 +656,42 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   on a 60s loop; pull-on-launch + push-on-save is the leaner git-appropriate equivalent
   (documented here on purpose). Settings > Session > "Auto sync" toggle, enabled only with a
   repo, hint "Pull on launch, push on save".
+- **Scheme browser brightness filter (user ask)**: All / Light / Dark chips next to the
+  search field. Classification = `colors::theme_is_dark(&Theme)` (per-theme version of the
+  chrome `is_dark` rule; the pack splits ~170 dark / 24 light). Default is the AUTO
+  pre-filter: following the system, a pick can only land in the current appearance's slot,
+  so the list opens filtered to that brightness (`settings::default_bright_filter`, tested);
+  manual mode opens on All. The user can override any time (`SettingsState.scheme_bright`,
+  `Option` so None = auto; reset on section re-entry). `bright_allows` (tested) applies over
+  the search results; a chip click applies the same frame.
+- **A11y audit of all 194 schemes (Haiku agent, WCAG contrast over the XRDB pack +
+  built-ins)**: it's a DATA problem - 37% of the pack ships `ansi[8]` (the chrome "dim"
+  role) nearly invisible against bg (many at ratio ~1.0: Solarized Dark, Tomorrow Night
+  Bright, ...); 64% have SOME ansi color at ~1.0 vs bg; 13 schemes fail fg-vs-bg AA (<4.5),
+  4 critically (<3.0: C64 2.26, Royal 2.34, Shaman 2.44, CrayonPonyFish 2.76); built-ins are
+  fine except tokyo-night's dim at 1.91. Fixes shipped: **`colors::dim()` now has a 3:1 WCAG
+  floor** (pure `legible_dim` = `ensure_contrast(ansi[8], bg, 3.0)`, a no-op when already
+  passing - chrome text can never vanish again; `dim_text_meets_the_floor_on_every_scheme`
+  asserts it over the whole pack) and **scheme-row names** draw `ensure_contrast(fg, bg,
+  3.0)` so the 4 low-fg schemes stay browsable. Terminal CELLS stay theme-exact on purpose -
+  per-cell fidelity remains the `terminal.minimum_contrast` opt-in (Tabby ships 4); no
+  scheme data was rewritten.
 - **Screenshot harness**: `STDUSK_SHOT_SECTION=profiles|hotkeys` added; the profiles shot
   injects two demo profiles (only when the user config has none) and expands the editor
-  (`SettingsState::select_profile`). Both verified + the default shot unchanged.
-- 192 tests green (+13); clippy -D warnings + fmt clean. New tests: config
+  (`SettingsState::select_profile`). Both verified + the default shot unchanged; the scheme
+  browser re-verified with the chips.
+- 196 tests green (+17); clippy -D warnings + fmt clean. New tests: config
   `hotkeys_default_to_the_shipped_binds` / `partial_hotkeys_table_keeps_other_defaults` /
   `hotkeys_round_trip_through_toml`; ui `hotkey_matches_exact_chords_only` /
   `hotkey_plus_and_equals_share_the_key` / `garbage_hotkey_specs_never_match` /
   `bare_single_keys_are_rejected_but_fkeys_pass` /
   `rebound_terminal_chords_double_fire_by_design` / `shortcut_tip_hides_unbound_chords`;
   settings `args_split_handles_quotes_and_escapes` / `args_join_round_trips_through_split` /
-  `env_rows_drop_blank_keys_and_last_write_wins` (+ `sections_render_headless` now drives
-  the profiles editor + hotkey rows); sync `autosync_needs_opt_in_repo_and_an_idle_worker`.
+  `env_rows_drop_blank_keys_and_last_write_wins` /
+  `bright_filter_defaults_to_the_slot_being_set` / `bright_filter_partitions_light_and_dark`
+  (+ `sections_render_headless` now drives the profiles editor + hotkey rows); colors
+  `dim_text_meets_the_floor_on_every_scheme` / `theme_darkness_classifies_builtins`; sync
+  `autosync_needs_opt_in_repo_and_an_idle_worker`.
 
 ## 0.4.1 - "Panes & tabs polish": broadcast input, aggregated tab state, menu polish (V1 P1s)
 - **Broadcast input (Tabby `pane-focus-all`)**: Cmd+Shift+I (Tabby's exact default binding) or
@@ -970,10 +1060,11 @@ builder agent; implementation + integration here.
   font-zoom/copy-on-select/middle-click/scroll hotkeys), color-scheme import (191 XRDB schemes),
   tab power features, session restore, settings GUI.
 - **Cut future releases**: bump `native/Cargo.toml` version, tag `stdusk-v<x>`, push; then copy the
-  release's generated `stdusk.rb` into the tap's `Formula/stdusk.rb` (consider automating the tap
-  push with a PAT). `.app` is unsigned/un-notarized - fine via brew formula (no Gatekeeper
-  quarantine); a signed bundle is a later polish item.
-- **Live-verify**: M5-M9 interactions, M10 CLI-badge detection against real claude/gemini/etc.
+  release's generated `stdusk.rb` into the tap's `Casks/stdusk.rb` (consider automating the tap
+  push with a PAT). Signing + notarization run automatically once the five Apple secrets exist
+  (see the 1.0.0-rc prep section + packaging/README.md); until then the cask strips quarantine.
+- **Live-verify**: the 1.0.0-rc human shortlist (quake toggle, notifications, clipboard
+  round-trips, live CLI badges) - see the 1.0.0-rc prep section.
 - Backlog: M8 pane reorder (drag-to-rearrange). (Broadcast input + aggregated tab progress
   shipped 0.4.1; pane zoom shipped M12; settings GUI 0.2.1-0.2.2; all-match search highlight
   0.3.2; the headless `run_ui` harness replaced the egui_kittest idea.)

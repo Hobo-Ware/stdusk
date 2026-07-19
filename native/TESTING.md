@@ -230,3 +230,26 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | Settings > Session > Auto sync (repo set), Save | Toggle enabled only with a repo; every Save pushes ("Settings pushed" toast); rapid saves don't stack pushes |
 | `[sync] auto = true`, relaunch | One background pull on launch ("Settings pulled" toast; theme/hotkey re-apply); a failing repo toasts once and startup still completes |
 | `STDUSK_SHOT_SECTION=profiles cargo run -- --screenshot-settings /tmp/s.png` | Renders the Profiles section (demo profiles + open editor) and exits 0; `=hotkeys` renders the Hotkeys section |
+| Color scheme browser with `follow_system = true` (macOS in dark mode) | List opens pre-filtered to DARK schemes (the slot a pick would set); the All / Light / Dark chips can override; light mode pre-filters to Light |
+| `follow_system = false` | Browser opens on All; Light chip shows only light-background schemes (~24), Dark only dark (~170); search combines with the filter |
+| Leave and re-enter the Color scheme section | Filter resets to the auto default |
+| Apply "solarized-dark" (or another scheme the a11y audit flagged for invisible ansi[8]) | Settings/tab-bar dim text (descriptions, hints, inactive titles) stays readable - never fades into the background (3:1 floor on `colors::dim`) |
+| Browse to "c64" / "royal" / "shaman" in the scheme list | Row names readable on their own row backgrounds despite the schemes' low-contrast fg |
+
+## 19. 1.0.0-rc - adversarial-sweep fixes
+| Step | Expect |
+|---|---|
+| Open `vim`, enter insert mode, press Cmd+K | Nothing happens - no wipe, no stray `^L` character inserted; quit vim and the scrollback is intact (the wipe refuses on the alt screen) |
+| Settings > Hotkeys: type `Cmd+C` (or `Cmd+Shift+V`) in any field | Red while typed; "Invalid hotkey" toast on blur - Cmd+C/X/V are clipboard events and can never fire as binds |
+| `[sync] auto = true` with a slow/unreachable repo: launch, open settings, change something and Save before the pull lands | "Sync pull skipped (local changes)" toast; your change survives in config.toml (the pull never clobbers a config you touched while it ran) |
+
+## 20. 1.0.0 human shortlist (the release gate's manual pass)
+Everything else in this file is covered by automation (199 tests, screenshot harnesses,
+HOME-override e2e); these are the interactions only a human can drive:
+| Area | Check |
+|---|---|
+| Quake | Ctrl+\` summon/hide from another app; hide-on-blur; menu-bar icon Show/Hide/Quit (§9) |
+| Notifications | notify-when-done (>10s command while hidden) + per-tab notify-on-activity (§5, §17) |
+| Clipboard | Cmd+C/V real pasteboard round-trip, OSC 52, middle-click paste, copy-on-select (§1, §2) |
+| CLI badges | run a real `claude` / `gemini` - brand mark appears within ~1s (§10, §15) |
+| Signed build | once signing secrets exist: `brew install` a signed release - launches with NO quarantine strip (cask has no postflight) |
