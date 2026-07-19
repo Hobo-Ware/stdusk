@@ -110,6 +110,24 @@ fn indexed(i: u8) -> Color32 {
     }
 }
 
+/// Color reported for an OSC 4;n / 10 / 11 / 12 palette QUERY, from the given theme. Index
+/// space is alacritty's: 0-255 palette, then `NamedColor::Foreground/Background/Cursor`
+/// (256/257/258).
+pub(crate) fn query_color_in(t: &Theme, index: usize) -> Color32 {
+    match index {
+        0..=15 => t.ansi[index],
+        16..=255 => indexed(index as u8),
+        257 => t.bg,
+        258 => t.cursor,
+        _ => t.fg, // 256 (Foreground) + anything exotic
+    }
+}
+
+/// Live-theme `query_color_in`: queries answer with whatever theme is active at reply time.
+pub(crate) fn query_color(index: usize) -> Color32 {
+    query_color_in(&theme(), index)
+}
+
 // ---- derived UI-chrome colors (everything keyed off the theme) ----
 
 pub(crate) fn bg() -> Color32 {
@@ -154,6 +172,14 @@ pub(crate) fn is_dark() -> bool {
 pub(crate) fn theme_is_dark(t: &Theme) -> bool {
     let c = t.bg;
     0.299 * f32::from(c.r()) + 0.587 * f32::from(c.g()) + 0.114 * f32::from(c.b()) < 128.0
+}
+/// `COLORFGBG` env advertisement (`fg;bg` ANSI indices): the pre-OSC-11 way CLIs guess light
+/// vs dark. Reads the live theme; spawn snapshots it into the child's env.
+pub(crate) fn colorfgbg() -> &'static str {
+    colorfgbg_for(is_dark())
+}
+pub(crate) fn colorfgbg_for(dark: bool) -> &'static str {
+    if dark { "15;0" } else { "0;15" }
 }
 pub(crate) fn elevated() -> Color32 {
     shade(theme().bg, if is_dark() { 1.28 } else { 0.90 }) // active-tab bg, set off from the bar
@@ -410,6 +436,28 @@ mod tests {
         assert!(theme_is_dark(&dracula()));
         assert!(theme_is_dark(&tokyo_night()));
         assert!(!theme_is_dark(&one_half_light()));
+    }
+
+    #[test]
+    fn query_color_maps_palette_and_dynamic_indices() {
+        // OSC 4;n / 10 / 11 / 12 query answers, per theme: ANSI 16, the 256-cube/grayscale,
+        // then alacritty's dynamic indices (256 fg / 257 bg / 258 cursor).
+        for t in [one_half_dark(), one_half_light()] {
+            assert_eq!(query_color_in(&t, 1), t.ansi[1]);
+            assert_eq!(query_color_in(&t, 15), t.ansi[15]);
+            assert_eq!(query_color_in(&t, 196), Color32::from_rgb(255, 0, 0)); // cube red
+            assert_eq!(query_color_in(&t, 232), Color32::from_rgb(8, 8, 8)); // grayscale start
+            assert_eq!(query_color_in(&t, 256), t.fg);
+            assert_eq!(query_color_in(&t, 257), t.bg);
+            assert_eq!(query_color_in(&t, 258), t.cursor);
+            assert_eq!(query_color_in(&t, 400), t.fg); // out of range -> fg fallback
+        }
+    }
+
+    #[test]
+    fn colorfgbg_advertises_theme_darkness() {
+        assert_eq!(colorfgbg_for(true), "15;0"); // dark theme: light fg on black bg
+        assert_eq!(colorfgbg_for(false), "0;15"); // light theme: dark fg on white bg
     }
 
     #[test]

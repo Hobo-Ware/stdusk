@@ -12,7 +12,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{Handler, NamedPrivateMode, Processor, Rgb};
 use base64::Engine;
 use eframe::egui::Color32;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -158,18 +158,56 @@ impl Dimensions for Dims {
     }
 }
 
-/// Event sink for the alacritty `Term`. We drive repaints from the reader thread, so the only
-/// event we care about is the bell -> flag it on the shared state for the UI to flash.
+/// A pty-bound answer to a terminal query: DA/DSR/DECRQM reports (`PtyWrite`) and OSC 4/10/11/12
+/// color reads (`ColorRequest`). `send_event` fires inside the term lock (mid-`advance`), so
+/// answers are queued here and written after the parse pass - no blocking IO under the grid lock.
+enum Reply {
+    Text(String),
+    Color(usize, Arc<dyn Fn(Rgb) -> String + Sync + Send>),
+}
+
+/// Event sink for the alacritty `Term`, fired from the reader thread mid-`advance`:
+/// - `Bell` -> flag for the UI flash.
+/// - `Title`/`ResetTitle` -> the tab title. This is the only path that sees the xterm title
+///   STACK (`CSI 22/23 t`): copilot sets its title via OSC 0 but restores it via a stack pop,
+///   which the OSC scanner can't see - dropping these left "GitHub Copilot" stuck on the tab.
+/// - `PtyWrite`/`ColorRequest` -> queued query answers. Unanswered queries are how TUI CLIs
+///   mis-detect the theme (gemini assumes a dark bg when OSC 11 stays silent) or stall on
+///   DA/DSR probes.
 #[derive(Clone)]
 struct EventProxy {
     state: Arc<Mutex<TabState>>,
+    replies: Arc<Mutex<Vec<Reply>>>,
 }
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
-        if matches!(event, Event::Bell)
-            && let Ok(mut s) = self.state.lock()
-        {
-            s.bell = true;
+        match event {
+            Event::Bell => {
+                if let Ok(mut s) = self.state.lock() {
+                    s.bell = true;
+                }
+            }
+            Event::Title(t) => {
+                if let Ok(mut s) = self.state.lock() {
+                    s.title_osc = (!t.is_empty()).then_some(t);
+                }
+            }
+            Event::ResetTitle => {
+                if let Ok(mut s) = self.state.lock() {
+                    s.title_osc = None;
+                }
+            }
+            Event::PtyWrite(t) => {
+                if let Ok(mut r) = self.replies.lock() {
+                    r.push(Reply::Text(t));
+                }
+            }
+            Event::ColorRequest(index, format) => {
+                if let Ok(mut r) = self.replies.lock() {
+                    r.push(Reply::Color(index, format));
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -202,8 +240,8 @@ fn resolve_cwd(
 
 pub(crate) struct PtyTerm {
     term: Arc<FairMutex<Term<EventProxy>>>,
-    writer: Box<dyn Write + Send>,
-    master: Box<dyn MasterPty + Send>, // kept for resize
+    writer: Arc<Mutex<Box<dyn Write + Send>>>, // shared with the reader thread (query replies)
+    master: Box<dyn MasterPty + Send>,         // kept for resize
     state: Arc<Mutex<TabState>>,
     cols: usize,
     rows: usize,
@@ -233,6 +271,10 @@ impl PtyTerm {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "stdusk");
+        // COLORFGBG advertises light/dark (fg;bg ANSI indices) for CLIs that read the env
+        // instead of querying OSC 11 (vim, some node TUIs). Spawn-time snapshot; live OSC
+        // queries always answer with the theme active at reply time.
+        cmd.env("COLORFGBG", colors::colorfgbg());
         if let Some(dir) =
             resolve_cwd(profile.as_ref(), cwd).filter(|d| std::path::Path::new(d).is_dir())
         {
@@ -255,9 +297,11 @@ impl PtyTerm {
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().expect("reader");
-        let writer = pair.master.take_writer().expect("writer");
+        // Shared with the reader thread, which writes query answers back to the pty.
+        let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("writer")));
 
         let state = Arc::new(Mutex::new(TabState::default()));
+        let replies = Arc::new(Mutex::new(Vec::new()));
         let term_config = Config {
             scrolling_history: opts.scrollback_lines,
             semantic_escape_chars: opts.word_separators.clone(),
@@ -266,11 +310,12 @@ impl PtyTerm {
         let term = Arc::new(FairMutex::new(Term::new(
             term_config,
             &Dims { cols, rows },
-            EventProxy { state: state.clone() },
+            EventProxy { state: state.clone(), replies: replies.clone() },
         )));
 
         let term_reader = term.clone();
         let state_reader = state.clone();
+        let writer_reader = writer.clone();
         thread::spawn(move || {
             let spawned = std::time::Instant::now(); // for ExitInfo.uptime_secs
             let mut parser: Processor = Processor::new();
@@ -284,23 +329,61 @@ impl PtyTerm {
                     Ok(n) => {
                         let chunk = &buf[..n];
                         let osc_events = osc.feed(chunk);
-                        // Advance the terminal, then read whether we're now in the alt-screen.
-                        let alt = {
+                        let prompt_started = osc_events
+                            .iter()
+                            .any(|e| matches!(e, OscEvent::Shell(ShellEvent::PromptStart)));
+                        // Advance the terminal; then, still under the lock: answer queued
+                        // queries (color reads may need app-set OSC 4 overrides from
+                        // `term.colors()`), heal leaked modes, read the alt-screen flag.
+                        let (alt, reply, healed_alt) = {
                             let mut term = term_reader.lock();
                             parser.advance(&mut *term, chunk);
-                            term.mode().contains(TermMode::ALT_SCREEN)
+                            let mut reply = Vec::new();
+                            for r in replies.lock().unwrap().drain(..) {
+                                match r {
+                                    Reply::Text(t) => reply.extend_from_slice(t.as_bytes()),
+                                    Reply::Color(i, format) => {
+                                        // An app-set palette entry (OSC 4/10/11 set) wins;
+                                        // otherwise report the live theme's color.
+                                        let rgb = term.colors()[i].unwrap_or_else(|| {
+                                            let c = colors::query_color(i);
+                                            Rgb { r: c.r(), g: c.g(), b: c.b() }
+                                        });
+                                        reply.extend_from_slice(format(rgb).as_bytes());
+                                    }
+                                }
+                            }
+                            // A TUI killed without cleanup (SIGKILL, crash) leaves the alt
+                            // screen + a hidden cursor behind and the pane looks frozen. The
+                            // prompt mark (OSC 133;A) proves the shell owns the pty again:
+                            // reset exactly those two leaks. Deliberately NOT reset:
+                            // bracketed paste (zsh arms it for its own prompt), DECCKM /
+                            // kitty / modifyOtherKeys (`key_to_bytes` is a static table that
+                            // never consults them), mouse modes (we send no reports).
+                            let mut healed_alt = false;
+                            if prompt_started {
+                                if term.mode().contains(TermMode::ALT_SCREEN) {
+                                    term.swap_alt();
+                                    healed_alt = true;
+                                }
+                                if !term.mode().contains(TermMode::SHOW_CURSOR) {
+                                    term.set_private_mode(NamedPrivateMode::ShowCursor.into());
+                                }
+                            }
+                            (term.mode().contains(TermMode::ALT_SCREEN), reply, healed_alt)
                         };
                         let text = String::from_utf8_lossy(chunk);
                         let mut progress = prog.feed(&text, alt);
                         let mut cwd_update = None;
                         let mut clip_update = None;
                         let mut cmd_update = None;
-                        let mut title_update = None; // Some(title); empty resets
                         let mut notify = None; // Some(exit) when a long command just finished
                         for ev in osc_events {
                             match ev {
                                 OscEvent::Progress(p) => progress = p, // OSC 9;4 wins over %-scrape
-                                OscEvent::Title(t) => title_update = Some(t),
+                                // Titles flow through the Term's Title/ResetTitle events
+                                // (EventProxy), which also cover the CSI 22/23 t title stack.
+                                OscEvent::Title(_) => {}
                                 OscEvent::Cwd(c) => cwd_update = Some(c),
                                 OscEvent::Clipboard(b64) => {
                                     if let Ok(bytes) =
@@ -343,12 +426,20 @@ impl PtyTerm {
                             if let Some(c) = cmd_update {
                                 s.cmd = c;
                             }
-                            if let Some(t) = title_update {
-                                s.title_osc = (!t.is_empty()).then_some(t);
-                            }
                             if let Some(code) = notify {
                                 s.done_notify = Some(code);
                             }
+                        }
+                        // Query answers go straight back to the pty; after an alt-screen
+                        // heal, a Ctrl-L asks the shell to repaint the prompt it may have
+                        // drawn on the (now abandoned) alt grid.
+                        if !reply.is_empty() || healed_alt {
+                            let mut w = writer_reader.lock().unwrap();
+                            let _ = w.write_all(&reply);
+                            if healed_alt {
+                                let _ = w.write_all(b"\x0c");
+                            }
+                            let _ = w.flush();
                         }
                         ctx.request_repaint();
                     }
@@ -381,8 +472,10 @@ impl PtyTerm {
     }
 
     pub(crate) fn send(&mut self, bytes: &[u8]) {
-        let _ = self.writer.write_all(bytes);
-        let _ = self.writer.flush();
+        if let Ok(mut w) = self.writer.lock() {
+            let _ = w.write_all(bytes);
+            let _ = w.flush();
+        }
     }
 
     /// Paste text, wrapped in bracketed-paste markers when the app enabled that mode.
@@ -515,6 +608,7 @@ impl PtyTerm {
     pub(crate) fn grid_snapshot(&self) -> GridSnap {
         let term = self.term.lock();
         let selection = term.selection.as_ref().and_then(|s| s.to_range(&term));
+        let show_cursor = term.mode().contains(TermMode::SHOW_CURSOR);
         let grid = term.grid();
         // The GRID's dimensions are authoritative - an app can resize it (CSI 8) independently of
         // our last pty resize, and returning self.cols/rows here would make the renderer index
@@ -541,8 +635,9 @@ impl PtyTerm {
             let (c, wide) = snap_glyph(cell.c, cell.flags);
             cells.push(CellSnap { c, fg: colors::cell_fg(fg_c, bright), bg, selected, wide, bold });
         }
-        // Cursor only shown when the viewport is at the bottom (not scrolled into history).
-        let cursor = if grid.display_offset() == 0 {
+        // Cursor only shown at the bottom (not scrolled into history) AND while the app
+        // hasn't hidden it (DECTCEM `CSI ?25l` - vim/copilot hide it for their own UI).
+        let cursor = if show_cursor && grid.display_offset() == 0 {
             let cp = grid.cursor.point;
             Some((
                 (cp.line.0.max(0) as usize).min(rows.saturating_sub(1)),
@@ -887,6 +982,134 @@ mod tests {
         })
         .expect("bold output never hit the grid");
         assert_eq!(got, (false, true));
+    }
+
+    /// Row-major grid text (skips wide-char spacers) - lets `contains` match strings that
+    /// wrap across rows, since wrapped output is contiguous in row-major order.
+    fn grid_text(term: &PtyTerm) -> String {
+        term.grid_snapshot().cells.iter().map(|c| c.c).filter(|c| *c != '\0').collect()
+    }
+
+    #[test]
+    fn real_pty_osc_11_query_answers_with_the_theme_bg() {
+        // The OSC 11 background query is how gemini/copilot detect light vs dark; unanswered,
+        // they assume a dark terminal and render unreadable colors on a light theme. The
+        // reply must encode the LIVE theme bg in X-color format. The script goes raw first
+        // (like any querying TUI - canonical mode would hold the reply until a newline),
+        // then echoes the 24-byte reply back with ESC mapped to 'E' so it lands in the grid.
+        let bg = crate::colors::bg();
+        let want = format!(
+            "E]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}",
+            bg.r(),
+            bg.g(),
+            bg.b()
+        );
+        let script =
+            "stty raw -echo; printf '\\033]11;?\\007'; head -c 24 | tr '\\033' 'E'; sleep 5";
+        let got = spawn_and_poll(script, |t| grid_text(t).contains(&want).then_some(()));
+        assert!(got.is_some(), "OSC 11 reply must carry the theme bg ({want})");
+    }
+
+    #[test]
+    fn real_pty_da_and_dsr_queries_are_answered() {
+        // DA1 (CSI c) and DSR 6 (cursor position) are probe-and-wait queries; TUIs stall or
+        // mis-fall-back when they stay silent (they used to be dropped with every other
+        // `Event::PtyWrite`). Echo trick as above: the DA1 reply is exactly 5 bytes; after
+        // echoing it the cursor sits at column 6, so the DSR reply is exactly `ESC[1;6R`.
+        let script = "stty raw -echo; printf '\\033[c'; head -c 5 | tr '\\033' 'E'; \
+                      printf '\\033[6n'; head -c 6 | tr '\\033' 'E'; sleep 5";
+        let got = spawn_and_poll(script, |t| {
+            let text = grid_text(t);
+            (text.contains("E[?6c") && text.contains("E[1;6R")).then_some(())
+        });
+        assert!(got.is_some(), "DA1 + DSR replies must reach the app");
+    }
+
+    #[test]
+    fn real_pty_title_stack_pop_restores_the_previous_title() {
+        // copilot sets its title via OSC 0 but RESTORES it via the xterm title stack
+        // (CSI 22;0t push / 23;0t pop), which only the Term's Title events see - the old
+        // OSC-scanner-only path left "GitHub Copilot" stuck on the tab forever.
+        let term = e2e_term(
+            "printf '\\033]0;before\\007'; sleep 1; \
+             printf '\\033[22;0t\\033]0;GitHub Copilot\\007'; sleep 1; \
+             printf '\\033[23;0t'; sleep 5",
+        );
+        poll_term(&term, |t| (t.title_osc().as_deref() == Some("GitHub Copilot")).then_some(()))
+            .expect("the app title never applied");
+        poll_term(&term, |t| (t.title_osc().as_deref() == Some("before")).then_some(()))
+            .expect("title stack pop must restore the pre-app title");
+    }
+
+    #[test]
+    fn real_pty_hidden_cursor_is_absent_from_the_snapshot() {
+        // DECTCEM hide (CSI ?25l) must yield `cursor: None` - the renderer used to paint a
+        // cursor over TUIs that hid their own.
+        let term = e2e_term("printf '\\033[?25lX'; sleep 5");
+        poll_term(&term, |t| {
+            let snap = t.grid_snapshot();
+            (snap.cells.iter().any(|c| c.c == 'X') && snap.cursor.is_none()).then_some(())
+        })
+        .expect("hidden cursor must clear the snapshot cursor");
+    }
+
+    #[test]
+    fn real_pty_prompt_mark_heals_a_leaked_alt_screen_and_cursor() {
+        // A TUI killed without cleanup leaves the alt screen + a hidden cursor behind and
+        // the pane looks frozen. The next prompt mark (OSC 133;A) proves the shell owns the
+        // pty again: both leaks must reset and the pane recover.
+        let term = e2e_term(
+            "printf '\\033[?1049h\\033[?25lFAKEUI'; sleep 1; printf '\\033]133;A\\007'; sleep 5",
+        );
+        poll_term(&term, |t| {
+            (t.is_alt_screen() && t.grid_snapshot().cursor.is_none()).then_some(())
+        })
+        .expect("the fake TUI never took the alt screen");
+        poll_term(&term, |t| (!t.is_alt_screen()).then_some(()))
+            .expect("prompt mark must leave the leaked alt screen");
+        let snap = term.grid_snapshot();
+        assert!(snap.cursor.is_some(), "prompt mark must restore the hidden cursor");
+        assert!(
+            !grid_text(&term).contains("FAKEUI"),
+            "the dead TUI's frame must be gone with the alt screen"
+        );
+    }
+
+    #[test]
+    fn real_pty_prompt_mark_without_leaks_is_a_noop() {
+        // The heal fires only on leaked state: a prompt mark on a healthy primary screen
+        // leaves the grid alone (no swap, no redraw request).
+        let term = e2e_term("printf 'ok\\033]133;A\\007'; sleep 5");
+        poll_term(&term, |t| grid_text(t).contains("ok").then_some(()))
+            .expect("output never landed");
+        assert!(!term.is_alt_screen());
+        assert!(term.grid_snapshot().cursor.is_some());
+        assert!(grid_text(&term).contains("ok"), "healthy grid must be untouched");
+    }
+
+    #[test]
+    fn real_pty_vim_enter_exit_leaves_modes_clean() {
+        // Real-TUI sanity sweep: vim enters the alt screen and must leave everything clean
+        // on a NORMAL exit (no heal involved - its own rmcup/cnorm do the work).
+        let term = e2e_term("vim -u NONE +q; printf 'VIMDONE'; sleep 5");
+        poll_term(&term, |t| grid_text(t).contains("VIMDONE").then_some(()))
+            .expect("vim never ran/exited");
+        assert!(!term.is_alt_screen(), "vim must leave the alt screen");
+        assert!(term.grid_snapshot().cursor.is_some(), "cursor must be visible after vim");
+    }
+
+    #[test]
+    fn real_pty_less_enter_exit_leaves_modes_clean() {
+        // Same sweep for a pager: full-screen less takes the alt screen; `q` must restore it.
+        let mut term = e2e_term("seq 200 | less; printf 'LESSDONE'; sleep 5");
+        poll_term(&term, |t| t.is_alt_screen().then_some(()))
+            .expect("less never took the alt screen");
+        term.send(b"q");
+        poll_term(&term, |t| {
+            (!t.is_alt_screen() && grid_text(t).contains("LESSDONE")).then_some(())
+        })
+        .expect("less must exit cleanly on q");
+        assert!(term.grid_snapshot().cursor.is_some(), "cursor must be visible after less");
     }
 
     #[test]
