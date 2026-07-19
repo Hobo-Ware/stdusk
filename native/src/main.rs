@@ -390,6 +390,18 @@ impl Stdusk {
                 _ => settings::Section::ColorScheme,
             };
             settings.open_section(section);
+            // STDUSK_SHOT_DROPDOWN=<id_salt>: render with that searchable dropdown open (its
+            // popup can't be pointer-driven headless). The light/dark slot dropdowns only
+            // exist with follow-system on - flip it and pin both slots so the capture stays
+            // deterministic (the per-frame OS-theme reconcile is skipped in the harness).
+            if let Ok(salt) = std::env::var("STDUSK_SHOT_DROPDOWN") {
+                if salt == "theme_light" || salt == "theme_dark" {
+                    cfg.appearance.follow_system = true;
+                    cfg.appearance.theme_light = "one-half-light".into();
+                    cfg.appearance.theme_dark = "one-half-dark".into();
+                }
+                settings.force_dropdown(salt);
+            }
             // The Profiles shot needs content: representative demo profiles (only when the
             // user config has none) with the first one expanded into the inline editor.
             if section == settings::Section::Profiles {

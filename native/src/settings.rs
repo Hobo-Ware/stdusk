@@ -84,10 +84,12 @@ pub(crate) struct SettingsState {
     dropdown_open: Option<egui::Id>, // which searchable theme dropdown is open, if any
     dropdown_filter: String,      // the open dropdown's search query
     dropdown_focus: bool,         // focus the dropdown filter once, on open
+    dropdown_bright: Option<BrightFilter>, // open dropdown's chips; None = auto (follow the slot)
+    force_dropdown: Option<String>, // open this dropdown (by id salt) on first render - shot harness
     scheme_bright: Option<BrightFilter>, // brightness chips; None = auto (follow the slot)
-    profile_sel: Option<usize>,   // profile expanded in the Profiles editor
-    profile_loaded: Option<usize>, // which profile index the edit buffers below reflect
-    profile_args: String,         // args line as typed (parsed into the Vec on change)
+    profile_sel: Option<usize>,     // profile expanded in the Profiles editor
+    profile_loaded: Option<usize>,  // which profile index the edit buffers below reflect
+    profile_args: String,           // args line as typed (parsed into the Vec on change)
     profile_env: Vec<(String, String)>, // env rows as typed (folded into the map on change)
 }
 
@@ -103,6 +105,8 @@ impl SettingsState {
             dropdown_open: None,
             dropdown_filter: String::new(),
             dropdown_focus: false,
+            dropdown_bright: None,
+            force_dropdown: None,
             scheme_bright: None,
             profile_sel: None,
             profile_loaded: None,
@@ -125,6 +129,12 @@ impl SettingsState {
     pub(crate) fn select_profile(&mut self, i: usize) {
         self.profile_sel = Some(i);
         self.profile_loaded = None;
+    }
+
+    /// Open the searchable dropdown with this id salt on its first render (screenshot harness:
+    /// `STDUSK_SHOT_DROPDOWN` - a floating popup can't be pointer-driven headless).
+    pub(crate) fn force_dropdown(&mut self, id_salt: String) {
+        self.force_dropdown = Some(id_salt);
     }
 }
 
@@ -218,14 +228,21 @@ pub(crate) enum BrightFilter {
     Dark,
 }
 
-/// The filter the scheme browser opens on: following the system, a pick lands in the CURRENT
-/// OS appearance's slot - pre-filter to schemes of that brightness. Manual mode shows all.
-pub(crate) fn default_bright_filter(follow_system: bool, system_light: bool) -> BrightFilter {
-    match scheme_slot(follow_system, system_light) {
+/// The brightness pre-filter for a picker targeting a specific config slot: the Light slot
+/// opens on light schemes, Dark on dark ones, the manual fixed theme on all. Shared by the
+/// scheme browser and the Appearance theme dropdowns.
+pub(crate) fn slot_bright_filter(slot: SchemeSlot) -> BrightFilter {
+    match slot {
         SchemeSlot::Fixed => BrightFilter::All,
         SchemeSlot::Light => BrightFilter::Light,
         SchemeSlot::Dark => BrightFilter::Dark,
     }
+}
+
+/// The filter the scheme browser opens on: following the system, a pick lands in the CURRENT
+/// OS appearance's slot - pre-filter to schemes of that brightness. Manual mode shows all.
+pub(crate) fn default_bright_filter(follow_system: bool, system_light: bool) -> BrightFilter {
+    slot_bright_filter(scheme_slot(follow_system, system_light))
 }
 
 /// Does a scheme of the given darkness pass the brightness filter?
@@ -671,7 +688,16 @@ fn searchable_dropdown(
     if resp.clicked() {
         st.dropdown_open = if open { None } else { Some(id) };
         st.dropdown_filter.clear();
+        st.dropdown_bright = None; // back to the slot's auto pre-filter on every open
         st.dropdown_focus = true;
+    }
+    // Screenshot harness: open this dropdown on first render (a floating popup can't be
+    // pointer-driven headless), same state as a click.
+    if st.force_dropdown.as_deref() == Some(id_salt) {
+        st.force_dropdown = None;
+        st.dropdown_open = Some(id);
+        st.dropdown_filter.clear();
+        st.dropdown_bright = None;
     }
     if st.dropdown_open != Some(id) {
         return false;
@@ -728,20 +754,41 @@ fn dropdown_row(ui: &mut egui::Ui, text: &str, active: bool) -> egui::Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A searchable scheme picker (all three theme slots). Hovering a row hands the scheme to
+/// A searchable scheme picker (all three theme slots). Opens pre-filtered to the brightness
+/// of the slot it sets (`slot_bright_filter`: Light slot -> light schemes, Dark -> dark,
+/// manual fixed theme -> all), with All/Light/Dark chips inside the popup as the escape
+/// hatch; search combines with the filter. Hovering a row hands the scheme to
 /// `st.hover_preview` so the section's preview card follows it. Returns true when a scheme
 /// was picked into `value`.
 fn scheme_dropdown(
     ui: &mut egui::Ui,
     st: &mut SettingsState,
     id_salt: &str,
+    slot: SchemeSlot,
     value: &mut String,
 ) -> bool {
     let all = themes::all_schemes();
     let label = value.clone();
     let hint = format!("Search {} schemes", all.len());
     searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st| {
-        let shown = filter_schemes(all, &st.dropdown_filter);
+        let mut bright = st.dropdown_bright.unwrap_or_else(|| slot_bright_filter(slot));
+        ui.horizontal(|ui| {
+            for (label, f) in [
+                ("All", BrightFilter::All),
+                ("Light", BrightFilter::Light),
+                ("Dark", BrightFilter::Dark),
+            ] {
+                if ui::chip(ui, label, bright == f).clicked() {
+                    st.dropdown_bright = Some(f);
+                    bright = f; // applies this frame, not next
+                }
+            }
+        });
+        ui.add_space(6.0);
+        let shown: Vec<usize> = filter_schemes(all, &st.dropdown_filter)
+            .into_iter()
+            .filter(|&i| bright_allows(bright, colors::theme_is_dark(&all[i].1)))
+            .collect();
         if shown.is_empty() {
             ui.label(egui::RichText::new("No schemes match.").color(colors::dim()));
             return false;
@@ -847,14 +894,14 @@ fn appearance_section(
         });
         if a.follow_system {
             row(ui, "Light theme", "Applied while macOS is light", |ui| {
-                scheme_dropdown(ui, st, "theme_light", &mut a.theme_light);
+                scheme_dropdown(ui, st, "theme_light", SchemeSlot::Light, &mut a.theme_light);
             });
             row(ui, "Dark theme", "Applied while macOS is dark", |ui| {
-                scheme_dropdown(ui, st, "theme_dark", &mut a.theme_dark);
+                scheme_dropdown(ui, st, "theme_dark", SchemeSlot::Dark, &mut a.theme_dark);
             });
         } else {
             row(ui, "Theme", "Also browsable in the Color scheme section", |ui| {
-                scheme_dropdown(ui, st, "theme_fixed", &mut a.theme);
+                scheme_dropdown(ui, st, "theme_fixed", SchemeSlot::Fixed, &mut a.theme);
             });
         }
     });
@@ -2111,6 +2158,15 @@ mod tests {
     }
 
     #[test]
+    fn slot_bright_filter_pre_filters_each_theme_dropdown() {
+        // The Appearance dropdowns open pre-filtered to the slot they set: Light theme ->
+        // light schemes, Dark theme -> dark; the manual Theme dropdown stays unfiltered.
+        assert_eq!(slot_bright_filter(SchemeSlot::Light), BrightFilter::Light);
+        assert_eq!(slot_bright_filter(SchemeSlot::Dark), BrightFilter::Dark);
+        assert_eq!(slot_bright_filter(SchemeSlot::Fixed), BrightFilter::All);
+    }
+
+    #[test]
     fn bright_filter_partitions_light_and_dark() {
         // (filter, scheme is dark) -> shown?
         let cases = [
@@ -2268,11 +2324,11 @@ mod tests {
         let mut value = "one-half-dark".to_string();
         // Frame 1: locate the button. Frames 2-3: click it -> the popup opens.
         run_frame(&ctx, vec![], |ui| {
-            let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
         });
         let center = egui::pos2(30.0, 22.0); // inside the 200x28 button at the panel origin
         run_frame(&ctx, vec![egui::Event::PointerMoved(center)], |ui| {
-            let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
         });
         for pressed in [true, false] {
             run_frame(
@@ -2284,7 +2340,7 @@ mod tests {
                     modifiers: egui::Modifiers::default(),
                 }],
                 |ui| {
-                    let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+                    let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
                 },
             );
         }
@@ -2292,7 +2348,7 @@ mod tests {
         // Type a filter that matches exactly one scheme, then Esc closes the popup.
         st.dropdown_filter = "tokyo-night".into();
         run_frame(&ctx, vec![], |ui| {
-            let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
         });
         run_frame(
             &ctx,
@@ -2304,7 +2360,7 @@ mod tests {
                 modifiers: egui::Modifiers::default(),
             }],
             |ui| {
-                let _ = scheme_dropdown(ui, &mut st, "probe", &mut value);
+                let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
             },
         );
         assert!(st.dropdown_open.is_none(), "Esc must close the popup");
