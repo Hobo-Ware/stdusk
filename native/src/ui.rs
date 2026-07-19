@@ -1137,14 +1137,16 @@ pub(crate) const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (
 pub(crate) const TAB_FIXED_W: f32 = 200.0; // fixed-mode standard width (Tabby-like)
 const TAB_MIN_W: f32 = 60.0; // fixed-mode floor when the bar overflows
 const TAB_PAD_X: f32 = 10.0;
-const TAB_SLOT_W: f32 = 18.0; // leading slot: CLI chip, swapped for the close-x on hover
+const TAB_SLOT_W: f32 = 18.0; // trailing slot: close-x on hover, CLI badge while one runs
 const TAB_GAP: f32 = 6.0;
 const TAB_MINI_W: f32 = 15.0; // split-layout preview glyph
 
 /// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline
 /// flush with the strip's bottom edge, a split-layout preview glyph, and progress as a thin bar
-/// on the TOP edge. The leading slot holds the CLI chip; hovering the tab swaps it for the
-/// close-x (hidden otherwise - even on the active tab), so the two can never overlap.
+/// on the TOP edge. The TRAILING (right) slot exists only while relevant: it shows the CLI
+/// brand badge while an AI CLI runs in the tab, and hovering the tab swaps it for the close-x
+/// (close wins while hovered), so the two can never overlap. With neither state the slot is
+/// gone and the title gets the full width - no space is permanently reserved.
 /// `width` = `Some(px)` for fixed mode (title ellipsized to fit), `None` sizes to content.
 /// Returns (click+drag response, close-clicked). `layout` = `Pane::miniature()` leaf rects
 /// (glyph shown when >1). `tab_id` seeds the interact id so drag-reorder tracking survives
@@ -1169,7 +1171,15 @@ pub(crate) fn draw_tab(
     let prefix = format!("{idx}  ");
     let mini_w = if layout.len() > 1 { TAB_MINI_W + TAB_GAP } else { 0.0 };
     let pin_w = if pinned { 14.0 } else { 0.0 };
-    let fixed_chrome = TAB_PAD_X * 2.0 + TAB_SLOT_W + TAB_GAP + mini_w + pin_w;
+    // Trailing-slot presence: hover state comes from LAST frame's response (stored below) -
+    // this frame's rect isn't allocated yet, and a predicted rect would oscillate in dynamic
+    // width mode. One frame of lag; egui repaints on pointer movement anyway.
+    let tab_iid = ui.id().with(("tab", tab_id));
+    let hover_id = tab_iid.with("hovered");
+    let hovered_last = ui.ctx().data(|d| d.get_temp::<bool>(hover_id)).unwrap_or(false);
+    let slot_shown = hovered_last || cli.is_some();
+    let slot_w = if slot_shown { TAB_SLOT_W + TAB_GAP } else { 0.0 };
+    let fixed_chrome = TAB_PAD_X * 2.0 + slot_w + mini_w + pin_w;
     let (shown, truncated, tab_w) = if let Some(w) = width {
         // Ellipsize to whatever fits the fixed width (monospace: chars scale linearly).
         let chars = ((w - fixed_chrome) / char_w) as usize;
@@ -1189,11 +1199,7 @@ pub(crate) fn draw_tab(
             colors::elevated(),
         );
     }
-    let slot = egui::Rect::from_min_size(
-        egui::pos2(rect.left() + TAB_PAD_X, rect.center().y - TAB_SLOT_W / 2.0),
-        egui::vec2(TAB_SLOT_W, TAB_SLOT_W),
-    );
-    let mut x = slot.right() + TAB_GAP;
+    let mut x = rect.left() + TAB_PAD_X;
     if layout.len() > 1 {
         let mini = egui::Rect::from_min_size(
             egui::pos2(x, rect.center().y - TAB_MINI_W / 2.0),
@@ -1210,10 +1216,16 @@ pub(crate) fn draw_tab(
         font,
         fg,
     );
-    // Pinned marker: a small push-pin at the tab's right edge (the index stays as-is).
+    // Trailing slot at the right edge; the pinned push-pin sits just left of it (or takes the
+    // edge itself while the slot is absent). The index stays on the left as-is.
+    let slot = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - TAB_PAD_X - TAB_SLOT_W / 2.0, rect.center().y),
+        egui::vec2(TAB_SLOT_W, TAB_SLOT_W),
+    );
     if pinned {
+        let pin_x = if slot_shown { slot.left() - TAB_GAP } else { rect.right() - TAB_PAD_X };
         p.text(
-            egui::pos2(rect.right() - TAB_PAD_X, rect.center().y),
+            egui::pos2(pin_x, rect.center().y),
             egui::Align2::RIGHT_CENTER,
             icons::PUSH_PIN,
             egui::FontId::proportional(11.0),
@@ -1269,17 +1281,19 @@ pub(crate) fn draw_tab(
     // entirely when the topmost widget under the pointer senses only drags (hit_test.rs), which
     // is exactly the bug that killed all tab clicks in 0.2.2. Id comes from the stable tab id,
     // not the loop index, so egui keeps tracking the same drag across reorder swaps.
-    let mut tab_resp =
-        ui.interact(rect, ui.id().with(("tab", tab_id)), egui::Sense::click_and_drag());
+    let mut tab_resp = ui.interact(rect, tab_iid, egui::Sense::click_and_drag());
     if truncated {
         tab_resp = tab_resp.on_hover_text(title);
     }
-    // Leading slot: the close-x only while the pointer is over the tab (replacing the CLI chip,
-    // so they can't overlap); the chip - or nothing - otherwise. Use `contains_pointer` (true
-    // across the whole tab rect, incl. the x) rather than `hovered` so moving onto the x
-    // doesn't drop the tab's hover state and make the x flicker.
+    // Trailing slot: the close-x only while the pointer is over the tab (replacing the CLI
+    // badge, so they can't overlap - close wins while hovered); the badge - or nothing -
+    // otherwise. Use `contains_pointer` (true across the whole tab rect, incl. the x) rather
+    // than `hovered` so moving onto the x doesn't drop the tab's hover state and make the x
+    // flicker. Stored for next frame's slot-presence decision (see the top of the fn).
+    let hovered = tab_resp.contains_pointer();
+    ui.ctx().data_mut(|d| d.insert_temp(hover_id, hovered));
     let mut close = false;
-    if tab_resp.contains_pointer() {
+    if hovered {
         let xr = ui
             .interact(slot, ui.id().with(("close", tab_id)), egui::Sense::click())
             .on_hover_text("Close (Cmd+W)");
@@ -2211,6 +2225,15 @@ mod tests {
     /// One frame of a minimal real tab bar (two `draw_tab`s + reorder drag sense) above a
     /// focused grid running `collect_input` - the exact structure of the app's render loop.
     fn tab_frame(ctx: &egui::Context, events: Vec<egui::Event>) -> TabFrameOut {
+        tab_frame_with(ctx, events, [None, None])
+    }
+
+    /// `tab_frame` with per-tab CLI badges (the trailing slot's badge/close-x swap tests).
+    fn tab_frame_with(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        clis: [Option<crate::procwatch::Cli>; 2],
+    ) -> TabFrameOut {
         let mut out = TabFrameOut {
             rects: Vec::new(),
             clicked: None,
@@ -2231,7 +2254,7 @@ mod tests {
         let _ = ctx.run_ui(raw, |ui| {
             egui::Panel::top("tabbar").show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for i in 0..2usize {
+                    for (i, cli) in clis.into_iter().enumerate() {
                         let (resp, close) = draw_tab(
                             ui,
                             i + 1,
@@ -2243,7 +2266,7 @@ mod tests {
                             Progress::None,
                             CmdState::Idle,
                             &[],
-                            None,
+                            cli,
                             None,
                         );
                         if close {
@@ -2277,6 +2300,19 @@ mod tests {
             pressed,
             modifiers: Modifiers::default(),
         }
+    }
+
+    /// Center of a tab's TRAILING slot (close-x on hover / CLI badge) for its current rect.
+    fn slot_pos(r: egui::Rect) -> egui::Pos2 {
+        egui::pos2(r.right() - TAB_PAD_X - TAB_SLOT_W / 2.0, r.center().y)
+    }
+
+    /// Hover tab `i` (its center), then run one settle frame: the trailing slot appears the
+    /// frame AFTER hover is stored, growing a dynamic-width tab - return the settled rects.
+    fn hover_tab(ctx: &egui::Context, i: usize) -> Vec<egui::Rect> {
+        let warm = tab_frame(ctx, vec![]);
+        tab_frame(ctx, vec![egui::Event::PointerMoved(warm.rects[i].center())]);
+        tab_frame(ctx, vec![]).rects
     }
 
     #[test]
@@ -2315,12 +2351,10 @@ mod tests {
     #[test]
     fn close_x_still_wins_its_click() {
         // The x is registered after the tab, so it stays on top for clicks (LEDGER fix).
-        // The x is hover-only now (it swaps into the leading slot), so the pointer must be
-        // over the tab BEFORE the click - exactly what a real mouse does.
+        // The x lives in the hover-only TRAILING slot now, so the pointer must be over the
+        // tab BEFORE the click - exactly what a real mouse does.
         let ctx = egui::Context::default();
-        let warm = tab_frame(&ctx, vec![]);
-        let r = warm.rects[0];
-        let x = egui::pos2(r.left() + TAB_PAD_X + TAB_SLOT_W / 2.0, r.center().y);
+        let x = slot_pos(hover_tab(&ctx, 0)[0]);
         tab_frame(&ctx, vec![egui::Event::PointerMoved(x)]);
         tab_frame(&ctx, vec![press(x, true)]);
         let up = tab_frame(&ctx, vec![press(x, false)]);
@@ -2330,12 +2364,10 @@ mod tests {
 
     #[test]
     fn close_x_closes_an_unfocused_tab() {
-        // The x shows on hover for EVERY tab now (not just the active one), and clicking it
+        // The x shows on hover for EVERY tab (not just the active one), and clicking it
         // must close - not merely focus - the unfocused tab.
         let ctx = egui::Context::default();
-        let warm = tab_frame(&ctx, vec![]);
-        let r = warm.rects[1];
-        let x = egui::pos2(r.left() + TAB_PAD_X + TAB_SLOT_W / 2.0, r.center().y);
+        let x = slot_pos(hover_tab(&ctx, 1)[1]);
         tab_frame(&ctx, vec![egui::Event::PointerMoved(x)]);
         tab_frame(&ctx, vec![press(x, true)]);
         let up = tab_frame(&ctx, vec![press(x, false)]);
@@ -2344,13 +2376,27 @@ mod tests {
     }
 
     #[test]
+    fn close_x_replaces_the_badge_while_hovered() {
+        // A tab with a running AI CLI shows the brand badge in the trailing slot; hovering
+        // swaps it for the close-x, and the click must CLOSE (close wins while hovered).
+        let ctx = egui::Context::default();
+        let clis = [Some(crate::procwatch::Cli::Claude), None];
+        let warm = tab_frame_with(&ctx, vec![], clis);
+        // Badge-only state (no hover): the slot is already reserved by the running CLI.
+        let x = slot_pos(warm.rects[0]);
+        tab_frame_with(&ctx, vec![egui::Event::PointerMoved(x)], clis);
+        tab_frame_with(&ctx, vec![press(x, true)], clis);
+        let up = tab_frame_with(&ctx, vec![press(x, false)], clis);
+        assert_eq!(up.closed, Some(0), "hover swaps the badge for the x; close must win");
+        assert_eq!(up.clicked, None);
+    }
+
+    #[test]
     fn drag_from_the_close_slot_still_reorders() {
         // The x senses only clicks, so a drag STARTING over it must fall through to the tab's
         // click_and_drag widget - the slot swap must not create a reorder dead zone.
         let ctx = egui::Context::default();
-        let warm = tab_frame(&ctx, vec![]);
-        let r = warm.rects[1];
-        let x = egui::pos2(r.left() + TAB_PAD_X + TAB_SLOT_W / 2.0, r.center().y);
+        let x = slot_pos(hover_tab(&ctx, 1)[1]);
         tab_frame(&ctx, vec![egui::Event::PointerMoved(x)]);
         tab_frame(&ctx, vec![press(x, true)]);
         let moved = tab_frame(&ctx, vec![egui::Event::PointerMoved(x + egui::vec2(40.0, 0.0))]);
@@ -2361,16 +2407,15 @@ mod tests {
 
     #[test]
     fn close_slot_clicks_activate_when_not_hovered_prior() {
-        // Without the pointer over the tab, the leading slot is NOT a close button: a press
-        // landing there cold hits the tab (the x wasn't registered while unhovered), so the
-        // click activates instead of closing.
+        // Without the pointer over the tab there IS no trailing slot: a press landing on the
+        // tab's right edge cold hits the tab (the x wasn't registered while unhovered), so
+        // the click activates instead of closing.
         let ctx = egui::Context::default();
         let warm = tab_frame(&ctx, vec![]);
-        let r = warm.rects[1];
-        let slot = egui::pos2(r.left() + TAB_PAD_X + TAB_SLOT_W / 2.0, r.center().y);
+        let slot = slot_pos(warm.rects[1]);
         tab_frame(&ctx, vec![press(slot, true)]);
         let up = tab_frame(&ctx, vec![press(slot, false)]);
-        assert_eq!(up.clicked, Some(1), "a cold press on the slot must click-activate the tab");
+        assert_eq!(up.clicked, Some(1), "a cold press on the slot area must click-activate");
         assert_eq!(up.closed, None);
     }
 
