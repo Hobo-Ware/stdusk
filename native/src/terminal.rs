@@ -94,11 +94,25 @@ pub(crate) fn exit_action(mode: OnExit, uptime_secs: f32, rapid_exits: u32) -> E
 }
 
 /// One styled cell for the renderer. `bg == None` means the terminal default (transparent).
+/// `wide` marks a double-width glyph (CJK/emoji) - the renderer draws it across two cells; the
+/// spacer cell that follows carries `c == '\0'` so no glyph is drawn there (bg/selection stay).
 pub(crate) struct CellSnap {
     pub(crate) c: char,
     pub(crate) fg: Color32,
     pub(crate) bg: Option<Color32>,
     pub(crate) selected: bool,
+    pub(crate) wide: bool,
+}
+
+/// Map a grid cell's char + flags to what the renderer draws: spacer cells (the second column
+/// of a wide char, incl. the leading spacer before a line-wrapped one) emit no glyph ('\0');
+/// a `WIDE_CHAR` cell keeps its glyph and is marked wide so it can span two cells.
+pub(crate) fn snap_glyph(c: char, flags: Flags) -> (char, bool) {
+    if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+        ('\0', false)
+    } else {
+        (c, flags.contains(Flags::WIDE_CHAR))
+    }
 }
 
 /// A frame's worth of visible grid, ready to paint.
@@ -491,7 +505,8 @@ impl PtyTerm {
             };
             let selected = selection.as_ref().is_some_and(|r| r.contains(indexed.point));
             let bold = self.bold_bright && cell.flags.contains(Flags::BOLD);
-            cells.push(CellSnap { c: cell.c, fg: colors::cell_fg(fg_c, bold), bg, selected });
+            let (c, wide) = snap_glyph(cell.c, cell.flags);
+            cells.push(CellSnap { c, fg: colors::cell_fg(fg_c, bold), bg, selected, wide });
         }
         // Cursor only shown when the viewport is at the bottom (not scrolled into history).
         let cursor = if grid.display_offset() == 0 {
@@ -609,8 +624,8 @@ impl PtyTerm {
 #[cfg(test)]
 mod tests {
     use super::{
-        CmdState, ExitAction, OnExit, PtyTerm, SpawnOpts, cmd_from_exit, exit_action, on_exit_mode,
-        resolve_cwd, resolve_shell,
+        CmdState, ExitAction, Flags, OnExit, PtyTerm, SpawnOpts, cmd_from_exit, exit_action,
+        on_exit_mode, resolve_cwd, resolve_shell, snap_glyph,
     };
     use crate::config::Profile;
 
@@ -745,5 +760,41 @@ mod tests {
         let title =
             spawn_and_poll("printf '\\033]0;from-the-shell\\007'; sleep 5", PtyTerm::title_osc);
         assert_eq!(title.as_deref(), Some("from-the-shell"));
+    }
+
+    #[test]
+    fn snap_glyph_maps_wide_and_spacer_flags() {
+        // (char, flags) -> (drawn char, wide)
+        let cases = [
+            ('a', Flags::empty(), ('a', false)),
+            ('你', Flags::WIDE_CHAR, ('你', true)),
+            (' ', Flags::WIDE_CHAR_SPACER, ('\0', false)),
+            (' ', Flags::LEADING_WIDE_CHAR_SPACER, ('\0', false)),
+            ('b', Flags::BOLD, ('b', false)), // unrelated flags don't mark wide
+        ];
+        for (c, flags, want) in cases {
+            assert_eq!(snap_glyph(c, flags), want, "{c:?} {flags:?}");
+        }
+    }
+
+    #[test]
+    fn real_pty_snapshot_marks_cjk_and_emoji_wide() {
+        // A real shell printing CJK + emoji: the snapshot must mark each wide glyph and blank
+        // its spacer cell, so the renderer can span the glyph across two cells without overlap.
+        let got = spawn_and_poll("printf '\u{4f60}\u{597d} \u{1f600}\\n'; sleep 5", |t| {
+            let snap = t.grid_snapshot();
+            let i = snap.cells.iter().position(|c| c.c == '\u{4f60}')?; // 你
+            let e = snap.cells.iter().position(|c| c.c == '\u{1f600}')?; // 😀
+            Some((
+                snap.cells[i].wide,
+                snap.cells[i + 1].c, // 你's spacer
+                snap.cells[i + 2].c, // 好
+                snap.cells[i + 2].wide,
+                snap.cells[e].wide,
+                snap.cells[e + 1].c, // 😀's spacer
+            ))
+        })
+        .expect("wide glyphs never hit the grid");
+        assert_eq!(got, (true, '\0', '\u{597d}', true, true, '\0'));
     }
 }

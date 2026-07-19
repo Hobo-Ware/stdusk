@@ -805,9 +805,61 @@ fn paint_mini_layout(p: &egui::Painter, box_rect: egui::Rect, rects: &[egui::Rec
     }
 }
 
+/// Vendored Simple Icons SVG (CC0-1.0, https://simpleicons.org) for a CLI's brand mark, or
+/// `None` when no official slug exists: OpenAI's icon was removed from Simple Icons upstream
+/// (so Codex keeps the letter chip) and aider never had one.
+fn cli_icon_svg(cli: crate::procwatch::Cli) -> Option<&'static [u8]> {
+    use crate::procwatch::Cli;
+    Some(match cli {
+        Cli::Claude => include_bytes!("../assets/icons/anthropic.svg"),
+        Cli::Gemini => include_bytes!("../assets/icons/googlegemini.svg"),
+        Cli::Copilot => include_bytes!("../assets/icons/githubcopilot.svg"),
+        Cli::Ollama => include_bytes!("../assets/icons/ollama.svg"),
+        Cli::Cursor => include_bytes!("../assets/icons/cursor.svg"),
+        Cli::Codex | Cli::Aider => return None,
+    })
+}
+
+/// Rasterize a solid-fill brand SVG to a WHITE glyph (RGB forced white, alpha from the render)
+/// so the badge paints it with `tint` = brand color. `None` on parse/render failure.
+fn rasterize_white(svg: &[u8], px: u32) -> Option<egui::ColorImage> {
+    let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default()).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(px, px)?;
+    let scale = px as f32 / tree.size().width().max(tree.size().height());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    let mut rgba = Vec::with_capacity((px * px * 4) as usize);
+    for p in pixmap.pixels() {
+        rgba.extend_from_slice(&[255, 255, 255, p.alpha()]);
+    }
+    Some(egui::ColorImage::from_rgba_unmultiplied([px as usize, px as usize], &rgba))
+}
+
+/// The brand icon texture for a CLI badge, rasterized once per (cli, px) and cached in egui's
+/// per-context memory (so headless tests and the app never share GPU handles). `None` = no
+/// icon / rasterization failed - the caller falls back to the letter chip.
+fn cli_icon_texture(
+    ctx: &egui::Context,
+    cli: crate::procwatch::Cli,
+    px: u32,
+) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(("cli-icon", cli.label(), px));
+    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return cached;
+    }
+    let tex = cli_icon_svg(cli).and_then(|svg| rasterize_white(svg, px)).map(|img| {
+        ctx.load_texture(format!("cli-icon-{}", cli.label()), img, egui::TextureOptions::LINEAR)
+    });
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    tex
+}
+
 /// A compact brand-colored chip marking a known AI CLI running in the tab: a small rounded
-/// square in the CLI's brand color with its initial letter. Lives in the tab's leading slot
-/// and hides while the tab is hovered (the close-x takes the slot over).
+/// square in the CLI's brand color with its initial letter. The fallback badge for CLIs
+/// without a vendored brand icon (see `cli_icon_svg`).
 fn paint_cli_chip(p: &egui::Painter, rect: egui::Rect, cli: crate::procwatch::Cli) {
     let col = cli.color();
     // Contrast ink by the brand color's luminance so the initial reads on light and dark chips.
@@ -980,11 +1032,21 @@ pub(crate) fn draw_tab(
             close = true;
         }
     } else if let Some(cli) = cli {
-        paint_cli_chip(
-            ui.painter(),
-            egui::Rect::from_center_size(slot.center(), egui::vec2(14.0, 14.0)),
-            cli,
-        );
+        let badge = egui::Rect::from_center_size(slot.center(), egui::vec2(14.0, 14.0));
+        // Real brand mark where Simple Icons has one, tinted the brand color; rasterized at 2x
+        // the on-screen pixel size so it stays crisp on retina. Letter chip otherwise.
+        let px = (14.0 * ui.ctx().pixels_per_point() * 2.0).round() as u32;
+        match cli_icon_texture(ui.ctx(), cli, px) {
+            Some(tex) => {
+                ui.painter().image(
+                    tex.id(),
+                    badge,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    cli.color(),
+                );
+            }
+            None => paint_cli_chip(ui.painter(), badge, cli),
+        }
     }
     (tab_resp, close)
 }
@@ -1032,6 +1094,7 @@ pub(crate) struct GridStyle {
     pub(crate) link_active: bool, // links react to hover/click this frame
     pub(crate) blink: bool,       // blink the cursor (focused pane only)
     pub(crate) ligatures: bool,   // draw symbol ligatures
+    pub(crate) min_contrast: f32, // nudge cell fg to this WCAG ratio vs its bg; <=1 = off
 }
 
 pub(crate) fn render_grid(
@@ -1044,8 +1107,9 @@ pub(crate) fn render_grid(
     ch: f32,
     font: &egui::FontId,
     style: GridStyle,
+    search_marks: &[crate::search::Match], // all find-bar matches (empty when the bar is closed)
 ) -> egui::Response {
-    let GridStyle { cursor, dimmed, link_active, blink, ligatures } = style;
+    let GridStyle { cursor, dimmed, link_active, blink, ligatures, min_contrast } = style;
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     let origin = rect.min;
@@ -1108,6 +1172,16 @@ pub(crate) fn render_grid(
     // blank cells transparent at the window's global opacity - so the glass stays uniform and
     // only the content recedes (no opaque scrim that would change see-through).
     let fade = |c: egui::Color32| if dimmed { c.gamma_multiply(0.5) } else { c };
+    // Minimum contrast (terminal.minimum_contrast): nudge each glyph's fg toward black/white
+    // until it meets the WCAG ratio against its effective bg. Applied before the dim fade so
+    // an unfocused pane keeps the same relative treatment; free when off (<= 1).
+    let ink = |fg: egui::Color32, bg: Option<egui::Color32>| {
+        if min_contrast > 1.0 {
+            colors::ensure_contrast(fg, bg.unwrap_or_else(colors::bg), min_contrast)
+        } else {
+            fg
+        }
+    };
     for r in 0..snap.rows {
         // Symbol ligatures: cells covered by a span skip their own glyph; the span's single
         // glyph is drawn centered across the covered cells (bg/selection stay per-cell).
@@ -1129,7 +1203,7 @@ pub(crate) fn render_grid(
                     egui::Align2::CENTER_CENTER,
                     glyph,
                     font.clone(),
-                    fade(cell.fg),
+                    fade(ink(cell.fg, cell.bg)),
                 );
             }
         }
@@ -1149,9 +1223,37 @@ pub(crate) fn render_grid(
                 continue; // glyph drawn by the span above
             }
             if cell.c != ' ' && cell.c != '\0' {
-                painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), fade(cell.fg));
+                let fg = fade(ink(cell.fg, cell.bg));
+                if cell.wide {
+                    // A wide glyph (CJK/emoji) owns this cell AND the spacer after it: draw it
+                    // horizontally centered across the two, top-aligned like its neighbors.
+                    painter.text(
+                        egui::pos2(pos.x + cw, pos.y),
+                        egui::Align2::CENTER_TOP,
+                        cell.c,
+                        font.clone(),
+                        fg,
+                    );
+                } else {
+                    painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), fg);
+                }
             }
         }
+    }
+
+    // All-match search overlay: a dim accent wash over every visible hit (the CURRENT match
+    // stands out - it also carries the brighter selection fill via the per-cell path above).
+    for (row, col, len) in
+        crate::search::visible_matches(search_marks, snap.top_line, snap.rows, snap.cols)
+    {
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                origin + egui::vec2(col as f32 * cw, row as f32 * ch),
+                egui::vec2(len as f32 * cw, ch),
+            ),
+            2.0,
+            fade(colors::search_match()),
+        );
     }
 
     // Underline the hovered (command-held) link.
@@ -1185,17 +1287,18 @@ pub(crate) fn render_grid(
                 painter.rect_filled(egui::Rect::from_min_size(u, egui::vec2(cw, 2.0)), 0.0, cur);
             }
             CursorStyle::Block => {
-                painter.rect_filled(egui::Rect::from_min_size(cpos, egui::vec2(cw, ch)), 0.0, cur);
+                let under = &snap.cells[cr * snap.cols + cc];
+                // A wide glyph's block cursor covers both of its cells (xterm-style).
+                let w = if under.wide { cw * 2.0 } else { cw };
+                painter.rect_filled(egui::Rect::from_min_size(cpos, egui::vec2(w, ch)), 0.0, cur);
                 // Redraw the glyph under the block in the background color so it stays legible.
-                let glyph = snap.cells[cr * snap.cols + cc].c;
-                if glyph != ' ' && glyph != '\0' {
-                    painter.text(
-                        cpos,
-                        egui::Align2::LEFT_TOP,
-                        glyph,
-                        font.clone(),
-                        fade(colors::bg()),
-                    );
+                if under.c != ' ' && under.c != '\0' {
+                    let (pos, anchor) = if under.wide {
+                        (egui::pos2(cpos.x + cw, cpos.y), egui::Align2::CENTER_TOP)
+                    } else {
+                        (cpos, egui::Align2::LEFT_TOP)
+                    };
+                    painter.text(pos, anchor, under.c, font.clone(), fade(colors::bg()));
                 }
             }
         }
@@ -1584,6 +1687,26 @@ mod tests {
         assert!(pty_input_captured(false, false, false, true, false, false)); // settings
         assert!(pty_input_captured(false, false, false, false, true, false)); // paste confirm
         assert!(pty_input_captured(false, false, false, false, false, true)); // close confirm
+    }
+
+    #[test]
+    fn vendored_cli_icons_rasterize_as_white_glyphs() {
+        use crate::procwatch::Cli;
+        // Every CLI with a vendored Simple Icons SVG must parse + render to a non-empty white
+        // glyph (a broken asset would silently fall back to the letter chip).
+        for cli in [Cli::Claude, Cli::Gemini, Cli::Copilot, Cli::Ollama, Cli::Cursor] {
+            let svg = cli_icon_svg(cli).unwrap_or_else(|| panic!("{cli:?} must have an icon"));
+            let img = rasterize_white(svg, 28).unwrap_or_else(|| panic!("{cli:?} must render"));
+            assert_eq!(img.size, [28, 28]);
+            // RGB forced white so egui tint = brand color works; Color32 stores premultiplied
+            // alpha, so only fully-opaque pixels read back 255 (edges scale with their alpha).
+            let solid: Vec<_> = img.pixels.iter().filter(|p| p.a() == 255).collect();
+            assert!(!solid.is_empty(), "{cli:?} rendered no solid pixels");
+            assert!(solid.iter().all(|p| p.r() == 255 && p.g() == 255 && p.b() == 255));
+        }
+        // No Simple Icons slug (OpenAI removed upstream; aider never had one): chip fallback.
+        assert!(cli_icon_svg(Cli::Codex).is_none());
+        assert!(cli_icon_svg(Cli::Aider).is_none());
     }
 
     // ---- headless egui frames: the tab-bar hit-test regressions (egui 0.35 drops the click

@@ -788,6 +788,15 @@ fn appearance_section(
         row(ui, "Line padding", "Extra pixels added to each line's height", |ui| {
             ui::slider(ui, &mut a.line_padding, 0.0..=8.0, |v| format!("{v:.0} px"));
         });
+        row_full(
+            ui,
+            "Minimum contrast",
+            "Nudge text toward black/white until it meets a WCAG contrast ratio",
+            "1 = off (the default); Tabby ships 4; 4.5 = WCAG AA",
+            |ui| {
+                ui::slider(ui, &mut t.minimum_contrast, 1.0..=21.0, |v| format!("{v:.1}"));
+            },
+        );
         row(ui, "Ligatures", "Draw common code sequences as single glyphs", |ui| {
             ui::toggle_switch(ui, &mut t.ligatures);
             ui.add_space(10.0);

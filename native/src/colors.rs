@@ -166,6 +166,52 @@ pub(crate) fn selection() -> Color32 {
     let a = accent();
     Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 90)
 }
+/// Dim fill for every (non-current) search match; the current one keeps the brighter
+/// selection fill on top.
+pub(crate) fn search_match() -> Color32 {
+    let a = accent();
+    Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 45)
+}
+
+// ---- minimum contrast (terminal.minimum_contrast) ----
+
+/// WCAG relative luminance of an sRGB color (0 = black, 1 = white).
+fn luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let s = f32::from(v) / 255.0;
+        if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG contrast ratio between two colors: 1 (identical) ..= 21 (black on white).
+pub(crate) fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// Nudge `fg` toward black or white (whichever side of `bg` has more headroom) until it meets
+/// the WCAG `ratio` against `bg`. Ratio <= 1 (or an already-passing pair) returns `fg`
+/// unchanged; an unreachable ratio returns the pure target. Stepped blend (not a bisection):
+/// contrast isn't monotonic when the blend crosses the background's luminance.
+pub(crate) fn ensure_contrast(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
+    let ratio = ratio.clamp(1.0, 21.0);
+    if contrast_ratio(fg, bg) >= ratio {
+        return fg;
+    }
+    let target = if luminance(bg) < 0.1791 { Color32::WHITE } else { Color32::BLACK };
+    let mix = |t: f32| {
+        let l = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+        Color32::from_rgb(l(fg.r(), target.r()), l(fg.g(), target.g()), l(fg.b(), target.b()))
+    };
+    for i in 1..=20 {
+        let c = mix(i as f32 / 20.0);
+        if contrast_ratio(c, bg) >= ratio {
+            return c;
+        }
+    }
+    target
+}
 /// Swatches offered by the right-click Color menu - a curated vivid palette (2 rows of 6),
 /// theme-independent so tab underlines read cleanly on any background.
 pub(crate) fn tab_colors() -> [Color32; 12] {
@@ -330,5 +376,53 @@ mod tests {
         assert_eq!(cell_fg(spec, true), Color32::from_rgb(1, 2, 3));
         // Bright colors stay bright.
         assert_eq!(cell_fg(Color::Named(NamedColor::BrightRed), true), t.ansi[9]);
+    }
+
+    #[test]
+    fn contrast_ratio_known_pairs() {
+        // Black on white is the WCAG maximum; identical colors the minimum.
+        assert!((contrast_ratio(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+        assert!((contrast_ratio(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 0.001);
+        // Symmetric.
+        let (a, b) = (rgb(0x61, 0xaf, 0xef), rgb(0x28, 0x2c, 0x34));
+        assert!((contrast_ratio(a, b) - contrast_ratio(b, a)).abs() < 1e-6);
+        // #767676 on white is the canonical ~4.54:1 AA-boundary grey.
+        let g = rgb(0x76, 0x76, 0x76);
+        let r = contrast_ratio(g, Color32::WHITE);
+        assert!((r - 4.54).abs() < 0.02, "got {r}");
+    }
+
+    #[test]
+    fn ensure_contrast_meets_ratio_at_4_5() {
+        let cases = [
+            // (fg, bg) pairs that FAIL 4.5 and must be pushed to meet it.
+            (rgb(0x88, 0x88, 0x88), Color32::WHITE), // grey on white -> darker
+            (rgb(0x55, 0x55, 0x55), Color32::BLACK), // grey on black -> lighter
+            (rgb(0x30, 0x30, 0x40), rgb(0x28, 0x2c, 0x34)), // near-bg fg crosses bg luminance
+            (rgb(0xe0, 0x6c, 0x75), rgb(0xfa, 0xfa, 0xfa)), // theme red on light bg
+        ];
+        for (fg, bg) in cases {
+            let out = ensure_contrast(fg, bg, 4.5);
+            assert!(
+                contrast_ratio(out, bg) >= 4.5,
+                "{fg:?} on {bg:?} -> {out:?} = {}",
+                contrast_ratio(out, bg)
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_contrast_leaves_passing_pairs_alone() {
+        // Already-passing pair: untouched (the hot path early-return).
+        let fg = rgb(0xdc, 0xdf, 0xe4);
+        let bg = rgb(0x28, 0x2c, 0x34);
+        assert!(contrast_ratio(fg, bg) >= 4.5);
+        assert_eq!(ensure_contrast(fg, bg, 4.5), fg);
+        // Ratio 1.0 = feature off: identity for any pair.
+        let dim = rgb(0x30, 0x30, 0x30);
+        assert_eq!(ensure_contrast(dim, rgb(0x28, 0x28, 0x28), 1.0), dim);
+        // Unreachable ratio caps at the pure target (mid-grey bg: black has the headroom).
+        let mid = rgb(0x80, 0x80, 0x80);
+        assert_eq!(ensure_contrast(mid, mid, 21.0), Color32::BLACK);
     }
 }

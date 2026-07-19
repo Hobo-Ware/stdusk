@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 0.3.1.
+Step-by-step verification for everything shipped through 0.3.2.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -154,3 +154,19 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | Line padding slider 0 -> 6 px | Lines space out live (cell height grows); pty rows shrink to fit; Save persists `line_padding` |
 | Save / Revert / Discard after font edits | Each re-applies the font (Revert/Discard restore the previous one) |
 | `[appearance] font = "Menlo"` in config, restart | Launches in Menlo; the settings field shows it |
+
+## 15. 0.3.2 - wide chars, min contrast, all-match search, brand badges
+| Step | Expect |
+|---|---|
+| `echo 你好世界` | Each CJK glyph spans TWO cells - no squeezing/overlap; text after it starts at the right column |
+| `echo "🙂 emoji"` | The emoji occupies two cells (monochrome outline - color emoji is a documented v1 limit) |
+| Select across `你好` with the mouse | Selection rectangles cover both cells of each glyph; Cmd+C copies `你好` intact |
+| Block cursor over a wide glyph (arrow-key onto it in `zsh`) | The block covers both cells; the glyph stays legible inside it |
+| Settings > Appearance > Text > Minimum contrast: slide to ~4.5 | Dim/low-contrast text brightens live toward readability; back to 1.0 restores the theme's exact colors |
+| `minimum_contrast = 4.5` on a LIGHT theme | Too-light text darkens instead (the nudge goes toward black on light backgrounds) |
+| Cmd+F, search a word appearing 5+ times on screen | EVERY visible occurrence gets a dim accent wash; the current one is clearly brighter; Enter cycles the bright one through them |
+| Scroll while the find bar is open | Washes track matches into/out of view (only visible ones are drawn) |
+| Run `claude` in a tab | The Anthropic mark (clay) appears before the title - a real brand icon, not a letter chip; crisp on retina |
+| Run `gemini` / `gh copilot` / `ollama run …` / `cursor-agent` | Google Gemini spark (blue) / GitHub Copilot (grey) / Ollama / Cursor brand marks respectively |
+| Run `codex` or `aider` | Letter chip (no Simple Icons slug exists for these two) |
+| Toggle macOS light/dark with a badge showing | Brand icon stays legible on both tab-strip shades |

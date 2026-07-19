@@ -527,6 +527,41 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 0.3.2 - "Render right": wide chars + min contrast + all-match search + brand badges (V1 P0-4 + P1s)
+- **Wide-char rendering (P0-4)**: `grid_snapshot` now honors alacritty's cell flags via pure
+  `terminal::snap_glyph(c, flags)` - a `WIDE_CHAR` cell marks `CellSnap.wide`; `WIDE_CHAR_SPACER`
+  / `LEADING_WIDE_CHAR_SPACER` cells emit `'\0'` (no glyph; bg/selection stay per-cell).
+  `render_grid` draws a wide glyph horizontally centered across its 2 cells (`CENTER_TOP` at
+  `pos.x + cw` - top-aligned like its neighbors), and the block cursor covers both cells over a
+  wide glyph (glyph redrawn centered in bg color). Selection/link column math untouched -
+  alacritty's grid already counts the spacer as a cell. Real-pty e2e: printf'd 你好 + 😀 land as
+  wide+spacer pairs in the snapshot (`real_pty_snapshot_marks_cjk_and_emoji_wide`).
+- **`terminal.minimum_contrast`** (default 1.0 = OFF - existing users keep their exact theme;
+  Tabby ships 4): pure `colors::ensure_contrast(fg, bg, ratio)` nudges a cell's fg toward black
+  or white (whichever side of the bg has more WCAG headroom) until the contrast ratio is met.
+  Stepped blend, NOT a bisection - contrast isn't monotonic when the blend crosses the bg's
+  luminance. Applied in `render_grid` per glyph vs its effective bg (theme bg when the cell has
+  none), before the unfocused-pane fade; free when off. Settings > Appearance > Text slider
+  1.0-21.0 ("1 = off"). `colors::contrast_ratio` tested on known pairs (#767676-on-white ≈ 4.54).
+- **All-match search highlight**: every find-bar hit gets a dim accent wash
+  (`colors::search_match()`, accent @ alpha 45) painted over the glyphs; the CURRENT match keeps
+  its brighter selection fill, so it stands out. Pure `search::visible_matches(matches, top_line,
+  rows, cols)` maps buffer lines -> viewport rows, drops off-screen/off-grid hits, clamps at the
+  right edge (tested). `render_grid` takes the marks as a slice; the workspace passes the find
+  state's matches to the FOCUSED pane only (`&[]` elsewhere).
+- **Real brand icons for CLI badges** (replacing initial-letter chips where possible): official
+  monochrome SVGs vendored from Simple Icons (CC0-1.0, simpleicons.org) into
+  `assets/icons/{anthropic,googlegemini,githubcopilot,ollama,cursor}.svg`. **Codex + Aider keep
+  the letter chip** - OpenAI's icon was removed from Simple Icons upstream (404) and aider never
+  had a slug. Rasterized at runtime via **resvg** (default-features off - paths only): parsed
+  once per (cli, px) into a WHITE glyph (`rasterize_white` - RGB forced white, alpha from the
+  render) so `painter.image(tint = cli.color())` brand-colors it; 2x pixel size for retina
+  crispness; cached as a `TextureHandle` in egui's per-context temp data (`cli_icon_texture`) so
+  headless tests and the app never share GPU handles. Any parse/render failure falls back to the
+  chip. Asset-validity test rasterizes all five vendored SVGs (solid pixels must be pure white).
+- Screenshot-verified dark AND light (Anthropic mark in clay on the claude tab, Gemini spark in
+  blue) + both settings harnesses. 164 tests green.
+
 ## 0.3.1 - "Your font": custom font family + line padding (V1 P0-2)
 - **`appearance.font`** (default "" = bundled default): a font FAMILY name ("Menlo",
   "JetBrainsMono Nerd Font") resolved to file bytes via **font-kit** (core-text source) and
@@ -777,6 +812,6 @@ builder agent; implementation + integration here.
   push with a PAT). `.app` is unsigned/un-notarized - fine via brew formula (no Gatekeeper
   quarantine); a signed bundle is a later polish item.
 - **Live-verify**: M5-M9 interactions, M10 CLI-badge detection against real claude/gemini/etc.
-- Backlog: M8 (pane reorder, broadcast input, pane zoom, aggregated tab progress), M7 all-match
-  highlight. (Settings GUI shipped 0.2.1-0.2.2; the headless `run_ui` harness replaced the
-  egui_kittest idea.)
+- Backlog: M8 (pane reorder, broadcast input, pane zoom, aggregated tab progress). (Settings
+  GUI shipped 0.2.1-0.2.2; all-match search highlight shipped 0.3.2; the headless `run_ui`
+  harness replaced the egui_kittest idea.)

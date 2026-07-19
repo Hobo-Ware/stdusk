@@ -47,6 +47,27 @@ pub(crate) fn find_matches(lines: &[(i32, String)], query: &str, opts: SearchOpt
     out
 }
 
+/// Matches mapped into viewport coordinates for the all-match overlay: `(row, col, len)` for
+/// every match inside the visible range (`top_line` = buffer line of viewport row 0, `rows`
+/// tall, `cols` wide). Length is clamped at the right edge; off-grid columns are dropped.
+pub(crate) fn visible_matches(
+    matches: &[Match],
+    top_line: i32,
+    rows: usize,
+    cols: usize,
+) -> Vec<(usize, usize, usize)> {
+    matches
+        .iter()
+        .filter_map(|m| {
+            let row = m.line.checked_sub(top_line)?;
+            if row < 0 || row as usize >= rows || m.col >= cols {
+                return None;
+            }
+            Some((row as usize, m.col, m.len.min(cols - m.col)))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +147,26 @@ mod tests {
         let lines = [(0, "abc".to_string())];
         let rx = SearchOpts { regex: true, ..plain() };
         assert_eq!(find_matches(&lines, "a(", rx), vec![]); // unbalanced paren
+    }
+
+    #[test]
+    fn visible_matches_filters_to_the_viewport() {
+        // Viewport: rows 0..24 of buffer lines -10..14 (scrolled 10 into history), 80 cols.
+        let ms = [m(-11, 0, 3), m(-10, 5, 3), m(0, 2, 4), m(13, 0, 1), m(14, 0, 1)];
+        assert_eq!(
+            visible_matches(&ms, -10, 24, 80),
+            vec![(0, 5, 3), (10, 2, 4), (23, 0, 1)] // one line above and below dropped
+        );
+        // Live view (top_line 0): history matches vanish.
+        assert_eq!(visible_matches(&ms, 0, 24, 80), vec![(0, 2, 4), (13, 0, 1), (14, 0, 1)]);
+    }
+
+    #[test]
+    fn visible_matches_clamps_at_the_right_edge() {
+        // A match straddling the last column is clamped; one fully past it is dropped.
+        let ms = [m(0, 78, 5), m(1, 80, 2), m(2, 79, 1)];
+        assert_eq!(visible_matches(&ms, 0, 24, 80), vec![(0, 78, 2), (2, 79, 1)]);
+        // Degenerate grid: nothing survives.
+        assert_eq!(visible_matches(&ms, 0, 0, 0), vec![]);
     }
 }

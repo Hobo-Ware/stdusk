@@ -132,6 +132,7 @@ pub(crate) struct Terminal {
     pub(crate) warn_on_close_running: bool, // confirm closing a tab with a running process
     pub(crate) on_exit: String, // pane when its shell exits: "close" | "keep" | "restart"
     pub(crate) dynamic_title: bool, // tab titles follow the shell's OSC 0/2 title
+    pub(crate) minimum_contrast: f32, // WCAG ratio text is nudged to meet, 1 (off) ..= 21
 }
 
 impl Default for Appearance {
@@ -187,6 +188,8 @@ impl Default for Terminal {
             warn_on_close_running: true,
             on_exit: "close".into(),
             dynamic_title: true,
+            // Off, to not surprise existing users; Tabby ships 4. See config.example.toml.
+            minimum_contrast: 1.0,
         }
     }
 }
@@ -299,6 +302,7 @@ mod tests {
         assert!(c.terminal.warn_on_close_running);
         assert_eq!(c.terminal.on_exit, "close");
         assert!(c.terminal.dynamic_title);
+        assert_eq!(c.terminal.minimum_contrast, 1.0); // off (Tabby ships 4; opt-in here)
     }
 
     #[test]
