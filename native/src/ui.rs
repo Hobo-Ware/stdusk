@@ -698,7 +698,11 @@ pub(crate) fn color_swatch(
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::click());
     let center = rect.center();
-    let ring = if selected {
+    // Keyboard focus wins the ring (accent), then the selected/hover treatments. Memory
+    // focus, not Response::has_focus - same rationale as `focus_ring`.
+    let ring = if ui.ctx().memory(|m| m.has_focus(resp.id)) {
+        Some((colors::accent(), 2.0))
+    } else if selected {
         Some((colors::fg(), 2.0))
     } else if resp.hovered() {
         Some((colors::dim(), 1.5))
@@ -775,6 +779,7 @@ fn stepper_button(ui: &mut egui::Ui, icon: &str) -> egui::Response {
         egui::FontId::proportional(13.0),
         if resp.hovered() { colors::fg() } else { colors::dim() },
     );
+    focus_ring(ui, &resp, 7.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -805,6 +810,22 @@ pub(crate) fn num_field(
         for (icon, up) in [(icons::MINUS, false), (icons::PLUS, true)] {
             if stepper_button(ui, icon).clicked() {
                 *value = step_int(*value, step, up, *range.start(), *range.end());
+                stepped = true;
+            }
+        }
+        // Keyboard: Up/Down step while the field has focus (Shift = 10x). The TextEdit's own
+        // event filter claims vertical arrows, so egui won't move focus - the press is ours.
+        if r.has_focus() {
+            let (up, down, big) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::ArrowUp),
+                    i.key_pressed(egui::Key::ArrowDown),
+                    i.modifiers.shift,
+                )
+            });
+            if up != down {
+                let by = if big { step.saturating_mul(10) } else { step };
+                *value = step_int(*value, by, up, *range.start(), *range.end());
                 stepped = true;
             }
         }
@@ -843,6 +864,8 @@ pub(crate) fn slider(
     ui.horizontal(|ui| {
         ui.visuals_mut().selection.bg_fill = colors::accent(); // trailing fill reads accent
         let resp = ui.add(egui::Slider::new(value, range).show_value(false).trailing_fill(true));
+        // Left/Right arrows nudge natively while focused (egui Slider); the ring shows it.
+        focus_ring(ui, &resp, 4.0);
         value_chip(ui, &fmt(*value));
         resp
     })
@@ -858,7 +881,26 @@ pub(crate) fn action_button(ui: &mut egui::Ui, label: &str, primary: bool) -> eg
     if primary {
         btn = btn.fill(colors::accent());
     }
-    ui.add(btn)
+    let resp = ui.add(btn);
+    focus_ring(ui, &resp, 7.0);
+    resp
+}
+
+/// Accent ring around a widget holding keyboard focus - the shared focus indicator for every
+/// hand-painted primitive (egui outlines only its own `TextEdit`). `Sense::click` widgets are
+/// Tab/arrow-focusable and Space/Enter-activatable for free; without this ring that focus is
+/// invisible. `radius` matches the widget's corner radius. Reads memory focus directly (not
+/// `Response::has_focus`, which is also gated on VIEWPORT focus): macOS keeps a control's
+/// focus ring visible in inactive windows, and the screenshot harness window is never focused.
+pub(crate) fn focus_ring(ui: &egui::Ui, resp: &egui::Response, radius: f32) {
+    if ui.ctx().memory(|m| m.has_focus(resp.id)) {
+        ui.painter().rect_stroke(
+            resp.rect.expand(1.5),
+            radius,
+            egui::Stroke::new(1.5, colors::accent()),
+            egui::StrokeKind::Outside,
+        );
+    }
 }
 
 /// Give a context menu / popup room to breathe (wider, roomier rows). Call at the top of every
@@ -904,6 +946,7 @@ pub(crate) fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response 
     );
     let knob_x = rect.left() + 11.0 + t * (rect.width() - 22.0);
     p.circle_filled(egui::pos2(knob_x, rect.center().y), 7.5, mix(colors::dim(), colors::bg()));
+    focus_ring(ui, &resp, 12.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -936,6 +979,7 @@ pub(crate) fn chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
         );
     }
     p.galley(rect.center() - galley.size() / 2.0, galley, color);
+    focus_ring(ui, &resp, 8.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -962,6 +1006,7 @@ pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Res
         egui::FontId::proportional(17.0),
         color,
     );
+    focus_ring(ui, &resp, 6.0);
     resp.on_hover_text(tip)
 }
 
@@ -994,6 +1039,7 @@ pub(crate) fn icon_toggle(
         egui::FontId::proportional(15.0),
         color,
     );
+    focus_ring(ui, &resp, 6.0);
     resp.on_hover_text(tip)
 }
 
@@ -2437,6 +2483,145 @@ mod tests {
         let up = tab_frame(&ctx, vec![press(slot, false)]);
         assert_eq!(up.clicked, Some(1), "a cold press on the slot area must click-activate");
         assert_eq!(up.closed, None);
+    }
+
+    // ---- headless keyboard-a11y frames: the settings primitives must be operable without a
+    // pointer (egui gives Tab/arrow focus + Space/Enter clicks; these pin that contract plus
+    // our own arrow handling) ----
+
+    /// One central-panel frame for widget-level keyboard tests. `modifiers` mirrors the raw
+    /// modifier state (needed for Shift-stepping; key events alone don't set `i.modifiers`).
+    fn widget_frame(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        modifiers: Modifiers,
+        add: &mut dyn FnMut(&mut egui::Ui),
+    ) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            modifiers,
+            focused: true,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| add(ui));
+        });
+    }
+
+    fn keyev(key: Key, modifiers: Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    #[test]
+    fn space_and_enter_toggle_a_focused_switch() {
+        let ctx = egui::Context::default();
+        let none = Modifiers::default();
+        let mut on = false;
+        widget_frame(&ctx, vec![], none, &mut |ui| {
+            toggle_switch(ui, &mut on).request_focus();
+        });
+        widget_frame(&ctx, vec![keyev(Key::Space, none)], none, &mut |ui| {
+            toggle_switch(ui, &mut on);
+        });
+        assert!(on, "Space on a focused switch must toggle it on");
+        widget_frame(&ctx, vec![keyev(Key::Enter, none)], none, &mut |ui| {
+            toggle_switch(ui, &mut on);
+        });
+        assert!(!on, "Enter must toggle it back off");
+    }
+
+    #[test]
+    fn tab_moves_focus_from_a_text_field_to_the_next_primitive() {
+        // The settings traversal contract: hand-painted primitives are real Tab stops after
+        // a text field (their `Sense::click` is focusable), and traversal alone never acts.
+        let ctx = egui::Context::default();
+        let none = Modifiers::default();
+        let mut q = String::new();
+        let mut on = false;
+        widget_frame(&ctx, vec![], none, &mut |ui| {
+            text_field(ui, &mut q, "search", 120.0, crate::colors::fg()).request_focus();
+            toggle_switch(ui, &mut on);
+        });
+        widget_frame(&ctx, vec![keyev(Key::Tab, none)], none, &mut |ui| {
+            text_field(ui, &mut q, "search", 120.0, crate::colors::fg());
+            toggle_switch(ui, &mut on);
+        });
+        let mut focused = false;
+        widget_frame(&ctx, vec![], none, &mut |ui| {
+            text_field(ui, &mut q, "search", 120.0, crate::colors::fg());
+            focused = toggle_switch(ui, &mut on).has_focus();
+        });
+        assert!(focused, "Tab must move focus from the field to the switch");
+        assert!(!on, "traversal alone must not toggle");
+    }
+
+    #[test]
+    fn arrow_keys_move_focus_along_a_chip_row() {
+        // Chip groups: egui's directional focus movement walks the row; Space/Enter then
+        // selects (keyboard click). Pin it so a chip regression can't ship silently.
+        let ctx = egui::Context::default();
+        let none = Modifiers::default();
+        let chips = |ui: &mut egui::Ui, out: &mut [bool; 2]| {
+            ui.horizontal(|ui| {
+                out[0] = chip(ui, "Fixed", true).has_focus();
+                out[1] = chip(ui, "Dynamic", false).has_focus();
+            });
+        };
+        let mut focus = [false; 2];
+        widget_frame(&ctx, vec![], none, &mut |ui| {
+            ui.horizontal(|ui| {
+                chip(ui, "Fixed", true).request_focus();
+                chip(ui, "Dynamic", false);
+            });
+        });
+        widget_frame(&ctx, vec![keyev(Key::ArrowRight, none)], none, &mut |ui| {
+            chips(ui, &mut focus);
+        });
+        widget_frame(&ctx, vec![], none, &mut |ui| chips(ui, &mut focus));
+        assert_eq!(focus, [false, true], "ArrowRight must move focus to the next chip");
+    }
+
+    #[test]
+    fn arrows_step_a_focused_num_field() {
+        let ctx = egui::Context::default();
+        let none = Modifiers::default();
+        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        let mut v = 500_usize;
+        widget_frame(&ctx, vec![], none, &mut |ui| {
+            num_field(ui, "kb", &mut v, 0..=10_000, 100, 90.0).request_focus();
+        });
+        // Settle: the field installs its focus-lock filter on its first focused render.
+        widget_frame(&ctx, vec![], none, &mut |ui| {
+            num_field(ui, "kb", &mut v, 0..=10_000, 100, 90.0);
+        });
+        widget_frame(&ctx, vec![keyev(Key::ArrowUp, none)], none, &mut |ui| {
+            num_field(ui, "kb", &mut v, 0..=10_000, 100, 90.0);
+        });
+        assert_eq!(v, 600, "ArrowUp steps by the field's step");
+        widget_frame(&ctx, vec![keyev(Key::ArrowDown, shift)], shift, &mut |ui| {
+            num_field(ui, "kb", &mut v, 0..=10_000, 100, 90.0);
+        });
+        assert_eq!(v, 0, "Shift+ArrowDown steps 10x (600 - 1000 clamps to the floor)");
+    }
+
+    #[test]
+    fn arrow_keys_nudge_a_focused_slider() {
+        // egui-native slider keyboard support - pinned so the design-system wrapper can't
+        // accidentally drop it.
+        let ctx = egui::Context::default();
+        let none = Modifiers::default();
+        let mut v = 0.5_f32;
+        widget_frame(&ctx, vec![], none, &mut |ui| {
+            slider(ui, &mut v, 0.0..=1.0, |x| format!("{x:.2}")).request_focus();
+        });
+        widget_frame(&ctx, vec![keyev(Key::ArrowRight, none)], none, &mut |ui| {
+            slider(ui, &mut v, 0.0..=1.0, |x| format!("{x:.2}"));
+        });
+        assert!(v > 0.5, "ArrowRight must nudge the focused slider up");
     }
 
     #[test]

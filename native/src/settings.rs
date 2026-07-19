@@ -74,6 +74,7 @@ impl Section {
 
 /// Settings-view state that outlives a frame (selected section, scheme search) plus the
 /// one-frame hover handoff for the scheme preview card.
+#[allow(clippy::struct_excessive_bools)] // independent one-shot flags, not a state machine
 pub(crate) struct SettingsState {
     pub(crate) section: Section,
     filter: String,
@@ -84,6 +85,8 @@ pub(crate) struct SettingsState {
     dropdown_open: Option<egui::Id>, // which searchable theme dropdown is open, if any
     dropdown_filter: String,      // the open dropdown's search query
     dropdown_focus: bool,         // focus the dropdown filter once, on open
+    dropdown_hl: Option<usize>,   // keyboard-highlighted row (index into the popup's filtered list)
+    dropdown_scroll: bool,        // scroll the popup list to the highlight once (it just moved)
     dropdown_bright: Option<BrightFilter>, // open dropdown's chips; None = auto (follow the slot)
     force_dropdown: Option<String>, // open this dropdown (by id salt) on first render - shot harness
     scheme_bright: Option<BrightFilter>, // brightness chips; None = auto (follow the slot)
@@ -105,6 +108,8 @@ impl SettingsState {
             dropdown_open: None,
             dropdown_filter: String::new(),
             dropdown_focus: false,
+            dropdown_hl: None,
+            dropdown_scroll: false,
             dropdown_bright: None,
             force_dropdown: None,
             scheme_bright: None,
@@ -252,6 +257,30 @@ pub(crate) fn bright_allows(filter: BrightFilter, dark: bool) -> bool {
         BrightFilter::Light => !dark,
         BrightFilter::Dark => dark,
     }
+}
+
+/// Arrow step over a dropdown popup's filtered list: Down from no highlight lands on the top
+/// row, Up on the bottom one; steps wrap at both ends. `None` when the list is empty.
+pub(crate) fn move_highlight(cur: Option<usize>, len: usize, down: bool) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    Some(match (cur, down) {
+        (None, true) => 0,
+        (None, false) => len - 1,
+        (Some(i), true) => (i + 1) % len,
+        (Some(i), false) => (i + len - 1) % len,
+    })
+}
+
+/// The row Enter commits in a dropdown popup: the keyboard highlight when one is set
+/// (clamped - the filter may have shrunk under it), else the TOP match, so typing a query
+/// and hitting Enter picks the first hit. `None` on an empty list.
+pub(crate) fn commit_index(hl: Option<usize>, len: usize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    Some(hl.map_or(0, |i| i.min(len - 1)))
 }
 
 /// Which config field a picked scheme lands in. With follow-system on, the pick applies to
@@ -453,6 +482,7 @@ fn link_row(ui: &mut egui::Ui, icon: &str, name: &str, desc: &str) -> egui::Resp
         egui::FontId::proportional(11.0),
         colors::dim(),
     );
+    ui::focus_ring(ui, &resp, 9.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -488,6 +518,7 @@ fn nav_row(ui: &mut egui::Ui, section: Section, selected: bool) -> egui::Respons
         egui::FontId::proportional(14.0),
         text_col,
     );
+    ui::focus_ring(ui, &resp, 8.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -646,22 +677,57 @@ fn scheme_row(ui: &mut egui::Ui, name: &str, t: &Theme, active: bool) -> egui::R
         );
         sx += sw + gap;
     }
+    ui::focus_ring(ui, &resp, 9.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 // ---- searchable dropdowns (theme slots + font family) ----
 
+/// Keyboard state for one open searchable-dropdown popup, read once per frame by the `list`
+/// closure: Up/Down move `st.dropdown_hl` over the `len` filtered rows (the search field
+/// keeps widget focus - the highlight is popup state, not egui focus; a TextEdit's event
+/// filter claims the arrows so egui can't move focus away either). Returns the row Enter
+/// commits, honored only while the keyboard sits on the search field (or nothing), so
+/// Enter on a focused chip/row activates that widget instead of double-firing a pick.
+fn dropdown_nav(
+    ui: &egui::Ui,
+    st: &mut SettingsState,
+    field: egui::Id,
+    len: usize,
+) -> Option<usize> {
+    let (up, down, enter) = ui.input(|i| {
+        (
+            i.key_pressed(egui::Key::ArrowUp),
+            i.key_pressed(egui::Key::ArrowDown),
+            i.key_pressed(egui::Key::Enter),
+        )
+    });
+    if up != down {
+        st.dropdown_hl = move_highlight(st.dropdown_hl, len, down);
+        st.dropdown_scroll = true; // the list scrolls to follow the keyboard highlight
+    } else if len == 0 {
+        st.dropdown_hl = None;
+    } else if let Some(hl) = st.dropdown_hl
+        && hl >= len
+    {
+        st.dropdown_hl = Some(len - 1); // the filter shrank under the highlight
+    }
+    let field_owns = ui.ctx().memory(|m| m.focused().is_none_or(|f| f == field));
+    (enter && field_owns).then(|| commit_index(st.dropdown_hl, len)).flatten()
+}
+
 /// Combo-style button + searchable-overlay scaffold shared by the scheme and font dropdowns:
 /// paints the closed button (current `label` + caret), owns the open/filter/focus-once state
 /// (`st.dropdown_*`, one open at a time), and dismisses on pick, Esc, or an outside press.
-/// `list` draws the filtered rows inside the popup and returns true when an item was picked.
+/// `list` draws the filtered rows inside the popup (keyboard nav via `dropdown_nav`, keyed by
+/// the passed search-field id) and returns true when an item was picked.
 fn searchable_dropdown(
     ui: &mut egui::Ui,
     st: &mut SettingsState,
     id_salt: &str,
     label: &str,
     hint: &str,
-    list: impl FnOnce(&mut egui::Ui, &mut SettingsState) -> bool,
+    list: impl FnOnce(&mut egui::Ui, &mut SettingsState, egui::Id) -> bool,
 ) -> bool {
     let id = ui.make_persistent_id(id_salt);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(200.0, 28.0), egui::Sense::click());
@@ -685,11 +751,13 @@ fn searchable_dropdown(
         egui::FontId::proportional(12.0),
         colors::dim(),
     );
+    ui::focus_ring(ui, &resp, 7.0);
     if resp.clicked() {
         st.dropdown_open = if open { None } else { Some(id) };
         st.dropdown_filter.clear();
         st.dropdown_bright = None; // back to the slot's auto pre-filter on every open
         st.dropdown_focus = true;
+        st.dropdown_hl = None;
     }
     // Screenshot harness: open this dropdown on first render (a floating popup can't be
     // pointer-driven headless), same state as a click.
@@ -698,6 +766,7 @@ fn searchable_dropdown(
         st.dropdown_open = Some(id);
         st.dropdown_filter.clear();
         st.dropdown_bright = None;
+        st.dropdown_hl = None;
     }
     if st.dropdown_open != Some(id) {
         return false;
@@ -715,11 +784,16 @@ fn searchable_dropdown(
                     r.request_focus();
                     st.dropdown_focus = false;
                 }
+                if r.changed() {
+                    st.dropdown_hl = None; // a new query restarts at "top match"
+                }
                 ui.add_space(6.0);
-                picked = list(ui, st);
+                picked = list(ui, st, r.id);
             });
         });
-    // Close on pick, Esc, or a press outside both the popup and its button.
+    // Close on pick, Esc, or a press outside both the popup and its button. The settings
+    // view's own Esc handling samples `dropdown_open` BEFORE the panels run, so the press
+    // that closes this popup never also closes settings.
     let dismissed = ui.ctx().input(|i| {
         i.key_pressed(egui::Key::Escape)
             || (i.pointer.any_pressed()
@@ -729,18 +803,22 @@ fn searchable_dropdown(
     });
     if picked || dismissed {
         st.dropdown_open = None;
+        st.dropdown_hl = None;
     }
     picked
 }
 
-/// One row of a searchable-dropdown popup: selection fill + accent text when active, hover
-/// fill otherwise.
-fn dropdown_row(ui: &mut egui::Ui, text: &str, active: bool) -> egui::Response {
+/// One row of a searchable-dropdown popup: selection fill + accent text when active, a
+/// hover-strength fill while keyboard-`highlighted` (the popup sits on an elevated surface,
+/// so `hover_elevated` - plain `hover` vanishes there), hover fill otherwise.
+fn dropdown_row(ui: &mut egui::Ui, text: &str, active: bool, highlighted: bool) -> egui::Response {
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
     let p = ui.painter();
     if active {
         p.rect_filled(rect, 6.0, colors::selection());
+    } else if highlighted {
+        p.rect_filled(rect, 6.0, colors::hover_elevated());
     } else if resp.hovered() {
         p.rect_filled(rect, 6.0, colors::hover());
     }
@@ -751,6 +829,7 @@ fn dropdown_row(ui: &mut egui::Ui, text: &str, active: bool) -> egui::Response {
         egui::FontId::proportional(13.0),
         if active { colors::accent() } else { colors::fg() },
     );
+    ui::focus_ring(ui, &resp, 6.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -770,7 +849,7 @@ fn scheme_dropdown(
     let all = themes::all_schemes();
     let label = value.clone();
     let hint = format!("Search {} schemes", all.len());
-    searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st| {
+    searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st, field| {
         let mut bright = st.dropdown_bright.unwrap_or_else(|| slot_bright_filter(slot));
         ui.horizontal(|ui| {
             for (label, f) in [
@@ -790,31 +869,50 @@ fn scheme_dropdown(
             .filter(|&i| bright_allows(bright, colors::theme_is_dark(&all[i].1)))
             .collect();
         if shown.is_empty() {
+            st.dropdown_hl = None;
             ui.label(egui::RichText::new("No schemes match.").color(colors::dim()));
             return false;
         }
+        let commit = dropdown_nav(ui, st, field, shown.len());
+        // The keyboard highlight drives the section's live preview card, exactly like
+        // pointer hover (which, set inside the row loop, wins while actually hovering).
+        if let Some(hl) = st.dropdown_hl {
+            st.hover_preview = Some(all[shown[hl]].1);
+        }
         let mut picked = false;
-        egui::ScrollArea::vertical().max_height(230.0).show_rows(
-            ui,
-            24.0,
-            shown.len(),
-            |ui, range| {
-                for i in range {
-                    let (name, theme) = &all[shown[i]];
-                    let name = name.as_str();
-                    let resp = dropdown_row(ui, name, name == normalize_name(value));
-                    if resp.hovered() {
-                        // Live-preview the hovered scheme in the section's preview card
-                        // (same hover handoff as the scheme browser rows).
-                        st.hover_preview = Some(*theme);
-                    }
-                    if resp.clicked() {
-                        name.clone_into(value);
-                        picked = true;
-                    }
+        let mut list = egui::ScrollArea::vertical().max_height(230.0);
+        if std::mem::take(&mut st.dropdown_scroll)
+            && let Some(hl) = st.dropdown_hl
+        {
+            // Keep the moved highlight in view (show_rows steps by row height + spacing).
+            let step = 24.0 + ui.spacing().item_spacing.y;
+            list = list.vertical_scroll_offset((hl as f32 * step - 103.0).max(0.0));
+        }
+        list.show_rows(ui, 24.0, shown.len(), |ui, range| {
+            for i in range {
+                let (name, theme) = &all[shown[i]];
+                let name = name.as_str();
+                let resp = dropdown_row(
+                    ui,
+                    name,
+                    name == normalize_name(value),
+                    st.dropdown_hl == Some(i),
+                );
+                if resp.hovered() {
+                    // Live-preview the hovered scheme in the section's preview card
+                    // (same hover handoff as the scheme browser rows).
+                    st.hover_preview = Some(*theme);
                 }
-            },
-        );
+                if resp.clicked() {
+                    name.clone_into(value);
+                    picked = true;
+                }
+            }
+        });
+        if let Some(ci) = commit {
+            all[shown[ci]].0.clone_into(value);
+            picked = true;
+        }
         picked
     })
 }
@@ -832,29 +930,46 @@ fn font_dropdown(
     let all = crate::installed_families();
     let label = if value.is_empty() { DEFAULT_LABEL.to_owned() } else { value.clone() };
     let hint = format!("Search {} font families", all.len());
-    searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st| {
+    searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st, field| {
         let shown = filter_names(all, &st.dropdown_filter);
         let with_default = st.dropdown_filter.trim().is_empty();
         if shown.is_empty() && !with_default {
+            st.dropdown_hl = None;
             ui.label(egui::RichText::new("No fonts match.").color(colors::dim()));
             return false;
         }
-        let mut picked = false;
         let total = shown.len() + usize::from(with_default);
-        egui::ScrollArea::vertical().max_height(230.0).show_rows(ui, 24.0, total, |ui, range| {
+        // Row i -> family name ("" = the bundled-default reset row while unfiltered).
+        let row_name = |i: usize| {
+            if with_default && i == 0 {
+                ""
+            } else {
+                all[shown[i - usize::from(with_default)]].as_str()
+            }
+        };
+        let commit = dropdown_nav(ui, st, field, total);
+        let mut picked = false;
+        let mut list = egui::ScrollArea::vertical().max_height(230.0);
+        if std::mem::take(&mut st.dropdown_scroll)
+            && let Some(hl) = st.dropdown_hl
+        {
+            let step = 24.0 + ui.spacing().item_spacing.y;
+            list = list.vertical_scroll_offset((hl as f32 * step - 103.0).max(0.0));
+        }
+        list.show_rows(ui, 24.0, total, |ui, range| {
             for i in range {
-                let name = if with_default && i == 0 {
-                    ""
-                } else {
-                    all[shown[i - usize::from(with_default)]].as_str()
-                };
+                let name = row_name(i);
                 let text = if name.is_empty() { DEFAULT_LABEL } else { name };
-                if dropdown_row(ui, text, name == value).clicked() {
+                if dropdown_row(ui, text, name == value, st.dropdown_hl == Some(i)).clicked() {
                     name.clone_into(value);
                     picked = true;
                 }
             }
         });
+        if let Some(ci) = commit {
+            row_name(ci).clone_into(value);
+            picked = true;
+        }
         picked
     })
 }
@@ -1157,6 +1272,7 @@ fn inline_icon(ui: &mut egui::Ui, id: egui::Id, center: egui::Pos2, icon: &str, 
         egui::FontId::proportional(14.0),
         if hovered { colors::fg() } else { colors::dim() },
     );
+    ui::focus_ring(ui, &resp, 6.0);
     resp.clicked()
 }
 
@@ -1208,6 +1324,7 @@ fn profile_row(
         egui::FontId::proportional(11.0),
         colors::dim(),
     );
+    ui::focus_ring(ui, &resp, 9.0);
     // Trailing icons, right to left: Delete, Duplicate, Launch.
     let mut x = rect.right() - 22.0;
     let mut hits = [false; 3];
@@ -1853,6 +1970,16 @@ impl Stdusk {
                 ui.label(egui::RichText::new("SETTINGS").size(10.5).strong().color(colors::dim()));
                 ui.add_space(6.0);
                 for s in Section::ALL {
+                    // STDUSK_SHOT_FOCUS: hand keyboard focus to the active section's row
+                    // BEFORE it draws, so the shared focus ring lands in the very first pass
+                    // (the harness captures pass-1 content; headless frames can't Tab).
+                    if self.screenshot.is_some()
+                        && self.settings.section == s
+                        && std::env::var("STDUSK_SHOT_FOCUS").is_ok()
+                    {
+                        let id = ui.next_auto_id();
+                        ui.ctx().memory_mut(|m| m.request_focus(id));
+                    }
                     if nav_row(ui, s, self.settings.section == s).clicked() {
                         self.settings.open_section(s);
                     }
@@ -2267,6 +2394,32 @@ mod tests {
         assert_eq!(map["B"], "2");
     }
 
+    #[test]
+    fn highlight_moves_and_wraps() {
+        // (cur, len, down) -> next
+        let cases = [
+            (None, 5, true, Some(0)),     // Down from nothing: top row
+            (None, 5, false, Some(4)),    // Up from nothing: bottom row
+            (Some(0), 5, true, Some(1)),  // plain step
+            (Some(4), 5, true, Some(0)),  // wraps at the end
+            (Some(0), 5, false, Some(4)), // wraps at the top
+            (Some(2), 0, true, None),     // empty list clears the highlight
+            (None, 0, false, None),
+        ];
+        for (cur, len, down, want) in cases {
+            assert_eq!(move_highlight(cur, len, down), want, "cur={cur:?} len={len} down={down}");
+        }
+    }
+
+    #[test]
+    fn commit_falls_back_to_the_top_match() {
+        assert_eq!(commit_index(None, 3), Some(0)); // no highlight: Enter picks the top match
+        assert_eq!(commit_index(Some(2), 3), Some(2));
+        assert_eq!(commit_index(Some(9), 3), Some(2)); // the filter shrank: clamp
+        assert_eq!(commit_index(None, 0), None);
+        assert_eq!(commit_index(Some(1), 0), None);
+    }
+
     fn run_frame(ctx: &egui::Context, events: Vec<egui::Event>, add: impl FnMut(&mut egui::Ui)) {
         let mut add = add;
         let raw = egui::RawInput {
@@ -2317,22 +2470,30 @@ mod tests {
         assert_eq!(st.profile_env, vec![("AWS_PROFILE".to_string(), "work".to_string())]);
     }
 
-    #[test]
-    fn scheme_dropdown_opens_filters_and_picks() {
-        let ctx = egui::Context::default();
-        let mut st = SettingsState::new();
-        let mut value = "one-half-dark".to_string();
-        // Frame 1: locate the button. Frames 2-3: click it -> the popup opens.
-        run_frame(&ctx, vec![], |ui| {
-            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+    fn key(k: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// Click open the "probe" scheme dropdown (locate + pointer press/release) and run one
+    /// settle frame so the popup's search field holds focus with its arrow-claiming event
+    /// filter installed (arrows then move the HIGHLIGHT, never egui focus).
+    fn open_scheme_dropdown(ctx: &egui::Context, st: &mut SettingsState, value: &mut String) {
+        run_frame(ctx, vec![], |ui| {
+            let _ = scheme_dropdown(ui, st, "probe", SchemeSlot::Fixed, value);
         });
         let center = egui::pos2(30.0, 22.0); // inside the 200x28 button at the panel origin
-        run_frame(&ctx, vec![egui::Event::PointerMoved(center)], |ui| {
-            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+        run_frame(ctx, vec![egui::Event::PointerMoved(center)], |ui| {
+            let _ = scheme_dropdown(ui, st, "probe", SchemeSlot::Fixed, value);
         });
         for pressed in [true, false] {
             run_frame(
-                &ctx,
+                ctx,
                 vec![egui::Event::PointerButton {
                     pos: center,
                     button: egui::PointerButton::Primary,
@@ -2340,29 +2501,81 @@ mod tests {
                     modifiers: egui::Modifiers::default(),
                 }],
                 |ui| {
-                    let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+                    let _ = scheme_dropdown(ui, st, "probe", SchemeSlot::Fixed, value);
                 },
             );
         }
         assert!(st.dropdown_open.is_some(), "clicking the dropdown must open its popup");
+        run_frame(ctx, vec![], |ui| {
+            let _ = scheme_dropdown(ui, st, "probe", SchemeSlot::Fixed, value);
+        });
+    }
+
+    #[test]
+    fn scheme_dropdown_opens_filters_and_picks() {
+        let ctx = egui::Context::default();
+        let mut st = SettingsState::new();
+        let mut value = "one-half-dark".to_string();
+        open_scheme_dropdown(&ctx, &mut st, &mut value);
         // Type a filter that matches exactly one scheme, then Esc closes the popup.
         st.dropdown_filter = "tokyo-night".into();
         run_frame(&ctx, vec![], |ui| {
             let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
         });
-        run_frame(
-            &ctx,
-            vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::default(),
-            }],
-            |ui| {
-                let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
-            },
-        );
+        run_frame(&ctx, vec![key(egui::Key::Escape)], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+        });
         assert!(st.dropdown_open.is_none(), "Esc must close the popup");
+    }
+
+    #[test]
+    fn dropdown_arrows_move_the_highlight_and_enter_commits() {
+        let ctx = egui::Context::default();
+        let mut st = SettingsState::new();
+        let mut value = "one-half-dark".to_string();
+        open_scheme_dropdown(&ctx, &mut st, &mut value);
+        run_frame(&ctx, vec![key(egui::Key::ArrowDown)], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+        });
+        assert_eq!(st.dropdown_hl, Some(0), "ArrowDown from nothing highlights the top row");
+        run_frame(&ctx, vec![key(egui::Key::ArrowDown)], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+        });
+        assert_eq!(st.dropdown_hl, Some(1));
+        assert!(st.hover_preview.is_some(), "the keyboard highlight must feed the preview card");
+        // Enter commits the highlighted row (index 1 of the unfiltered list) and closes.
+        let all = themes::all_schemes();
+        let expect = all[filter_schemes(all, "")[1]].0.clone();
+        run_frame(&ctx, vec![key(egui::Key::Enter)], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+        });
+        assert_eq!(value, expect, "Enter must commit the highlighted scheme");
+        assert!(st.dropdown_open.is_none(), "a commit closes the popup");
+        assert_eq!(st.dropdown_hl, None, "the highlight resets on close");
+    }
+
+    #[test]
+    fn dropdown_typing_keeps_filtering_and_esc_closes_without_committing() {
+        let ctx = egui::Context::default();
+        let mut st = SettingsState::new();
+        let mut value = "one-half-dark".to_string();
+        open_scheme_dropdown(&ctx, &mut st, &mut value);
+        // Arrows move the highlight WITHOUT stealing focus from the search field: typing
+        // right after two ArrowDown presses still lands in the filter.
+        for _ in 0..2 {
+            run_frame(&ctx, vec![key(egui::Key::ArrowDown)], |ui| {
+                let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+            });
+        }
+        run_frame(&ctx, vec![egui::Event::Text("tokyo".into())], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+        });
+        assert_eq!(st.dropdown_filter, "tokyo", "typing must keep filtering after arrows");
+        assert_eq!(st.dropdown_hl, None, "a new query restarts at the top match");
+        run_frame(&ctx, vec![key(egui::Key::Escape)], |ui| {
+            let _ = scheme_dropdown(ui, &mut st, "probe", SchemeSlot::Fixed, &mut value);
+        });
+        assert!(st.dropdown_open.is_none(), "Esc must close the popup");
+        assert_eq!(value, "one-half-dark", "Esc must never commit a pick");
     }
 }
