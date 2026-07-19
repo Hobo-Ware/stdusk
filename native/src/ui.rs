@@ -1374,10 +1374,14 @@ pub(crate) fn render_grid(
     cw: f32,
     ch: f32,
     font: &egui::FontId,
+    bold_font: Option<&egui::FontId>, // real bold face, when the family registered one
     style: GridStyle,
     search_marks: &[crate::search::Match], // all find-bar matches (empty when the bar is closed)
 ) -> egui::Response {
     let GridStyle { cursor, dimmed, link_active, blink, ligatures, min_contrast } = style;
+    // BOLD cells switch to the real bold face when one exists; metrics stay derived from the
+    // regular face (a bold glyph may run a hair wider - Tabby-equivalent tradeoff).
+    let cell_font = |bold: bool| if bold { bold_font.unwrap_or(font) } else { font };
     let resp = ui.interact(rect, egui::Id::new(id_src), egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     let origin = rect.min;
@@ -1470,7 +1474,7 @@ pub(crate) fn render_grid(
                     span.center(),
                     egui::Align2::CENTER_CENTER,
                     glyph,
-                    font.clone(),
+                    cell_font(cell.bold).clone(),
                     fade(ink(cell.fg, cell.bg)),
                 );
             }
@@ -1492,6 +1496,7 @@ pub(crate) fn render_grid(
             }
             if cell.c != ' ' && cell.c != '\0' {
                 let fg = fade(ink(cell.fg, cell.bg));
+                let f = cell_font(cell.bold);
                 if cell.wide {
                     // A wide glyph (CJK/emoji) owns this cell AND the spacer after it: draw it
                     // horizontally centered across the two, top-aligned like its neighbors.
@@ -1499,11 +1504,11 @@ pub(crate) fn render_grid(
                         egui::pos2(pos.x + cw, pos.y),
                         egui::Align2::CENTER_TOP,
                         cell.c,
-                        font.clone(),
+                        f.clone(),
                         fg,
                     );
                 } else {
-                    painter.text(pos, egui::Align2::LEFT_TOP, cell.c, font.clone(), fg);
+                    painter.text(pos, egui::Align2::LEFT_TOP, cell.c, f.clone(), fg);
                 }
             }
         }
@@ -1566,7 +1571,13 @@ pub(crate) fn render_grid(
                     } else {
                         (cpos, egui::Align2::LEFT_TOP)
                     };
-                    painter.text(pos, anchor, under.c, font.clone(), fade(colors::bg()));
+                    painter.text(
+                        pos,
+                        anchor,
+                        under.c,
+                        cell_font(under.bold).clone(),
+                        fade(colors::bg()),
+                    );
                 }
             }
         }

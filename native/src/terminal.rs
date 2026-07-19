@@ -96,12 +96,15 @@ pub(crate) fn exit_action(mode: OnExit, uptime_secs: f32, rapid_exits: u32) -> E
 /// One styled cell for the renderer. `bg == None` means the terminal default (transparent).
 /// `wide` marks a double-width glyph (CJK/emoji) - the renderer draws it across two cells; the
 /// spacer cell that follows carries `c == '\0'` so no glyph is drawn there (bg/selection stay).
+/// `bold` is the raw SGR BOLD flag - the renderer switches to the real bold face when one is
+/// registered; independent of the `bold_bright` color treatment.
 pub(crate) struct CellSnap {
     pub(crate) c: char,
     pub(crate) fg: Color32,
     pub(crate) bg: Option<Color32>,
     pub(crate) selected: bool,
     pub(crate) wide: bool,
+    pub(crate) bold: bool,
 }
 
 /// Map a grid cell's char + flags to what the renderer draws: spacer cells (the second column
@@ -533,9 +536,10 @@ impl PtyTerm {
                 Some(colors::to_color32(bg_c))
             };
             let selected = selection.as_ref().is_some_and(|r| r.contains(indexed.point));
-            let bold = self.bold_bright && cell.flags.contains(Flags::BOLD);
+            let bold = cell.flags.contains(Flags::BOLD);
+            let bright = self.bold_bright && bold;
             let (c, wide) = snap_glyph(cell.c, cell.flags);
-            cells.push(CellSnap { c, fg: colors::cell_fg(fg_c, bold), bg, selected, wide });
+            cells.push(CellSnap { c, fg: colors::cell_fg(fg_c, bright), bg, selected, wide, bold });
         }
         // Cursor only shown when the viewport is at the bottom (not scrolled into history).
         let cursor = if grid.display_offset() == 0 {
@@ -869,6 +873,20 @@ mod tests {
         for (c, flags, want) in cases {
             assert_eq!(snap_glyph(c, flags), want, "{c:?} {flags:?}");
         }
+    }
+
+    #[test]
+    fn real_pty_snapshot_carries_the_bold_flag() {
+        // SGR 1 marks cells bold in the snapshot (the renderer's real-bold-face switch);
+        // the flag is raw - independent of the bold_bright color treatment (off here).
+        let got = spawn_and_poll("printf 'p \\033[1mB\\033[0m\\n'; sleep 5", |t| {
+            let snap = t.grid_snapshot();
+            let p = snap.cells.iter().position(|c| c.c == 'p')?;
+            let b = snap.cells.iter().position(|c| c.c == 'B')?;
+            Some((snap.cells[p].bold, snap.cells[b].bold))
+        })
+        .expect("bold output never hit the grid");
+        assert_eq!(got, (false, true));
     }
 
     #[test]

@@ -38,6 +38,10 @@ use ui::{apply_theme, auto_title, draw_toast, tint, toast_alpha};
 const COLS: usize = 80;
 const ROWS: usize = 24;
 
+/// egui font-family name for the terminal's real bold face (registered by `build_fonts` only
+/// when the user's font family resolves a bold sibling - the bundled default has none).
+pub(crate) const BOLD_FONT_FAMILY: &str = "term-bold";
+
 /// A user font resolved to raw file bytes + the face index inside the file (.ttc collections
 /// like Menlo need the index; plain .ttf/.otf use 0).
 struct ResolvedFont {
@@ -68,11 +72,37 @@ fn face_name_score(name: &str) -> u32 {
     .sum()
 }
 
-/// Resolve a font FAMILY name (e.g. "Menlo", "JetBrainsMono Nerd Font") to its font file via
-/// the system font source (core-text on macOS). None for an empty or unknown family.
-/// NOTE: font-kit's `select_best_match` is NOT face-accurate on macOS (it returned Menlo
-/// *Italic* for "Menlo"), so select the family and pick the closest-to-regular face ourselves.
-fn resolve_font(family: &str) -> Option<ResolvedFont> {
+/// Score a face as the family's BOLD sibling, judged by its NAME (same rationale as
+/// `face_name_score`: core-text `properties()` lie). `None` disqualifies: the name must say
+/// "bold" and must not be a slant. Among qualifiers, the plain Bold beats Semi/Extra/width
+/// variants - lowest wins.
+fn bold_face_name_score(name: &str) -> Option<u32> {
+    let n = name.to_ascii_lowercase();
+    if !n.contains("bold") || n.contains("italic") || n.contains("oblique") {
+        return None;
+    }
+    Some(
+        [
+            ("semibold", 8),
+            ("semi bold", 8),
+            ("demibold", 8),
+            ("demi bold", 8),
+            ("extrabold", 4),
+            ("extra bold", 4),
+            ("ultrabold", 4),
+            ("ultra bold", 4),
+            ("condensed", 2),
+            ("narrow", 2),
+        ]
+        .iter()
+        .filter(|(kw, _)| n.contains(kw))
+        .map(|(_, pts)| pts)
+        .sum(),
+    )
+}
+
+/// Pick the family face with the lowest `score(full_name())` and read its bytes + face index.
+fn resolve_face(family: &str, score: impl Fn(&str) -> Option<u32>) -> Option<ResolvedFont> {
     use font_kit::source::SystemSource;
     let name = family.trim();
     if name.is_empty() {
@@ -82,8 +112,8 @@ fn resolve_font(family: &str) -> Option<ResolvedFont> {
     let best = fam
         .fonts()
         .iter()
-        .filter_map(|h| h.load().ok().map(|f| (h, face_name_score(&f.full_name()))))
-        .min_by_key(|&(_, score)| score)
+        .filter_map(|h| h.load().ok().and_then(|f| score(&f.full_name()).map(|s| (h, s))))
+        .min_by_key(|&(_, s)| s)
         .map(|(h, _)| h)?;
     match best.clone() {
         font_kit::handle::Handle::Path { path, font_index } => {
@@ -93,6 +123,20 @@ fn resolve_font(family: &str) -> Option<ResolvedFont> {
             Some(ResolvedFont { bytes: (*bytes).clone(), index: font_index })
         }
     }
+}
+
+/// Resolve a font FAMILY name (e.g. "Menlo", "JetBrainsMono Nerd Font") to its font file via
+/// the system font source (core-text on macOS). None for an empty or unknown family.
+/// NOTE: font-kit's `select_best_match` is NOT face-accurate on macOS (it returned Menlo
+/// *Italic* for "Menlo"), so select the family and pick the closest-to-regular face ourselves.
+fn resolve_font(family: &str) -> Option<ResolvedFont> {
+    resolve_face(family, |n| Some(face_name_score(n)))
+}
+
+/// Resolve the family's real BOLD face (upright, closest to plain Bold), or `None` when the
+/// family doesn't ship one - bold cells then keep the regular face.
+fn resolve_bold_font(family: &str) -> Option<ResolvedFont> {
+    resolve_face(family, bold_face_name_score)
 }
 
 /// Installed font family names, sorted; cached (the font list doesn't change mid-run).
@@ -109,9 +153,10 @@ fn installed_families() -> &'static [String] {
 /// The full font set: egui defaults + Phosphor icons + the user's terminal font (when resolved)
 /// at the TOP of the Monospace family + emoji/symbol fallbacks appended to both families.
 /// Shared by startup and the settings live-apply so the two paths can't drift.
-/// NOTE: one face per family in egui - real bold faces are a future item; bold cells keep the
-/// bright-ANSI color treatment (`terminal.bold_bright`).
-fn build_fonts(custom: Option<ResolvedFont>) -> egui::FontDefinitions {
+/// A resolved `bold` face registers a second family (`BOLD_FONT_FAMILY`) that `render_grid`
+/// switches to for BOLD cells; without one, bold cells keep the regular face (the bright-ANSI
+/// color treatment `terminal.bold_bright` is independent and stands either way).
+fn build_fonts(custom: Option<ResolvedFont>, bold: Option<ResolvedFont>) -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     // Phosphor icon font (tab-bar controls + close x) as a fallback in the proportional
     // family, so icon codepoints render in buttons/labels.
@@ -160,6 +205,19 @@ fn build_fonts(custom: Option<ResolvedFont>) -> egui::FontDefinitions {
             }
         }
     }
+    // The bold family: the bold face first, then the full Monospace stack behind it (regular
+    // face + fallbacks), so a glyph the bold file misses degrades to regular, never tofu.
+    // Registered only when a bold face resolved - a FontId naming an absent family panics.
+    if let Some(f) = bold {
+        let mut data = egui::FontData::from_owned(f.bytes);
+        data.index = f.index;
+        fonts.font_data.insert("user-font-bold".to_owned(), data.into());
+        let mut keys = vec!["user-font-bold".to_owned()];
+        keys.extend(
+            fonts.families.get(&egui::FontFamily::Monospace).into_iter().flatten().cloned(),
+        );
+        fonts.families.insert(egui::FontFamily::Name(BOLD_FONT_FAMILY.into()), keys);
+    }
     fonts
 }
 
@@ -172,6 +230,7 @@ struct Stdusk {
     hotkey_mgr: GlobalHotKeyManager, // kept alive so the registration persists
     registered_hotkey: String, // the hotkey string currently registered (live re-registration)
     applied_font: String,      // the appearance.font last applied/attempted (live font re-apply)
+    bold_font_ready: bool,     // a real bold face is registered (BOLD_FONT_FAMILY exists this run)
     toggle: Arc<AtomicBool>,   // set by the hotkey thread, consumed in ui()
     visible: bool,
     dock_shown: bool, // last-applied Dock-icon state (dynamic dock_when_visible mode)
@@ -215,7 +274,9 @@ impl Stdusk {
         // + emoji/symbol fallbacks). An unresolvable family keeps the bundled default + toasts.
         let custom = resolve_font(&cfg.appearance.font);
         let font_missing = !cfg.appearance.font.trim().is_empty() && custom.is_none();
-        cc.egui_ctx.set_fonts(build_fonts(custom));
+        let bold = custom.is_some().then(|| resolve_bold_font(&cfg.appearance.font)).flatten();
+        let bold_font_ready = bold.is_some();
+        cc.egui_ctx.set_fonts(build_fonts(custom, bold));
 
         apply_theme(&cc.egui_ctx);
 
@@ -299,6 +360,14 @@ impl Stdusk {
                 }
                 tab.broadcast = true;
             }
+            // STDUSK_SHOT_SETTLE_MS: eframe captures at cumulative pass 2, which beats the
+            // pty readers - sleep here (before the first pass) so demo-shell output lands in
+            // the grid. The bold-face pixel proof drives real SGR output through $SHELL.
+            if let Some(ms) =
+                std::env::var("STDUSK_SHOT_SETTLE_MS").ok().and_then(|v| v.parse::<u64>().ok())
+            {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
         }
 
         // Menu-bar status item is the accessory app's presence + control; skip it in the
@@ -374,6 +443,7 @@ impl Stdusk {
             hotkey_mgr: mgr,
             registered_hotkey,
             applied_font,
+            bold_font_ready,
             toggle,
             visible: true,
             dock_shown,
@@ -449,7 +519,9 @@ impl Stdusk {
             self.toast = Some((format!("Font not found: {name}"), now + 3.0));
             return false;
         }
-        ctx.set_fonts(build_fonts(custom));
+        let bold = custom.is_some().then(|| resolve_bold_font(name)).flatten();
+        self.bold_font_ready = bold.is_some();
+        ctx.set_fonts(build_fonts(custom, bold));
         true
     }
 }
@@ -1275,6 +1347,36 @@ mod tests {
     }
 
     #[test]
+    fn bold_face_score_requires_upright_bold() {
+        // (face name) -> qualifies? The plain Bold must win; slants never qualify.
+        assert_eq!(bold_face_name_score("Menlo Bold"), Some(0));
+        assert_eq!(bold_face_name_score("Menlo Regular"), None); // not bold
+        assert_eq!(bold_face_name_score("Menlo Italic"), None);
+        assert_eq!(bold_face_name_score("Menlo Bold Italic"), None); // slant disqualifies
+        assert_eq!(bold_face_name_score("Menlo Bold Oblique"), None);
+        assert_eq!(bold_face_name_score("Fira Code Black"), None); // heavy != bold
+        // Bold variants qualify but rank behind the plain Bold.
+        let plain = bold_face_name_score("JetBrainsMono NF Bold").unwrap();
+        for variant in
+            ["JetBrainsMono NF SemiBold", "JetBrainsMono NF ExtraBold", "Iosevka Bold Condensed"]
+        {
+            let s = bold_face_name_score(variant).unwrap_or_else(|| panic!("{variant}"));
+            assert!(s > plain, "{variant} must rank behind the plain Bold");
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn resolve_bold_font_finds_menlo_bold_face() {
+        let f = resolve_bold_font("Menlo").expect("Menlo ships a Bold face");
+        let font = font_kit::font::Font::from_bytes(std::sync::Arc::new(f.bytes), f.index)
+            .expect("resolved bytes load");
+        assert_eq!(font.full_name(), "Menlo Bold");
+        assert!(resolve_bold_font("NoSuchFontXyz").is_none());
+        assert!(resolve_bold_font("").is_none());
+    }
+
+    #[test]
     #[cfg(target_os = "macos")]
     fn resolve_font_rejects_unknown_and_empty() {
         assert!(resolve_font("NoSuchFontXyz").is_none());
@@ -1284,23 +1386,37 @@ mod tests {
 
     #[test]
     fn build_fonts_without_user_font_keeps_fallbacks() {
-        let fonts = build_fonts(None);
+        let fonts = build_fonts(None, None);
         assert!(!fonts.font_data.contains_key("user-font"));
         let mono = &fonts.families[&egui::FontFamily::Monospace];
         assert!(mono.contains(&"noto-emoji".to_owned()));
         let prop = &fonts.families[&egui::FontFamily::Proportional];
         assert_eq!(prop[1], "phosphor");
+        // No bold face resolved -> the bold family must NOT exist (a FontId naming it panics).
+        assert!(!fonts.families.contains_key(&egui::FontFamily::Name(BOLD_FONT_FAMILY.into())));
     }
 
     #[test]
     #[cfg(target_os = "macos")]
     fn build_fonts_puts_user_font_first_in_monospace_only() {
-        let fonts = build_fonts(resolve_font("Menlo"));
+        let fonts = build_fonts(resolve_font("Menlo"), None);
         let mono = &fonts.families[&egui::FontFamily::Monospace];
         assert_eq!(mono[0], "user-font"); // top priority for the terminal grid
         assert!(mono.contains(&"noto-emoji".to_owned())); // fallbacks survive behind it
         let prop = &fonts.families[&egui::FontFamily::Proportional];
         assert!(!prop.contains(&"user-font".to_owned())); // chrome text untouched
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn build_fonts_registers_bold_family_with_fallbacks_behind() {
+        let fonts = build_fonts(resolve_font("Menlo"), resolve_bold_font("Menlo"));
+        let bold = &fonts.families[&egui::FontFamily::Name(BOLD_FONT_FAMILY.into())];
+        assert_eq!(bold[0], "user-font-bold"); // the bold face leads
+        assert!(bold.contains(&"user-font".to_owned())); // regular behind it
+        assert!(bold.contains(&"noto-emoji".to_owned())); // fallbacks survive
+        // The regular Monospace stack is untouched by the bold registration.
+        assert_eq!(fonts.families[&egui::FontFamily::Monospace][0], "user-font");
     }
 
     #[test]

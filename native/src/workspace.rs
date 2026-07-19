@@ -101,6 +101,14 @@ impl Stdusk {
             .show(ui, |ui| {
                 let area = ui.max_rect();
                 let font = egui::FontId::monospace(self.cfg.appearance.font_size * self.zoom);
+                // Real bold face for BOLD cells - only when build_fonts registered the family
+                // (naming an absent family in a FontId panics). Metrics stay regular-derived.
+                let bold_font = self.bold_font_ready.then(|| {
+                    egui::FontId::new(
+                        self.cfg.appearance.font_size * self.zoom,
+                        egui::FontFamily::Name(crate::BOLD_FONT_FAMILY.into()),
+                    )
+                });
                 let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
                 let (cw, ch) = (
                     m.size().x,
@@ -269,6 +277,7 @@ impl Stdusk {
                         cw,
                         ch,
                         &font,
+                        bold_font.as_ref(),
                         ui::GridStyle {
                             cursor,
                             dimmed,
