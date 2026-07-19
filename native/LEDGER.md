@@ -527,6 +527,59 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 0.4.0 - "Input & scroll parity": alt+scroll, right-click modes, wipe, tab leftovers (V1 P1s)
+- **Alt+scroll -> arrow keys**: the workspace wheel handler sends SS3 arrows (`ESC O A`/`B`,
+  one per wheel line) instead of scrolling while Alt is held. Tabby's exact gate is **Alt
+  alone** (baseTerminalTab mousewheel handler - NO alt-screen check, despite V1's sketch
+  saying otherwise); mirrored exactly. Pure `ui::alt_scroll_bytes` (tested).
+- **Line-step scroll**: Ctrl+Shift+Up/Down scroll one line (Tabby's default `scroll-up`/
+  `scroll-down` binding). Free bind: `key_to_bytes`' ctrl branch already maps arrows to None,
+  so nothing leaks to the pty (regression-tested).
+- **`terminal.right_click` = "menu" (default) | "paste" | "clipboard"** (Tabby-exact,
+  baseTerminalTab:647-676): menu pops the pane context menu; paste/clipboard act on a quick
+  tap - paste pastes (same immediate pipeline as middle-click, no multiline modal), clipboard
+  copies-the-selection-else-pastes - and BOTH fall back to the menu on a >=250ms hold.
+  Decision table is pure + tested (`ui::right_click_action`). Mechanics: raw Secondary
+  press/release tracking (`Stdusk.right_press` (path, time); egui wouldn't report a long hold
+  as a click at all), and the pane menu is now `egui::Popup::menu(&resp).open_memory(cmd)
+  .at_pointer_fixed()` opened on OUR decision instead of `resp.context_menu` (which hardwires
+  egui's secondary-click). Settings > Terminal > Mouse chips row.
+- **`terminal.focus_follows_mouse`** (default false = Tabby default): pointer MOVEMENT over an
+  unfocused pane focuses it (Tabby splitTab attaches a mousemove handler; hover alone doesn't
+  refocus). Suppressed while any button is down so selection/splitter drags crossing panes
+  can't steal focus mid-gesture. Settings > Terminal > Mouse toggle.
+- **True scrollback wipe**: Cmd+K (and palette "Clear Terminal") now wipes viewport + history
+  via `PtyTerm::clear_all` (`grid_mut().reset_region(..)` + `clear_history()`) BEFORE sending
+  Ctrl-L. Order matters: alacritty's `ESC[2J` handler (`clear_viewport`) scrolls occupied
+  viewport lines INTO history, so a wipe after the shell's redraw would resurrect a screenful.
+  New palette command **"Clear Scrollback"** (`clear_scrollback`) drops history only, screen
+  kept. Both real-pty e2e'd (`real_pty_clear_all_wipes_history_and_viewport`,
+  `real_pty_clear_scrollback_keeps_the_screen`).
+- **toggle-last-tab**: Cmd+O + palette "Toggle Last Tab". `Stdusk.prev_active` is maintained by
+  an end-of-frame diff in `ui()` (so every switch path - click, Cmd+N, cycle, palette, close -
+  counts without per-site bookkeeping). Index-based exactly like Tabby's `lastTabIndex`
+  (stale-after-close clamps to tab 1: `ui::toggle_last_target`, tested). **Tabby ships this
+  hotkey UNBOUND on every platform** - Cmd+O is stdusk's conflict-free choice (documented in
+  TESTING; Cmd+O produces no pty bytes, so no key_to_bytes reservation needed).
+- **pin-tab**: context-menu Pin/Unpin. Tabby-exact placement (`tabs::pin_target`, table-tested
+  against app.service pinTab/unpinTab): pin moves the tab to the END of the pinned group,
+  unpin to the START of the unpinned group; the active index follows via `ui::moved_index`
+  (tested). Reorder never crosses the pinned boundary (guard in `move_tab`, which both drag
+  and Cmd+Shift+arrows route through - Tabby's swapTabs refuses the same way). Closing a
+  pinned tab ALWAYS confirms ("This tab is pinned.", even with warn_on_close_running off) -
+  deliberate deviation: Tabby hard-refuses the close; a confirm keeps it reachable.
+  `pending_close` now carries the prompt message (`ui::close_confirm_message`, tested);
+  close-others/right/left skip the guard (scope-noted). Pin glyph = Phosphor push-pin
+  **E3E2** (official CSS + cmap-verified) at the tab's right edge, title budget shrinks by its
+  width. Persisted as `SavedTab.pinned` in session.toml; Restart keeps the pin, Duplicate
+  doesn't copy it.
+- **Tabs 10-20 skipped on purpose**: Tabby ships `tab-10`..`tab-20` UNBOUND by default
+  (configDefaults yaml) and Cmd+0 is zoom-reset here - nothing to mirror; PARITY row says so.
+- 174 tests green (+10); clippy -D warnings + fmt clean; both screenshot harnesses verified
+  (pin glyph on the demo tab, 0.4.0 in the settings footer). NOTE: the new Mouse settings rows
+  sit below the 760px settings-harness fold (macOS clamps taller windows); they execute in
+  `sections_render_headless` and reuse the proven row/chip/toggle primitives.
+
 ## 0.3.2 - "Render right": wide chars + min contrast + all-match search + brand badges (V1 P0-4 + P1s)
 - **Wide-char rendering (P0-4)**: `grid_snapshot` now honors alacritty's cell flags via pure
   `terminal::snap_glyph(c, flags)` - a `WIDE_CHAR` cell marks `CellSnap.wide`; `WIDE_CHAR_SPACER`

@@ -133,6 +133,8 @@ pub(crate) struct Terminal {
     pub(crate) on_exit: String, // pane when its shell exits: "close" | "keep" | "restart"
     pub(crate) dynamic_title: bool, // tab titles follow the shell's OSC 0/2 title
     pub(crate) minimum_contrast: f32, // WCAG ratio text is nudged to meet, 1 (off) ..= 21
+    pub(crate) right_click: String, // "menu" | "paste" | "clipboard" (copy selection, else paste)
+    pub(crate) focus_follows_mouse: bool, // hovering a pane focuses it (no click)
 }
 
 impl Default for Appearance {
@@ -190,6 +192,8 @@ impl Default for Terminal {
             dynamic_title: true,
             // Off, to not surprise existing users; Tabby ships 4. See config.example.toml.
             minimum_contrast: 1.0,
+            right_click: "menu".into(),
+            focus_follows_mouse: false,
         }
     }
 }
@@ -303,6 +307,8 @@ mod tests {
         assert_eq!(c.terminal.on_exit, "close");
         assert!(c.terminal.dynamic_title);
         assert_eq!(c.terminal.minimum_contrast, 1.0); // off (Tabby ships 4; opt-in here)
+        assert_eq!(c.terminal.right_click, "menu"); // Tabby default
+        assert!(!c.terminal.focus_follows_mouse); // Tabby default
     }
 
     #[test]

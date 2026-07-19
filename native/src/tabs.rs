@@ -26,6 +26,7 @@ pub(crate) struct Tab {
     pub(crate) focused: Vec<pane::Side>,     // path to the focused leaf (its identity)
     pub(crate) cli: Option<procwatch::Cli>,  // a known AI CLI detected running in the tab (badge)
     pub(crate) maximized: bool, // zoom the focused pane to fill the tab (hide the other panes)
+    pub(crate) pinned: bool,    // pinned tabs sort first, guard close, persist in session.toml
 }
 
 impl Tab {
@@ -68,6 +69,7 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
         focused: Vec::new(),
         cli: None,
         maximized: false,
+        pinned: false,
     }
 }
 
@@ -99,7 +101,18 @@ pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Pro
         focused: Vec::new(),
         cli: None,
         maximized: false,
+        pinned: false,
     }
+}
+
+/// Where a pin toggle moves the tab at `i` (Tabby `AppService.pinTab`/`unpinTab`): pinning
+/// moves it to the END of the pinned group, unpinning to the START of the unpinned group.
+/// `pins` is the per-tab pinned flag BEFORE the toggle; returns (now pinned, target index).
+pub(crate) fn pin_target(pins: &[bool], i: usize) -> (bool, usize) {
+    let pin = !pins[i];
+    let count = (0..pins.len()).filter(|&j| if j == i { pin } else { pins[j] }).count();
+    let target = if pin { count - 1 } else { count };
+    (pin, target)
 }
 
 /// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
@@ -109,6 +122,7 @@ pub(crate) enum TabAction {
     Duplicate(usize),
     Rename(usize),
     Restart(usize),
+    TogglePin(usize),
     SetColor(usize, Option<egui::Color32>),
     MoveLeft(usize),
     MoveRight(usize),
@@ -149,6 +163,7 @@ fn tab_menu(
     i: usize,
     tab_id: u64,
     current: Option<egui::Color32>,
+    pinned: bool,
     profiles: &[Profile],
     action: &mut Option<TabAction>,
     color_preview: &mut Option<(u64, Option<egui::Color32>)>,
@@ -171,6 +186,9 @@ fn tab_menu(
     }
     if ui::menu_item(ui, "Restart", "").clicked() {
         *action = Some(TabAction::Restart(i));
+    }
+    if ui::menu_item(ui, if pinned { "Unpin" } else { "Pin" }, "").clicked() {
+        *action = Some(TabAction::TogglePin(i));
     }
     ui.menu_button("Color", |ui| {
         // Snug width for the swatch grid (style_menu's 210 leaves dead space here).
@@ -337,12 +355,30 @@ impl Stdusk {
             return;
         }
         let j = j as usize;
+        // Never reorder across the pinned boundary (Tabby `swapTabs` refuses too).
+        if self.tabs[i].pinned != self.tabs[j].pinned {
+            return;
+        }
         self.tabs.swap(i, j);
         if self.active == i {
             self.active = j;
         } else if self.active == j {
             self.active = i;
         }
+    }
+
+    /// Pin/unpin the tab at `i`, moving it into position (pinned tabs sort first; see
+    /// `pin_target` for the Tabby-exact placement) and keeping the active index on its tab.
+    pub(crate) fn toggle_pin(&mut self, i: usize) {
+        if i >= self.tabs.len() {
+            return;
+        }
+        let pins: Vec<bool> = self.tabs.iter().map(|t| t.pinned).collect();
+        let (pin, target) = pin_target(&pins, i);
+        self.tabs[i].pinned = pin;
+        let tab = self.tabs.remove(i);
+        self.tabs.insert(target, tab);
+        self.active = ui::moved_index(i, target, self.active);
     }
 
     /// Modal rename field, shown while `self.renaming` is set.
@@ -396,36 +432,38 @@ impl Stdusk {
         }
     }
 
-    /// Route a tab close through the running-process check: when the tab's shell has a live
-    /// child (a running command / REPL) and the warning is enabled, ask first via
-    /// `pending_close`; otherwise close immediately.
+    /// Route a tab close through the confirm checks: a pinned tab ALWAYS asks first (Tabby
+    /// hard-refuses instead; a confirm keeps the close reachable), and a tab with a running
+    /// child (command / REPL) asks when the warning is enabled. Otherwise close immediately.
     pub(crate) fn request_close_tab(&mut self, i: usize, ctx: &egui::Context) {
-        if self.cfg.terminal.warn_on_close_running
-            && let Some(tab) = self.tabs.get(i)
-        {
-            self.sys.refresh_processes_specifics(
-                sysinfo::ProcessesToUpdate::All,
-                true,
-                sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
-            );
-            let busy = tab
-                .root()
-                .leaves()
-                .iter()
-                .filter_map(|t| t.shell_pid())
-                .find_map(|pid| procwatch::scan_busy(&self.sys, pid));
-            if let Some(name) = busy {
-                self.pending_close = Some((tab.id, name));
+        if let Some(tab) = self.tabs.get(i) {
+            let busy = if self.cfg.terminal.warn_on_close_running {
+                self.sys.refresh_processes_specifics(
+                    sysinfo::ProcessesToUpdate::All,
+                    true,
+                    sysinfo::ProcessRefreshKind::nothing()
+                        .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
+                );
+                tab.root()
+                    .leaves()
+                    .iter()
+                    .filter_map(|t| t.shell_pid())
+                    .find_map(|pid| procwatch::scan_busy(&self.sys, pid))
+            } else {
+                None
+            };
+            if let Some(msg) = ui::close_confirm_message(tab.pinned, busy.as_deref()) {
+                self.pending_close = Some((tab.id, msg));
                 return;
             }
         }
         self.close_tab(i, ctx);
     }
 
-    /// Confirm-close modal, shown while `pending_close` is set: a process is still running in
-    /// the tab being closed. Targets the tab by stable id (indexes can shift meanwhile).
+    /// Confirm-close modal, shown while `pending_close` is set: the tab being closed is pinned
+    /// or has a running process. Targets the tab by stable id (indexes can shift meanwhile).
     pub(crate) fn close_confirm_window(&mut self, ctx: &egui::Context) {
-        let Some((tab_id, name)) = self.pending_close.take() else {
+        let Some((tab_id, msg)) = self.pending_close.take() else {
             return;
         };
         let mut confirm = false;
@@ -439,10 +477,7 @@ impl Stdusk {
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Close tab?").strong().color(colors::fg()));
                 ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(format!("{name} is still running in this tab."))
-                        .color(colors::dim()),
-                );
+                ui.label(egui::RichText::new(&msg).color(colors::dim()));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui::action_button(ui, "Close", true).clicked() {
@@ -467,7 +502,7 @@ impl Stdusk {
                 self.close_tab(i, ctx);
             }
         } else if !cancel {
-            self.pending_close = Some((tab_id, name)); // keep asking next frame
+            self.pending_close = Some((tab_id, msg)); // keep asking next frame
         }
     }
 
@@ -539,6 +574,7 @@ impl Stdusk {
                             tab.id,
                             &tab.title,
                             active,
+                            tab.pinned,
                             shown_color,
                             tab.focused_term().progress(),
                             tab.focused_term().cmd_state(),
@@ -555,6 +591,7 @@ impl Stdusk {
                         }
                         let tab_color = tab.color;
                         let tab_id = tab.id;
+                        let tab_pinned = tab.pinned;
                         // Gate reorder on egui's decided-drag threshold so a plain click (or a
                         // sloppy click) never reorders.
                         if resp.dragged()
@@ -570,6 +607,7 @@ impl Stdusk {
                                 i,
                                 tab_id,
                                 tab_color,
+                                tab_pinned,
                                 &self.cfg.profiles,
                                 &mut action,
                                 &mut color_preview,
@@ -680,6 +718,7 @@ impl Stdusk {
             }
             Some(TabAction::MoveLeft(i)) => self.move_tab(i, -1),
             Some(TabAction::MoveRight(i)) => self.move_tab(i, 1),
+            Some(TabAction::TogglePin(i)) => self.toggle_pin(i),
             Some(TabAction::Close(i)) => self.request_close_tab(i, ctx),
             Some(TabAction::OpenPalette) => {
                 if self.palette.is_none() {
@@ -697,6 +736,7 @@ impl Stdusk {
                     fresh.title.clone_from(&old.title);
                     fresh.renamed = old.renamed;
                     fresh.color = old.color;
+                    fresh.pinned = old.pinned;
                     self.tabs[i] = fresh;
                 }
             }
@@ -739,6 +779,23 @@ mod tests {
         ];
         for (from, px, want) in cases {
             assert_eq!(drag_swap_target(&r, from, px), want, "from {from} at x={px}");
+        }
+    }
+
+    #[test]
+    fn pin_moves_to_group_edges_like_tabby() {
+        // (pins before, toggled index) -> (now pinned, target index).
+        // Tabby app.service: pinTab -> END of the pinned group; unpinTab -> its START.
+        let cases: [(&[bool], usize, (bool, usize)); 6] = [
+            (&[false, false, false], 2, (true, 0)), // first pin: to the front
+            (&[true, false, false], 2, (true, 1)),  // pins append after existing pins
+            (&[true, true, false], 2, (true, 2)),   // already last unpinned: stays at the edge
+            (&[true, true, false], 0, (false, 1)),  // unpin: to the start of the unpinned group
+            (&[true, true, false], 1, (false, 1)),  // last pinned unpins in place
+            (&[true], 0, (false, 0)),               // single tab: no movement
+        ];
+        for (pins, i, want) in cases {
+            assert_eq!(pin_target(pins, i), want, "pins {pins:?} toggle {i}");
         }
     }
 

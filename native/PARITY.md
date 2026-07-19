@@ -35,11 +35,11 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | New / close / switch (1-9) / reorder / rename / color | ✅ | reorder+rename via menu/dbl-click |
 | `next-tab` / `previous-tab` cycle hotkey | ✅ | Ctrl+Tab / Ctrl+Shift+Tab (wraps) |
 | `move-tab-left/right` hotkey | ✅ | Cmd+Shift+←/→ |
-| Tab jump 10-20 (`tab-10`..`tab-20`) | ⬜ | have 1-9 |
+| Tab jump 10-20 (`tab-10`..`tab-20`) | ⛔ | skipped on purpose: Tabby ships `tab-10`..`tab-20` UNBOUND on every platform (configDefaults yaml), and Cmd+0 is zoom-reset here - nothing to mirror |
 | `duplicate-tab` (clone incl. cwd) | ✅ | context-menu "Duplicate" |
 | `reopen-tab` (reopen last closed) | ✅ | Cmd+Shift+T; closed-cwd stack (cap 20) |
-| `toggle-last-tab` (alt-tab between two) | ⬜ | |
-| `pin-tab` (pin, guard close) | ⬜ | |
+| `toggle-last-tab` (alt-tab between two) | ✅ | Cmd+O + palette (Tabby ships the hotkey unbound); index-based `prev_active` like Tabby's `lastTabIndex` |
+| `pin-tab` (pin, guard close) | ✅ | context-menu Pin/Unpin; Tabby-exact group placement + no reorder across the boundary; close asks confirm (Tabby hard-refuses); pin glyph; session-persisted |
 | `restart-tab` (respawn shell) | ✅ | context-menu Restart (same cwd, keeps title/color) |
 | Close other / to-the-right / to-the-left | ✅ | context-menu items (feed the reopen stack) |
 | `explode-tab` (panes -> tabs) / `combine-tabs` (tabs -> split) | ⬜ | power-user, low priority |
@@ -67,17 +67,17 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 |---|---|---|
 | Truecolor/256/16 + cursor styles | ✅ | |
 | Cursor blink | ✅ | `cursor_blink` (default on); focused pane only, xterm cadence |
-| Font weight / bold weight | ⬜ | single weight |
-| Font family + fallback font + line padding | ⬜ | no font config at all (egui bundled mono + hardcoded fallbacks); Nerd Font PUA glyphs (starship/p10k) render as tofu. Tabby: `font: Menlo`, configurable |
+| Font weight / bold weight | ⬜ | single weight (egui: one face per family; bold_bright stands) |
+| Font family + fallback font + line padding | ✅ | `appearance.font` via font-kit (Nerd Fonts work) + `line_padding`; bundled fallbacks kept behind |
 | Ligatures | 🟡 | `ligatures` (default off): symbol substitution (-> => != >= <= ...); true OpenType shaping still ⬜ (egui limit) |
 | Sixel / inline images | ⛔→FUTURE | alacritty grid has no image model |
 | Bold-in-bright-colors | ✅ | `bold_bright` (default on) |
-| Minimum contrast ratio (auto-contrast) | ⬜ | |
+| Minimum contrast ratio (auto-contrast) | ✅ | `minimum_contrast` (default 1=off; WCAG nudge, tested) |
 | Palette generate / harmonious | ⬜ | niche |
 | Light color scheme + follow-OS light/dark | ✅ | `appearance.follow_system` + `theme_light`/`theme_dark`; adaptive chrome; `one-half-light` added |
 | Background: image / vibrancy / blur | ⬜ | opacity only |
 | Configurable scrollback lines (25k default) | ✅ | `scrollback_lines` (default 25000) |
-| Wide-char / Unicode 11 widths | 🟡 | verified broken-ish: no WIDE_CHAR/spacer handling in `grid_snapshot`; CJK/emoji squeeze into one cell and overlap |
+| Wide-char / Unicode 11 widths | ✅ | WIDE_CHAR/spacer flags honored; CJK/emoji span two cells (real-pty tested) |
 
 ## Input / copy-paste
 | Feature | State | Notes |
@@ -86,22 +86,23 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Intelligent Ctrl-C (copy if selection else SIGINT) | ✅ | Tabby-parity: copy+clear when selected, else SIGINT |
 | Natural editing keys (home/end/word/line) | ✅ | |
 | `select-all` (Cmd-A) | ✅ | selects whole buffer; Cmd-C copies |
-| `clear` (Cmd-K) | ✅ | sends Ctrl-L (shell clear); scrollback-wipe still ⬜ |
+| `clear` (Cmd-K) | ✅ | wipes viewport + scrollback (`clear_all`) then Ctrl-L; palette "Clear Scrollback" drops history only |
 | Font zoom (`zoom-in/out/reset`) | ✅ | Cmd +/-/0 (runtime `zoom` multiplier) |
 | Copy-on-select | ✅ | `copy_on_select`; on selection finish, skips whitespace-only |
 | Middle-click paste | ✅ | `paste_on_middle_click` (default on, arboard clipboard read) |
 | Copy-as-HTML (rich clipboard) | ⬜ | niche |
-| Right-click mode (menu vs paste vs clipboard) | 🟡 | menu only |
+| Right-click mode (menu vs paste vs clipboard) | ✅ | `terminal.right_click` (default menu); Tabby-exact 250ms tap-vs-hold rule, clipboard = copy-selection-else-paste |
 | Multiline-paste warning / paste protection | ✅ | `warn_on_multiline_paste`; modal w/ preview, suppressed on alt-screen (Tabby-exact) |
 | Paste transforms (trim ws, newlines->spaces) | ✅ | `trim_whitespace_on_paste` (default on) + `replace_newlines_on_paste`; Tabby-exact rules |
-| `altIsMeta` + configurable word separators | ✅ | `alt_is_meta`, `word_separators`; focus-follows-mouse still ⬜ |
-| Alt+scroll -> arrow keys | ⬜ | |
+| `altIsMeta` + configurable word separators | ✅ | `alt_is_meta`, `word_separators` |
+| Focus follows mouse | ✅ | `terminal.focus_follows_mouse` (default off, Tabby default); mousemove over a pane focuses it |
+| Alt+scroll -> arrow keys | ✅ | SS3 up/down per wheel line; Tabby's gate is Alt alone (no alt-screen check) |
 
 ## Scrolling
 | Feature | State | Notes |
 |---|---|---|
 | Wheel scroll + scrollbar | ✅ | |
-| Scroll hotkeys | ✅ | Shift+PageUp/Down (page) + Shift+Home/End (top/bottom); line steps ⬜ |
+| Scroll hotkeys | ✅ | Shift+PageUp/Down (page) + Shift+Home/End (top/bottom) + Ctrl+Shift+Up/Down (line, Tabby's default bind) |
 
 ## Links
 | Feature | State | Notes |

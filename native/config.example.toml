@@ -45,6 +45,9 @@ on_exit = "close"         # pane when its shell exits: "close" | "keep" (banner,
 dynamic_title = true      # tab titles follow the shell's OSC 0/2 title (cwd basename fallback)
 minimum_contrast = 1.0    # nudge text toward black/white to meet this WCAG ratio vs its background;
                           # 1 = off (default, keeps your theme exact) .. 21; Tabby ships 4, WCAG AA is 4.5
+right_click = "menu"      # right-click on a pane: "menu" (context menu) | "paste" | "clipboard"
+                          # (copy the selection, else paste); paste/clipboard hold >=250ms for the menu
+focus_follows_mouse = false # hovering a split pane focuses it without clicking
 
 [session]
 restore = true            # reopen last session's tabs (cwd/title/color) on launch

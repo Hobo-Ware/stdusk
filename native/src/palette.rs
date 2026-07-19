@@ -41,18 +41,20 @@ pub(crate) enum PaletteCmd {
     MaximizePane,
     NextTab,
     PrevTab,
+    ToggleLastTab,
     Find,
     ZoomIn,
     ZoomOut,
     ZoomReset,
     ClearTerminal,
+    ClearScrollback,
     CopyPath,
     OpenConfig,
     Quit,
 }
 
 impl PaletteCmd {
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 21] = [
         Self::NewTab,
         Self::CloseTab,
         Self::DuplicateTab,
@@ -64,11 +66,13 @@ impl PaletteCmd {
         Self::MaximizePane,
         Self::NextTab,
         Self::PrevTab,
+        Self::ToggleLastTab,
         Self::Find,
         Self::ZoomIn,
         Self::ZoomOut,
         Self::ZoomReset,
         Self::ClearTerminal,
+        Self::ClearScrollback,
         Self::CopyPath,
         Self::OpenConfig,
         Self::Quit,
@@ -91,11 +95,13 @@ impl PaletteCmd {
             Self::MaximizePane => "Maximize Pane",
             Self::NextTab => "Next Tab",
             Self::PrevTab => "Previous Tab",
+            Self::ToggleLastTab => "Toggle Last Tab",
             Self::Find => "Find",
             Self::ZoomIn => "Zoom In",
             Self::ZoomOut => "Zoom Out",
             Self::ZoomReset => "Zoom Reset",
             Self::ClearTerminal => "Clear Terminal",
+            Self::ClearScrollback => "Clear Scrollback",
             Self::CopyPath => "Copy Path",
             Self::OpenConfig => "Open Config",
             Self::Quit => "Quit",
@@ -252,6 +258,9 @@ impl Stdusk {
             }
             PaletteCmd::NextTab => self.cycle_tab(1),
             PaletteCmd::PrevTab => self.cycle_tab(-1),
+            PaletteCmd::ToggleLastTab => {
+                self.active = ui::toggle_last_target(self.prev_active, self.tabs.len());
+            }
             PaletteCmd::Find => {
                 if self.search.is_none() {
                     self.search = Some(Search::new());
@@ -261,7 +270,15 @@ impl Stdusk {
             PaletteCmd::ZoomOut => self.zoom = (self.zoom / 1.1).max(0.5),
             PaletteCmd::ZoomReset => self.zoom = 1.0,
             PaletteCmd::ClearTerminal => {
-                self.tabs[self.active].focused_term_mut().send(b"\x0c"); // Ctrl-L: clear
+                // Full clear, Tabby-style: wipe viewport + history, then Ctrl-L for the prompt.
+                let t = self.tabs[self.active].focused_term_mut();
+                t.clear_all();
+                t.send(b"\x0c");
+            }
+            PaletteCmd::ClearScrollback => {
+                self.tabs[self.active].focused_term().clear_scrollback();
+                let now = ctx.input(|i| i.time);
+                self.toast = Some(("Scrollback cleared".into(), now + 1.4));
             }
             PaletteCmd::CopyPath => {
                 if let Some(cwd) = self.tabs[self.active].focused_term().cwd() {

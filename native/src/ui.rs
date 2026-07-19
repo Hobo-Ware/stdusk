@@ -31,6 +31,7 @@ pub(crate) mod icons {
     pub(crate) const ARROW_SQUARE_OUT: &str = "\u{E5DE}"; // open-externally rows
     pub(crate) const FOLDER: &str = "\u{E24A}"; // open config folder
     pub(crate) const CHECK: &str = "\u{E182}"; // active scheme mark
+    pub(crate) const PUSH_PIN: &str = "\u{E3E2}"; // pinned-tab marker
 }
 
 // ---- pure helpers (no egui state; unit-tested below) ----
@@ -367,6 +368,84 @@ pub(crate) fn tab_width_mode(s: &str) -> TabWidthMode {
 pub(crate) fn fixed_tab_width(avail: f32, n: usize, spacing: f32) -> f32 {
     let share = (avail - spacing * (n.saturating_sub(1)) as f32) / (n.max(1)) as f32;
     share.clamp(TAB_MIN_W, TAB_FIXED_W)
+}
+
+/// Bytes an Alt+wheel tick sends instead of scrolling (Tabby `baseTerminalTab` mousewheel
+/// handler): one SS3 up/down arrow per line - positive `lines` (wheel up) = `ESC O A`.
+pub(crate) fn alt_scroll_bytes(lines: i32) -> Vec<u8> {
+    let seq: &[u8] = if lines > 0 { b"\x1bOA" } else { b"\x1bOB" };
+    seq.repeat(lines.unsigned_abs() as usize)
+}
+
+/// `terminal.right_click` parsed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RightClickMode {
+    Menu,
+    Paste,
+    Clipboard,
+}
+
+/// Parse the config `right_click` string; unknown values fall back to `Menu` (the default).
+pub(crate) fn right_click_mode(s: &str) -> RightClickMode {
+    match s.to_ascii_lowercase().as_str() {
+        "paste" => RightClickMode::Paste,
+        "clipboard" => RightClickMode::Clipboard,
+        _ => RightClickMode::Menu,
+    }
+}
+
+/// What a right-click release does on a pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RightClickAction {
+    Menu,
+    Paste,
+    Copy,
+}
+
+/// Tabby's exact right-click semantics (`baseTerminalTab` handleRightMouseUp): paste/clipboard
+/// act only on a quick tap (held < 250ms); a hold falls back to the context menu. Clipboard
+/// copies when a selection exists, else pastes.
+pub(crate) fn right_click_action(
+    mode: RightClickMode,
+    held_secs: f64,
+    has_selection: bool,
+) -> RightClickAction {
+    match mode {
+        RightClickMode::Menu => RightClickAction::Menu,
+        _ if held_secs >= 0.25 => RightClickAction::Menu,
+        RightClickMode::Clipboard if has_selection => RightClickAction::Copy,
+        RightClickMode::Paste | RightClickMode::Clipboard => RightClickAction::Paste,
+    }
+}
+
+/// The tab toggle-last-tab jumps to: the previously active index, or 0 when it no longer
+/// exists (Tabby `AppService.toggleLastTab` resets an out-of-range `lastTabIndex` to 0).
+pub(crate) fn toggle_last_target(prev: usize, len: usize) -> usize {
+    if prev >= len { 0 } else { prev }
+}
+
+/// Where a tracked index (the active tab) lands after moving the element at `from` to `to`
+/// (a remove + insert, i.e. the pin/unpin reorder).
+pub(crate) fn moved_index(from: usize, to: usize, tracked: usize) -> usize {
+    if tracked == from {
+        to
+    } else if from < tracked && to >= tracked {
+        tracked - 1
+    } else if from > tracked && to <= tracked {
+        tracked + 1
+    } else {
+        tracked
+    }
+}
+
+/// The close-tab confirm prompt, or `None` to close silently. A pinned tab always asks;
+/// otherwise only a running child process does (`warn_on_close_running` gating is the caller's).
+pub(crate) fn close_confirm_message(pinned: bool, busy: Option<&str>) -> Option<String> {
+    match (pinned, busy) {
+        (true, _) => Some("This tab is pinned.".into()),
+        (false, Some(name)) => Some(format!("{name} is still running in this tab.")),
+        (false, None) => None,
+    }
 }
 
 /// Is the configured link-activation modifier satisfied? `"none"` (or unknown) means links react
@@ -900,6 +979,7 @@ pub(crate) fn draw_tab(
     tab_id: u64,
     title: &str,
     active: bool,
+    pinned: bool,
     color: Option<egui::Color32>,
     progress: Progress,
     cmd: CmdState,
@@ -911,7 +991,8 @@ pub(crate) fn draw_tab(
     let char_w = ui.painter().layout_no_wrap("0".into(), font.clone(), colors::fg()).size().x;
     let prefix = format!("{idx}  ");
     let mini_w = if layout.len() > 1 { TAB_MINI_W + TAB_GAP } else { 0.0 };
-    let fixed_chrome = TAB_PAD_X * 2.0 + TAB_SLOT_W + TAB_GAP + mini_w;
+    let pin_w = if pinned { 14.0 } else { 0.0 };
+    let fixed_chrome = TAB_PAD_X * 2.0 + TAB_SLOT_W + TAB_GAP + mini_w + pin_w;
     let (shown, truncated, tab_w) = if let Some(w) = width {
         // Ellipsize to whatever fits the fixed width (monospace: chars scale linearly).
         let chars = ((w - fixed_chrome) / char_w) as usize;
@@ -952,6 +1033,16 @@ pub(crate) fn draw_tab(
         font,
         fg,
     );
+    // Pinned marker: a small push-pin at the tab's right edge (the index stays as-is).
+    if pinned {
+        p.text(
+            egui::pos2(rect.right() - TAB_PAD_X, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            icons::PUSH_PIN,
+            egui::FontId::proportional(11.0),
+            fg,
+        );
+    }
     // A foreground-layer painter: the row layout's clip cuts off the tab's top/bottom edges,
     // so edge strokes (underline, progress) must be drawn on an unclipped layer.
     let dp =
@@ -1521,6 +1612,93 @@ mod tests {
     }
 
     #[test]
+    fn alt_scroll_sends_ss3_arrows_per_line() {
+        assert_eq!(alt_scroll_bytes(1), b"\x1bOA".to_vec()); // wheel up = up arrow
+        assert_eq!(alt_scroll_bytes(-1), b"\x1bOB".to_vec());
+        assert_eq!(alt_scroll_bytes(3), b"\x1bOA\x1bOA\x1bOA".to_vec());
+        assert_eq!(alt_scroll_bytes(-2), b"\x1bOB\x1bOB".to_vec());
+        assert!(alt_scroll_bytes(0).is_empty());
+    }
+
+    #[test]
+    fn ctrl_shift_arrows_send_nothing_to_the_pty() {
+        // Ctrl+Shift+Up/Down are the line-step scroll hotkeys (Tabby default binding) -
+        // the ctrl branch maps arrows to None, so no reservation is needed.
+        let m = Modifiers { ctrl: true, shift: true, ..Modifiers::default() };
+        assert_eq!(key_to_bytes(Key::ArrowUp, m, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowDown, m, false), None);
+    }
+
+    #[test]
+    fn right_click_mode_parse() {
+        assert_eq!(right_click_mode("menu"), RightClickMode::Menu);
+        assert_eq!(right_click_mode("Paste"), RightClickMode::Paste);
+        assert_eq!(right_click_mode("clipboard"), RightClickMode::Clipboard);
+        assert_eq!(right_click_mode("nonsense"), RightClickMode::Menu); // fallback = default
+        assert_eq!(right_click_mode(""), RightClickMode::Menu);
+    }
+
+    #[test]
+    fn right_click_action_follows_tabby_250ms_rule() {
+        use RightClickAction as A;
+        use RightClickMode as M;
+        // (mode, held_secs, has_selection) -> action; Tabby baseTerminalTab:656-676.
+        let cases = [
+            (M::Menu, 0.05, false, A::Menu),
+            (M::Menu, 1.0, true, A::Menu),
+            (M::Paste, 0.05, false, A::Paste),
+            (M::Paste, 0.05, true, A::Paste), // paste ignores the selection
+            (M::Paste, 0.25, false, A::Menu), // >= 250ms hold -> menu
+            (M::Paste, 2.0, false, A::Menu),
+            (M::Clipboard, 0.05, true, A::Copy),
+            (M::Clipboard, 0.05, false, A::Paste), // no selection -> paste
+            (M::Clipboard, 0.3, true, A::Menu),    // hold beats the selection
+        ];
+        for (mode, held, sel, want) in cases {
+            assert_eq!(right_click_action(mode, held, sel), want, "{mode:?} {held} sel={sel}");
+        }
+    }
+
+    #[test]
+    fn toggle_last_falls_back_to_first_tab() {
+        assert_eq!(toggle_last_target(2, 4), 2);
+        assert_eq!(toggle_last_target(0, 4), 0);
+        assert_eq!(toggle_last_target(4, 4), 0); // out of range (tab closed) -> first
+        assert_eq!(toggle_last_target(0, 1), 0); // single tab: no-op
+    }
+
+    #[test]
+    fn moved_index_tracks_active_across_pin_moves() {
+        // (from, to, tracked) -> where the tracked index lands.
+        let cases = [
+            (2, 0, 2, 0), // the tracked tab itself moved
+            (2, 0, 0, 1), // moved from behind to before: shifted right
+            (2, 0, 1, 2),
+            (0, 2, 1, 0), // moved from before to behind: shifted left
+            (0, 2, 2, 1),
+            (0, 1, 3, 3), // move entirely before the tracked tab: untouched
+            (3, 4, 1, 1), // move entirely after: untouched
+        ];
+        for (from, to, tracked, want) in cases {
+            assert_eq!(moved_index(from, to, tracked), want, "{from}->{to} track {tracked}");
+        }
+    }
+
+    #[test]
+    fn close_confirm_pinned_beats_busy() {
+        assert_eq!(close_confirm_message(false, None), None); // plain tab: close silently
+        assert_eq!(
+            close_confirm_message(false, Some("vim")).as_deref(),
+            Some("vim is still running in this tab.")
+        );
+        assert_eq!(close_confirm_message(true, None).as_deref(), Some("This tab is pinned."));
+        assert_eq!(
+            close_confirm_message(true, Some("vim")).as_deref(),
+            Some("This tab is pinned.") // pinned always asks, with the pin as the reason
+        );
+    }
+
+    #[test]
     fn link_modifier_matching() {
         let none = Modifiers::default();
         let cmd = mods(false, false, true);
@@ -1751,6 +1929,7 @@ mod tests {
                             i as u64, // stable id
                             "tab",
                             i == 0,
+                            false,
                             None,
                             Progress::None,
                             CmdState::Idle,

@@ -926,6 +926,22 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
         row(ui, "Paste on middle click", "", |ui| {
             ui::toggle_switch(ui, &mut t.paste_on_middle_click);
         });
+        row(ui, "Right click", "Paste/Copy act on a quick tap; holding opens the menu", |ui| {
+            ui.horizontal(|ui| {
+                for (label, value) in
+                    [("Menu", "menu"), ("Paste", "paste"), ("Copy or paste", "clipboard")]
+                {
+                    let selected =
+                        ui::right_click_mode(&t.right_click) == ui::right_click_mode(value);
+                    if ui::chip(ui, label, selected).clicked() {
+                        t.right_click = value.into();
+                    }
+                }
+            });
+        });
+        row(ui, "Focus follows mouse", "Hovering a split pane focuses it (no click)", |ui| {
+            ui::toggle_switch(ui, &mut t.focus_follows_mouse);
+        });
     });
 
     // (Cursor / ligatures / bold-bright / opacity live in Appearance - one preview there

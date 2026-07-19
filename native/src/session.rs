@@ -22,6 +22,9 @@ pub(crate) struct SavedTab {
     pub(crate) color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cwd: Option<String>,
+    /// Pinned flag, only written when set (pinned tabs sort first and guard close).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) pinned: bool,
 }
 
 pub(crate) fn color_to_hex(c: Color32) -> String {
@@ -74,8 +77,9 @@ mod tests {
                     title: Some("build".into()),
                     color: Some("#e06c75".into()),
                     cwd: Some("/tmp".into()),
+                    pinned: true,
                 },
-                SavedTab { title: None, color: None, cwd: Some("/home/x".into()) },
+                SavedTab { title: None, color: None, cwd: Some("/home/x".into()), pinned: false },
             ],
             active: 1,
         };

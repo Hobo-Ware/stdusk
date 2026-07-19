@@ -204,9 +204,19 @@ impl Stdusk {
                 };
                 let multi = layout.len() > 1;
                 let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
+                let alt_wheel = ui.input(|i| i.modifiers.alt);
                 let pointer = ui.input(|i| i.pointer.hover_pos());
+                // Right-click mode (Tabby): raw press/release tracking, so a long hold (which
+                // egui would not report as a click) still resolves to the context menu.
+                let rc_mode = ui::right_click_mode(&tcfg.right_click);
+                let (rc_pressed, rc_released) = ui.input(|i| {
+                    (
+                        i.pointer.button_pressed(egui::PointerButton::Secondary),
+                        i.pointer.button_released(egui::PointerButton::Secondary),
+                    )
+                });
                 let mut focus_click: Option<Vec<pane::Side>> = None;
-                let mut middle_paste: Option<(Vec<pane::Side>, String)> = None;
+                let mut mouse_paste: Option<(Vec<pane::Side>, String)> = None; // middle/right click
                 let mut restart_pane: Option<Vec<pane::Side>> = None;
                 for (path, rect) in &layout {
                     {
@@ -220,7 +230,13 @@ impl Stdusk {
                             if lines == 0 {
                                 lines = scroll_y.signum() as i32;
                             }
-                            term.scroll(lines);
+                            if alt_wheel {
+                                // Alt+wheel sends arrow keys instead of scrolling, one per line
+                                // (Tabby's mousewheel handler - gated on Alt alone).
+                                term.send(&ui::alt_scroll_bytes(lines));
+                            } else {
+                                term.scroll(lines);
+                            }
                         }
                     }
                     let term = tab.root().leaf_at(path).expect("leaf");
@@ -269,7 +285,51 @@ impl Stdusk {
                         && let Ok(mut cb) = arboard::Clipboard::new()
                         && let Ok(text) = cb.get_text()
                     {
-                        middle_paste = Some((path.clone(), text));
+                        mouse_paste = Some((path.clone(), text));
+                    }
+                    // Right-click (Tabby baseTerminalTab handleRightMouseDown/Up): "menu" pops
+                    // the context menu; "paste"/"clipboard" act on a quick tap (<250ms) and
+                    // fall back to the menu on a hold. Decision table: ui::right_click_action.
+                    let hovered_now = pointer.is_some_and(|p| rect.contains(p));
+                    if rc_pressed && hovered_now {
+                        self.right_press = Some((path.clone(), now));
+                    }
+                    let mut open_menu = false;
+                    if rc_released
+                        && hovered_now
+                        && let Some((_, t0)) = self.right_press.take_if(|(p, _)| *p == *path)
+                    {
+                        match ui::right_click_action(rc_mode, now - t0, has_sel) {
+                            ui::RightClickAction::Menu => open_menu = true,
+                            ui::RightClickAction::Copy => {
+                                if let Some(txt) = term.selection_text() {
+                                    ctx.copy_text(txt);
+                                    term.clear_selection(); // Tabby clears after the copy
+                                    copied = true;
+                                }
+                            }
+                            ui::RightClickAction::Paste => {
+                                if !input_captured
+                                    && let Ok(mut cb) = arboard::Clipboard::new()
+                                    && let Ok(text) = cb.get_text()
+                                {
+                                    mouse_paste = Some((path.clone(), text));
+                                }
+                            }
+                        }
+                    }
+                    // Focus follows mouse (Tabby splitTab attachTabView: mousemove focuses the
+                    // pane; suppressed during spanner drags): pointer movement over an unfocused
+                    // pane focuses it. No buttons down - a selection or splitter drag crossing
+                    // panes must not steal focus mid-gesture.
+                    if tcfg.focus_follows_mouse
+                        && path != &tab.focused
+                        && hovered_now
+                        && ui.input(|i| {
+                            i.pointer.delta() != egui::Vec2::ZERO && !i.pointer.any_down()
+                        })
+                    {
+                        focus_click = Some(path.clone());
                     }
                     // Dead pane (on_exit = keep / restart's crash-loop fallback): dim overlay;
                     // Enter (while focused) or a click respawns the shell in the same cwd.
@@ -293,23 +353,36 @@ impl Stdusk {
                     if !focus_guard && path == &tab.focused {
                         resp.request_focus();
                     }
-                    resp.context_menu(|ui| {
+                    // The pane menu opens on OUR decision (`open_menu`), not egui's built-in
+                    // secondary-click detection - paste/clipboard modes must suppress it on a
+                    // quick tap and force it after a hold. A plain click closes it.
+                    let menu_cmd = if open_menu {
+                        Some(egui::SetOpenCommand::Bool(true))
+                    } else if resp.clicked() {
+                        Some(egui::SetOpenCommand::Bool(false))
+                    } else {
+                        None
+                    };
+                    egui::Popup::menu(&resp).open_memory(menu_cmd).at_pointer_fixed().show(|ui| {
                         pane_menu(ui, path, has_sel, cwd.as_deref(), &mut pane_action);
                     });
+                }
+                if rc_released {
+                    self.right_press = None; // release landed off-pane: drop the stale press
                 }
                 if let Some(p) = focus_click {
                     tab.focused = p;
                 }
-                // Apply the middle-click paste (deferred: needs &mut past the render borrow).
-                // Runs through the same normalize/trim pipeline; skips the multiline modal like
-                // Tabby (middle-click paste is an X11-style immediate action).
+                // Apply the middle/right-click paste (deferred: needs &mut past the render
+                // borrow). Runs through the same normalize/trim pipeline; skips the multiline
+                // modal like Tabby (both are immediate mouse actions - see `paste()` there).
                 // Respawn a dead pane (deferred: needs &mut past the render borrow).
                 if let Some(p) = restart_pane
                     && let Some(t) = tab.root_mut().leaf_at_mut(&p)
                 {
                     crate::tabs::respawn_term(&self.cfg, ctx, t);
                 }
-                if let Some((p, text)) = middle_paste {
+                if let Some((p, text)) = mouse_paste {
                     tab.focused.clone_from(&p);
                     let s = ui::normalize_paste(&text, tcfg.replace_newlines_on_paste);
                     let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);

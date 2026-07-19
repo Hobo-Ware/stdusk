@@ -167,6 +167,7 @@ fn build_fonts(custom: Option<ResolvedFont>) -> egui::FontDefinitions {
 struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
+    prev_active: usize, // previously active tab index, for toggle-last-tab (Cmd+O)
     cfg: Config,
     hotkey_mgr: GlobalHotKeyManager, // kept alive so the registration persists
     registered_hotkey: String, // the hotkey string currently registered (live re-registration)
@@ -183,7 +184,8 @@ struct Stdusk {
     settings: settings::SettingsState, // selected section + scheme search/hover state
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     pending_pastes: std::collections::VecDeque<(u64, String)>, // multiline pastes awaiting confirm (tab id, text)
-    pending_close: Option<(u64, String)>, // close-tab confirm: (tab id, running process name)
+    pending_close: Option<(u64, String)>, // close-tab confirm: (tab id, prompt message)
+    right_press: Option<(Vec<pane::Side>, f64)>, // right-button press on a pane: (path, egui time)
     window_top: Option<bool>, // last-applied always-on-top state (re-applied when it changes)
     fx_opacity: f32, // this frame's effective window opacity (unfocused dim applied); derived
     color_preview: Option<(u64, Option<egui::Color32>)>, // Color-menu swatch hover preview (tab id, color)
@@ -254,6 +256,7 @@ impl Stdusk {
                     tab.renamed = true;
                 }
                 tab.color = st.color.as_deref().and_then(session::hex_to_color);
+                tab.pinned = st.pinned;
                 tabs.push(tab);
             }
             active = saved.active.min(tabs.len().saturating_sub(1));
@@ -279,6 +282,7 @@ impl Stdusk {
             tabs[3].color = Some(colors::tab_colors()[4]); // green
             tabs[0].cli = Some(procwatch::Cli::Claude); // demo the CLI-awareness badge
             tabs[2].cli = Some(procwatch::Cli::Gemini);
+            tabs[0].pinned = true; // demo the pinned-tab marker
             active = 1;
             sized = true;
         }
@@ -312,6 +316,7 @@ impl Stdusk {
         Self {
             tabs,
             active,
+            prev_active: 0,
             cfg,
             hotkey_mgr: mgr,
             registered_hotkey,
@@ -329,6 +334,7 @@ impl Stdusk {
             closed: Vec::new(),
             pending_pastes: std::collections::VecDeque::new(),
             pending_close: None,
+            right_press: None,
             window_top: None,
             fx_opacity,
             color_preview: None,
@@ -457,6 +463,9 @@ impl eframe::App for Stdusk {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let height_pct = self.cfg.quake.height_pct;
+        // Toggle-last-tab bookkeeping: any switch this frame (click, keybind, palette, close)
+        // makes the tab active at frame start the "previous" one (diffed at the frame's end).
+        let active_at_frame_start = self.active;
 
         // Effective window opacity: dim while visible-but-unfocused when hide-on-focus-loss is
         // off (the "keep it around" mode); eased so focus changes fade instead of popping.
@@ -625,6 +634,7 @@ impl eframe::App for Stdusk {
                             title: t.renamed.then(|| t.title.clone()),
                             color: t.color.map(session::color_to_hex),
                             cwd: t.focused_term().cwd(),
+                            pinned: t.pinned,
                         })
                         .collect(),
                     active: self.active,
@@ -687,7 +697,9 @@ impl eframe::App for Stdusk {
         let mut kb_clear = false; // Cmd+K
         let mut kb_zoom: Option<i8> = None; // Cmd +/= (1), Cmd - (-1), Cmd 0 (0 = reset)
         let mut kb_scroll_pages: Option<i32> = None; // Shift+PageUp/Down: -1 up, +1 down
+        let mut kb_scroll_lines: Option<i32> = None; // Ctrl+Shift+Up/Down: one line (Tabby bind)
         let mut kb_tab_cycle: Option<i32> = None; // Ctrl+Tab next (+1) / Ctrl+Shift+Tab prev (-1)
+        let mut kb_toggle_last = false; // Cmd+O: jump to the previously active tab
         let mut kb_reopen = false; // Cmd+Shift+T: reopen last closed tab
         let mut kb_resize: Option<(pane::SplitDir, f32)> = None; // Cmd+Ctrl+arrow: resize focused pane
         let mut kb_move_tab: Option<i32> = None; // Cmd+Shift+←/→: move the active tab
@@ -721,6 +733,16 @@ impl eframe::App for Stdusk {
             }
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
                 kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
+            }
+            // Ctrl+Shift+Up/Down: line-step scroll (Tabby's scroll-up/scroll-down binding).
+            // The ctrl branch of key_to_bytes maps arrows to None, so nothing leaks to the pty.
+            if i.modifiers.ctrl && i.modifiers.shift && !i.modifiers.command {
+                if i.key_pressed(egui::Key::ArrowUp) {
+                    kb_scroll_lines = Some(-1);
+                }
+                if i.key_pressed(egui::Key::ArrowDown) {
+                    kb_scroll_lines = Some(1);
+                }
             }
             if i.modifiers.shift {
                 if i.key_pressed(egui::Key::PageUp) {
@@ -806,6 +828,11 @@ impl eframe::App for Stdusk {
                         kb_new = true; // Cmd+T
                     }
                 }
+                // Toggle-last-tab. Tabby ships `toggle-last-tab` unbound on every platform, so
+                // there is no default to mirror - Cmd+O is stdusk's (conflict-free) choice.
+                if i.key_pressed(egui::Key::O) {
+                    kb_toggle_last = true;
+                }
                 if i.key_pressed(W) {
                     kb_close = true;
                 }
@@ -849,6 +876,9 @@ impl eframe::App for Stdusk {
         if let Some(d) = kb_tab_cycle {
             let len = self.tabs.len() as i32;
             self.active = (self.active as i32 + d).rem_euclid(len) as usize;
+        }
+        if kb_toggle_last {
+            self.active = ui::toggle_last_target(self.prev_active, self.tabs.len());
         }
         if let Some(d) = kb_move_tab {
             self.move_tab(self.active, d);
@@ -937,12 +967,19 @@ impl eframe::App for Stdusk {
                 self.toast = Some(("Selected all".into(), now + 1.4));
             }
             if kb_clear {
-                self.tabs[self.active].focused_term_mut().send(b"\x0c"); // Ctrl-L: clear
+                // Ctrl-L redraws the prompt; the wipe drops the whole scrollback with it
+                // (Tabby's `clear` does both). Wipe first - see PtyTerm::clear_all.
+                let t = self.tabs[self.active].focused_term_mut();
+                t.clear_all();
+                t.send(b"\x0c");
             }
             if let Some(dir) = kb_scroll_pages {
                 let t = self.tabs[self.active].focused_term();
                 let page = t.rows().saturating_sub(1) as i32;
                 t.scroll(-dir * page); // PageUp (-1) scrolls up into history
+            }
+            if let Some(dir) = kb_scroll_lines {
+                self.tabs[self.active].focused_term().scroll(-dir); // up (-1) scrolls into history
             }
             if let Some(to_top) = kb_scroll_edge {
                 let t = self.tabs[self.active].focused_term();
@@ -1004,6 +1041,12 @@ impl eframe::App for Stdusk {
                 draw_toast(ui, &msg, toast_alpha(until - now, 0.35));
                 ctx.request_repaint();
             }
+        }
+
+        // The active tab changed this frame: remember where we came from (Tabby keeps the same
+        // index-based `lastTabIndex`; a stale index after closes clamps to tab 1 at use).
+        if self.active != active_at_frame_start {
+            self.prev_active = active_at_frame_start;
         }
     }
 }

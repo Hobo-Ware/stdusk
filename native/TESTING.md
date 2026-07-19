@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 0.3.2.
+Step-by-step verification for everything shipped through 0.4.0.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -48,7 +48,7 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | Shift+Home / Shift+End with history | Jump to scrollback top / bottom |
 | Shift+PageUp / PageDown | Page up/down |
 | Cmd+= / Cmd+- / Cmd+0 | Font zoom in/out/reset (grid reflows) |
-| Cmd+K | Prompt clears (Ctrl-L) |
+| Cmd+K | Screen AND scrollback wiped (scrollbar disappears), fresh prompt redraws |
 
 ## 5. Tabs
 | Step | Expect |
@@ -170,3 +170,22 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | Run `gemini` / `gh copilot` / `ollama run …` / `cursor-agent` | Google Gemini spark (blue) / GitHub Copilot (grey) / Ollama / Cursor brand marks respectively |
 | Run `codex` or `aider` | Letter chip (no Simple Icons slug exists for these two) |
 | Toggle macOS light/dark with a badge showing | Brand icon stays legible on both tab-strip shades |
+
+## 16. 0.4.0 - input & scroll parity
+| Step | Expect |
+|---|---|
+| `seq 100`, then Alt+wheel over the pane | Viewport does NOT scroll; arrow keys hit the shell (history cycles at the prompt); in `less` the content moves line-by-line |
+| Ctrl+Shift+Up / Ctrl+Shift+Down with history | Viewport scrolls exactly one line per press; nothing leaks to the shell |
+| Right-click a pane (default `right_click = "menu"`) | Context menu opens, same as before |
+| Settings > Terminal > Mouse > Right click: **Paste** - quick right-click | Clipboard pastes at the prompt (no menu) |
+| Same, but HOLD the right button >=250ms before releasing | Context menu opens instead of pasting |
+| Right click: **Copy or paste** - select text, quick right-click | Selection copied ("Copied" toast) and cleared; with NO selection it pastes |
+| Settings > Terminal > Mouse > Focus follows mouse ON; split, then just move the pointer between panes | Focus (bright pane) follows the pointer without clicking; drag-selecting across the divider does NOT switch focus mid-drag |
+| `seq 30000`, Cmd+K | Screen and the whole scrollback wiped (scrollbar gone), fresh prompt; scrolling up shows nothing |
+| Cmd+Shift+P -> "Clear Scrollback" | History wiped, but the visible screen stays |
+| Open tabs A B C; activate B, then C, then press Cmd+O repeatedly | Bounces between C and B; close the previous tab and Cmd+O falls back to tab 1 |
+| Right-click tab -> Pin | Tab jumps to the front of the bar with a small pin glyph; a second pinned tab lands AFTER it |
+| Drag a pinned tab right / an unpinned tab left across the boundary | Refuses to cross (Cmd+Shift+arrows too) |
+| Close a pinned tab (x / Cmd+W) with nothing running | "This tab is pinned." confirm appears; Enter closes, Esc keeps |
+| Pin a tab, quit, relaunch (`session.restore` on) | The tab comes back pinned, still first |
+| Right-click tab -> Unpin | Pin glyph gone; the tab lands at the start of the unpinned group |

@@ -423,6 +423,22 @@ impl PtyTerm {
         (g.display_offset(), g.history_size())
     }
 
+    /// Drop the scrollback history, keeping the visible screen (palette "Clear Scrollback").
+    pub(crate) fn clear_scrollback(&self) {
+        self.term.lock().grid_mut().clear_history();
+    }
+
+    /// Full wipe (Cmd+K / "Clear Terminal"): blank the viewport AND drop the history. The
+    /// blank comes first on purpose - the caller follows with Ctrl-L, whose `ESC[2J` handler
+    /// (alacritty `clear_viewport`) scrolls any still-occupied viewport lines INTO history,
+    /// which would undo the wipe.
+    pub(crate) fn clear_all(&self) {
+        let mut t = self.term.lock();
+        let g = t.grid_mut();
+        g.reset_region(..);
+        g.clear_history();
+    }
+
     /// Jump the viewport to an absolute history offset (0 = bottom/live).
     pub(crate) fn scroll_to_offset(&self, target: usize) {
         let cur = self.term.lock().grid().display_offset();
@@ -714,13 +730,12 @@ mod tests {
         }
     }
 
-    /// Spawn a REAL pty running `/bin/sh -c <script>` (no integration hooks) and poll `check`
-    /// until it returns Some or the timeout hits.
-    fn spawn_and_poll<T>(script: &str, check: impl Fn(&PtyTerm) -> Option<T>) -> Option<T> {
+    /// Spawn a REAL pty running `/bin/sh -c <script>` (no integration hooks) on a 20x5 grid.
+    fn e2e_term(script: &str) -> PtyTerm {
         let opts = SpawnOpts {
             detect_progress: false,
             shell_integration: false,
-            scrollback_lines: 100,
+            scrollback_lines: 500,
             word_separators: " ".into(),
             bold_bright: false,
             cwd: None,
@@ -733,15 +748,25 @@ mod tests {
                 color: None,
             }),
         };
-        let term = PtyTerm::spawn(20, 5, egui::Context::default(), &opts);
+        PtyTerm::spawn(20, 5, egui::Context::default(), &opts)
+    }
+
+    /// Poll `check` until it returns Some or the timeout hits.
+    fn poll_term<T>(term: &PtyTerm, check: impl Fn(&PtyTerm) -> Option<T>) -> Option<T> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
-            if let Some(v) = check(&term) {
+            if let Some(v) = check(term) {
                 return Some(v);
             }
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         None
+    }
+
+    /// Spawn + poll in one go (most e2e cases don't need the term afterwards).
+    fn spawn_and_poll<T>(script: &str, check: impl Fn(&PtyTerm) -> Option<T>) -> Option<T> {
+        let term = e2e_term(script);
+        poll_term(&term, check)
     }
 
     #[test]
@@ -760,6 +785,37 @@ mod tests {
         let title =
             spawn_and_poll("printf '\\033]0;from-the-shell\\007'; sleep 5", PtyTerm::title_osc);
         assert_eq!(title.as_deref(), Some("from-the-shell"));
+    }
+
+    #[test]
+    fn real_pty_clear_all_wipes_history_and_viewport() {
+        // 200 lines on a 5-row grid build real history; the full wipe must drop it all AND
+        // blank the viewport (a following shell ESC[2J would scroll leftovers into history).
+        let term = e2e_term("seq 1 200; sleep 5");
+        poll_term(&term, |t| (t.scroll_state().1 >= 195).then_some(()))
+            .expect("history never filled");
+        term.clear_all();
+        assert_eq!(term.scroll_state(), (0, 0));
+        let snap = term.grid_snapshot();
+        assert!(
+            snap.cells.iter().all(|c| c.c == ' ' || c.c == '\0'),
+            "viewport must be blank after the wipe"
+        );
+    }
+
+    #[test]
+    fn real_pty_clear_scrollback_keeps_the_screen() {
+        // The history-only wipe drops the scrollback but leaves the visible rows untouched.
+        let term = e2e_term("seq 1 200; sleep 5");
+        poll_term(&term, |t| (t.scroll_state().1 >= 195).then_some(()))
+            .expect("history never filled");
+        term.clear_scrollback();
+        assert_eq!(term.scroll_state(), (0, 0));
+        let snap = term.grid_snapshot();
+        assert!(
+            snap.cells.iter().any(|c| c.c != ' ' && c.c != '\0'),
+            "viewport content must survive a scrollback-only wipe"
+        );
     }
 
     #[test]
