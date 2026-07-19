@@ -522,6 +522,19 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 0.2.5 - color-support env, settings redistribution, tab-bar rework
+- TERM=xterm-256color + COLORTERM=truecolor + TERM_PROGRAM=stdusk on every spawn (Finder launches
+  had NO TERM -> child programs disabled ANSI colors entirely). Profile env still wins (map insert).
+- Settings regrouped by concern (Appearance owns all visuals incl. cursor/ligature previews +
+  unfocused-opacity; Terminal = behavior only); ui::num_field/slider replace DragValue; theme
+  dropdowns hover-preview; scrollbar pinned (ScrollStyle::thin; solid() collapses here).
+- Tab bar: Panel::top sizes fill/clip at its own estimate -> pin with exact_size or the fill stops
+  short (the underline dead-band root cause). appearance.tab_width fixed|dynamic (default fixed).
+  Close-x hidden by default; hover swaps the leading CLI chip for the x (overlap impossible).
+- Adversarial pass: claims verified; a hover-order test rewritten + 2 interaction tests added.
+- V1.md is the roadmap to 1.0 (P0: shell-exit dead tab, font family/Nerd Font, OSC 0/2 titles,
+  wide chars, signing). 141 tests.
+
 ## 0.2.4 - settings sync via git + polish
 `[sync] repo` (Settings > Session > Sync) points at your own (private) git repo; Push/Pull
 moves `~/.config/stdusk` (config.toml + custom schemes) with the SYSTEM git + your existing
