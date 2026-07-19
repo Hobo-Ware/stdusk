@@ -60,6 +60,14 @@ pub(crate) fn auto_title(dynamic: bool, osc: Option<&str>, cwd: Option<&str>) ->
     }
 }
 
+/// Commit a rename buffer: a trimmed non-empty name renames the tab; an empty or
+/// whitespace-only entry means "un-rename" (`None`) - `auto_title` takes back over. Also
+/// applied to session-restored titles so a persisted empty rename can't stick.
+pub(crate) fn commit_rename(buf: &str) -> Option<String> {
+    let t = buf.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
 /// Truncate to `max` chars with an ellipsis; returns (shown, was_truncated).
 pub(crate) fn ellipsize(s: &str, max: usize) -> (String, bool) {
     if s.chars().count() <= max {
@@ -1669,6 +1677,18 @@ mod tests {
         assert_eq!(auto_title(true, None, Some("/tmp/x")), Some("x".into()));
         assert_eq!(auto_title(true, Some("vim"), None), Some("vim".into()));
         assert_eq!(auto_title(true, None, None), None); // nothing known: leave the title alone
+    }
+
+    #[test]
+    fn empty_or_whitespace_rename_clears_to_auto_title() {
+        // A cleared rename field must un-rename the tab (None), never leave an empty title;
+        // auto_title then reasserts (OSC title > cwd basename).
+        assert_eq!(commit_rename("build"), Some("build".into()));
+        assert_eq!(commit_rename("  build  "), Some("build".into())); // stray spaces trimmed
+        assert_eq!(commit_rename(""), None);
+        assert_eq!(commit_rename("   "), None);
+        assert_eq!(auto_title(true, Some("copilot"), Some("/tmp/x")), Some("copilot".into()));
+        assert_eq!(auto_title(true, None, Some("/tmp/x")), Some("x".into()));
     }
 
     #[test]

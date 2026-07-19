@@ -313,8 +313,10 @@ impl Stdusk {
             let saved = session::load();
             for st in &saved.tabs {
                 let mut tab = spawn_tab(&cfg, &cc.egui_ctx, st.cwd.clone());
-                if let Some(title) = &st.title {
-                    tab.title.clone_from(title);
+                // Same rule as the rename dialog: a persisted empty/whitespace rename is no
+                // rename at all - auto-titling stays live.
+                if let Some(title) = st.title.as_deref().and_then(ui::commit_rename) {
+                    tab.title = title;
                     tab.renamed = true;
                 }
                 tab.color = st.color.as_deref().and_then(session::hex_to_color);

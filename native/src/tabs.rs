@@ -494,10 +494,14 @@ impl Stdusk {
         }
         if commit {
             if let Some(t) = self.tabs.get_mut(idx) {
-                if !buf.trim().is_empty() {
-                    t.title = buf;
+                match ui::commit_rename(&buf) {
+                    Some(name) => {
+                        t.title = name;
+                        t.renamed = true;
+                    }
+                    // Cleared name = un-rename: auto-titling (OSC title > cwd) reasserts.
+                    None => t.renamed = false,
                 }
-                t.renamed = true;
             }
         } else if !cancel {
             self.renaming = Some((idx, buf, focus)); // keep editing next frame
