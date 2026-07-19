@@ -1664,19 +1664,48 @@ mod tests {
     }
 
     #[test]
-    fn close_slot_clicks_activate_when_not_hovered_prior() {
-        // Without the pointer over the tab, the leading slot is NOT a close button: a click
-        // that lands there after the pointer was elsewhere must still activate the tab on the
-        // press frame's hit test (the x only exists once contains_pointer is true, and the
-        // press frame itself establishes hover for the release).
+    fn close_x_closes_an_unfocused_tab() {
+        // The x shows on hover for EVERY tab now (not just the active one), and clicking it
+        // must close - not merely focus - the unfocused tab.
         let ctx = egui::Context::default();
         let warm = tab_frame(&ctx, vec![]);
         let r = warm.rects[1];
-        let mid = r.center();
-        tab_frame(&ctx, vec![egui::Event::PointerMoved(mid)]);
-        tab_frame(&ctx, vec![press(mid, true)]);
-        let up = tab_frame(&ctx, vec![press(mid, false)]);
-        assert_eq!(up.clicked, Some(1), "the tab body must still click-activate");
+        let x = egui::pos2(r.left() + TAB_PAD_X + TAB_SLOT_W / 2.0, r.center().y);
+        tab_frame(&ctx, vec![egui::Event::PointerMoved(x)]);
+        tab_frame(&ctx, vec![press(x, true)]);
+        let up = tab_frame(&ctx, vec![press(x, false)]);
+        assert_eq!(up.closed, Some(1), "the x must close the unfocused tab");
+        assert_eq!(up.clicked, None, "the click must not fall through and focus it");
+    }
+
+    #[test]
+    fn drag_from_the_close_slot_still_reorders() {
+        // The x senses only clicks, so a drag STARTING over it must fall through to the tab's
+        // click_and_drag widget - the slot swap must not create a reorder dead zone.
+        let ctx = egui::Context::default();
+        let warm = tab_frame(&ctx, vec![]);
+        let r = warm.rects[1];
+        let x = egui::pos2(r.left() + TAB_PAD_X + TAB_SLOT_W / 2.0, r.center().y);
+        tab_frame(&ctx, vec![egui::Event::PointerMoved(x)]);
+        tab_frame(&ctx, vec![press(x, true)]);
+        let moved = tab_frame(&ctx, vec![egui::Event::PointerMoved(x + egui::vec2(40.0, 0.0))]);
+        assert_eq!(moved.dragged, Some(1), "dragging from the slot must still reorder");
+        let up = tab_frame(&ctx, vec![press(x + egui::vec2(40.0, 0.0), false)]);
+        assert_eq!(up.closed, None, "a decided drag must not close the tab");
+    }
+
+    #[test]
+    fn close_slot_clicks_activate_when_not_hovered_prior() {
+        // Without the pointer over the tab, the leading slot is NOT a close button: a press
+        // landing there cold hits the tab (the x wasn't registered while unhovered), so the
+        // click activates instead of closing.
+        let ctx = egui::Context::default();
+        let warm = tab_frame(&ctx, vec![]);
+        let r = warm.rects[1];
+        let slot = egui::pos2(r.left() + TAB_PAD_X + TAB_SLOT_W / 2.0, r.center().y);
+        tab_frame(&ctx, vec![press(slot, true)]);
+        let up = tab_frame(&ctx, vec![press(slot, false)]);
+        assert_eq!(up.clicked, Some(1), "a cold press on the slot must click-activate the tab");
         assert_eq!(up.closed, None);
     }
 
