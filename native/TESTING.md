@@ -280,3 +280,30 @@ HOME-override e2e); these are the interactions only a human can drive:
 | In `vim`, watch the cursor while it hides its own (e.g. some plugins/DECTCEM apps) | stdusk no longer paints a cursor an app explicitly hid (`?25l`) |
 | Rename a tab, clear the field entirely (or spaces only), commit | Tab is UN-renamed: auto title (OSC title > cwd basename) takes back over; restart stdusk - the empty rename must not resurrect from the session file |
 | Rename a tab to `  build  ` | Title commits trimmed (`build`) |
+
+## 23. Keyboard a11y in settings (post-1.0.2)
+| Step | Expect |
+|---|---|
+| Open Settings, press Tab / Shift+Tab repeatedly | Focus walks every control in visual order; the focused control wears an accent ring (toggles, chips, swatches, steppers, buttons, dropdown buttons, list rows, sidebar) |
+| Tab to any toggle, press Space or Enter | It flips; traversal alone never flips anything |
+| Tab into a chip row (Terminal > On shell exit), press Left/Right | Focus moves chip to chip; Space/Enter selects the focused chip |
+| Profiles > Tab color: Tab into the swatches, arrows + Enter | Focus moves around the 2x6 palette (accent ring on the focused dot); Enter picks it |
+| Appearance > Theme: open the dropdown, press Down / Up | A highlight bar moves over the rows (wraps at both ends); the list scrolls to keep it visible; the preview card follows the highlighted scheme |
+| With a highlight set, keep typing in the search field | The query keeps filtering (arrows never stole focus from the field); the highlight resets to the top |
+| Enter with a highlight / with none | Commits the highlighted row / the TOP match; the popup closes and the theme applies |
+| Esc while the dropdown is open | Closes ONLY the dropdown (preview reverts to the applied scheme); the NEXT Esc closes settings (unsaved-changes guard still confirms) |
+| Terminal > Scrollback lines: focus the field, Up/Down; Shift+Up/Down | Steps by 1000; by 10000 (clamped to the range) |
+| Focus a slider (Font size / Opacity), Left/Right | Value nudges a step per press |
+| Tab to a sidebar section row, Up/Down then Enter | Focus moves along the sections; Enter opens the focused one |
+| `STDUSK_SHOT_FOCUS=1 STDUSK_SHOT_SECTION=terminal cargo run -- --screenshot-settings /tmp/s.png` | The active nav row wears the accent focus ring in the capture |
+
+## 24. 1.0.3 theming - min-contrast default, healed schemes, light pack
+| Step | Expect |
+|---|---|
+| Fresh install (no config), run `claude` or any dim-text TUI on `dracula` | Cell text meets ~4:1 out of the box (`minimum_contrast` now defaults to 4, Tabby parity) |
+| Set `minimum_contrast = 1.0`, restart | Theme-exact cells again - explicit 1.0 in an existing config is never bumped |
+| Apply `c64` (Settings > scheme browser) | Prompt text readable (fg patched to 4.5:1); same for `royal`, `shaman`, `crayonponyfish` |
+| Search "melange" in the scheme browser | Melange Dark appears and applies (file never parsed before 1.0.3) |
+| Set `theme = "Parasio Dark"` (old saved config), restart | Resolves to Paraiso Dark, not the one-half-dark fallback |
+| Scheme browser > Light chip | 39 light schemes incl. Gruvbox Light, Catppuccin Latte, Flexoki Light, Dayfox, GitHub Light |
+| Apply each new light scheme | Chrome derives light (pale tab strip, dark text), terminal preview matches upstream palette |

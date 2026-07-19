@@ -460,6 +460,19 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
 - **eframe's screenshot capture (cumulative pass 2) always beats the pty readers** - a shot
   that needs real shell output in the grid captures blank. Set `STDUSK_SHOT_SETTLE_MS` (sleeps
   in `Stdusk::new`, BEFORE the first pass, so the demo shells' output lands first).
+- **Keyboard a11y is mostly free in egui 0.35 - visibility isn't.** Every `Sense::click`
+  widget is Tab/Shift+Tab AND arrow-key focusable (geometric traversal) and Space/Enter
+  "clicks" it; what egui does NOT do is show that focus on custom-painted widgets. Every new
+  hand-painted primitive must call `ui::focus_ring`. The ring reads `memory.has_focus`, not
+  `Response::has_focus()` - the latter is viewport-focus-gated and reads false in the
+  screenshot harness (and in inactive windows, where macOS keeps rings visible).
+- **The eframe screenshot PNG contains PASS 1's render.** State set during pass 1's widget
+  pass (e.g. `request_focus` after a widget drew) paints only in pass 2 - invisible in the
+  capture. Pre-seed before the widget draws (`ui.next_auto_id()` + `memory.request_focus`,
+  see `STDUSK_SHOT_FOCUS`).
+- **A focused `TextEdit`'s event filter claims arrow keys**, so arrows never move egui focus
+  away from a search field - that's what makes the dropdown keyboard highlight (popup state,
+  not widget focus) coexist with live filtering.
 - **font-kit on macOS lies about faces**: `select_best_match("Menlo", regular)` returns Menlo
   *Italic*, and `Font::properties()` reports `Italic, w400` for EVERY Menlo face. Only
   `full_name()` (and the handle's bytes + `.ttc` face index) are trustworthy - pick faces by
@@ -533,6 +546,80 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   guard (Save/Discard/Keep editing); close-busy-tab confirm (`procwatch::busy_child`, opt-out
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
+
+## 1.0.3 - "Operable & readable": keyboard a11y + theming pass
+
+### Keyboard a11y - settings fully keyboard-operable
+User ask: "dropdown options should be keyboard-navigable; form controls in settings need
+proper a11y." Audit outcome: egui 0.35 already gives every `Sense::click` widget Tab/Shift+Tab
++ geometric arrow-key focus traversal AND Space/Enter activation (context.rs keyboard click) -
+the real gaps were (a) focus was INVISIBLE on every hand-painted primitive, (b) the searchable
+dropdown popups had zero keyboard support, (c) `num_field` ignored arrows. Files: `ui.rs`,
+`settings.rs` only (parallel theming agent owned colors/config/assets).
+- **`ui::focus_ring(ui, &resp, radius)`** - the one accent focus indicator, painted by every
+  hand-painted primitive: toggle_switch, chip, color_swatch (focus ring outranks selected/
+  hover), stepper_button, icon_button/icon_toggle, action_button, slider, the searchable-
+  dropdown button, dropdown/nav/link/scheme/profile rows, inline_icon. It reads
+  `memory.has_focus`, NOT `Response::has_focus` - the latter is ALSO gated on viewport focus
+  (macOS keeps a control's ring visible in inactive windows, and the shot harness window is
+  never focused). `TextEdit` keeps egui's own accent outline; sliders nudge on arrows natively.
+- **Searchable dropdowns (scheme + font)**: ArrowUp/Down move a keyboard highlight over the
+  filtered rows (wrapping; `SettingsState.dropdown_hl` - popup STATE, not widget focus: the
+  search field keeps focus because a TextEdit's event filter claims arrow keys, so typing
+  keeps filtering mid-navigation), the list scrolls to follow, Enter commits the highlight
+  (falls back to the TOP match when none - type-and-Enter picks the first hit), Esc closes
+  without committing. Pure `move_highlight`/`commit_index` are table-tested. The scheme
+  dropdown's keyboard highlight feeds the same live preview card as pointer hover. A query
+  change resets the highlight. Enter is honored only while the search field (or nothing)
+  holds focus, so Enter on a Tab-focused chip/row activates that widget, never double-picks.
+- **`num_field`**: Up/Down step by `step` while the field has focus; Shift steps 10x.
+- **Esc ordering** (dropdown closes first, settings second) was already correct - the view
+  samples `dropdown_open`/`field_focused` BEFORE the panels run; left untouched.
+- **`STDUSK_SHOT_FOCUS=1` + `--screenshot-settings`**: pre-seeds keyboard focus on the active
+  nav row so the ring is screenshot-capturable. GOTCHA (new): the eframe capture contains
+  PASS 1's render - focus requested AFTER a widget draws paints its ring only in pass 2,
+  which the PNG misses. The knob requests focus on `ui.next_auto_id()` BEFORE drawing the row.
+- Tests +9: ui `space_and_enter_toggle_a_focused_switch` /
+  `tab_moves_focus_from_a_text_field_to_the_next_primitive` /
+  `arrow_keys_move_focus_along_a_chip_row` / `arrows_step_a_focused_num_field` /
+  `arrow_keys_nudge_a_focused_slider`; settings `highlight_moves_and_wraps` /
+  `commit_falls_back_to_the_top_match` /
+  `dropdown_arrows_move_the_highlight_and_enter_commits` /
+  `dropdown_typing_keeps_filtering_and_esc_closes_without_committing`. Suite green, clippy
+  -D warnings + fmt clean, all settings-section screenshots re-verified (+ the focus-ring shot).
+
+### Theming - min-contrast default, scheme data heal, light-pack expansion
+- **`terminal.minimum_contrast` default 1.0 -> 4.0** (Tabby parity; user report: dark-palette
+  CELL text illegible on some schemes - the 0.5.0 dim floor covered chrome only). Serde fills
+  only ABSENT fields, so a config that explicitly set 1.0 keeps exact-theme cells (asserted:
+  `explicit_minimum_contrast_survives_the_default_bump`); any config ever saved via settings
+  has the field pinned. config.example rewritten to match.
+- **The 4 audit-critical schemes patched in the DATA** instead of dropped (fg nudged with the
+  real `ensure_contrast(fg, bg, 4.5)` outputs, provenance comments in the files): C64
+  #7869c4->#aea5dc (2.26->4.51), Royal #514968->#7d778e (2.34->4.59), Shaman #405555->#708080
+  (2.44->4.69), CrayonPonyFish #68525a->#86757b (2.76->4.55). Asserted:
+  `audit_critical_schemes_were_patched_to_aa`.
+- **Melange Dark never parsed** - color1-15 lines were missing the `:` separator, so the
+  scheme was silently absent since vendoring. Fixed in the asset.
+- **Dupe audit** (normalized: lowercase, strip space/-/_): `Parasio Dark` was an IDENTICAL
+  typo-dupe of `Paraiso Dark` - dropped, with a rename alias in `colors::by_name`
+  ("parasio-dark" -> paraiso-dark) so saved configs keep resolving (asserted:
+  `parasio_dark_alias_resolves_to_paraiso`; unknown-name fallback unchanged). Same-normalized
+  but DIFFERENT palettes kept as variants: one-half-dark/OneHalfDark,
+  one-half-light/OneHalfLight, tokyo-night/TokyoNight, dracula/pack-Dracula. Known quirk: the
+  by_name built-in arms shadow pack `onehalflight`/`tokyonight`, so those two rows apply the
+  built-in - pre-existing, tracked for a follow-up.
+- **15 hand-vendored light schemes** (no network; pack XRDB format, upstream+license header
+  per file, all MIT except Tango = public domain): Gruvbox Light, Gruvbox Material Light,
+  Catppuccin Latte, Everforest Light, PaperColor Light, Selenized Light, Selenized White,
+  Dayfox, Iceberg Light, Flexoki Light, Alabaster, GitHub Light, Edge Light, Tango Light,
+  Zenbones Light. Every one: fg/bg >= 4.5, dim floor passes, `theme_is_dark` = light
+  (asserted: `vendored_light_schemes_classify_light_and_meet_aa`). Pack split 24/169 ->
+  39 light / 169 dark; browsable total 193 -> 208 (README + config.example + themes.rs
+  counts updated).
+- Verified in an isolated worktree while the a11y pass ran in the main tree, then combined:
+  `--screenshot` with `theme = "gruvbox-light"` via temp-HOME config (light bg +
+  light-derived chrome).
 
 ## 1.0.2 - "Answer the terminal": query reporting, stuck-tab heal, rename clearing
 Three user-reported bugs, root-caused against real-pty captures of the actual CLIs (gemini,
