@@ -52,8 +52,36 @@ focus_follows_mouse = false # hovering a split pane focuses it without clicking
 [session]
 restore = true            # reopen last session's tabs (cwd/title/color) on launch
 
+[sync]
+repo = ""                 # git remote for config.toml + custom schemes (keep it private); "" = off
+auto = false              # with a repo set: pull once on launch, push after every settings Save
+
+# App hotkey remapping. Chord = modifiers (Cmd/Ctrl/Alt/Shift) + a key name
+# (letters, digits, F1-F20, Comma/"," Period Minus/"-" Equals/"=" Space Enter Tab
+# arrows Home End PageUp PageDown ...). Omitted actions keep these defaults; "" unbinds.
+# Single keys need Cmd/Ctrl/Alt (only F-keys may be bound bare). A chord that collides
+# with a terminal key (e.g. Ctrl+letter) fires the action AND still reaches the shell.
+# Also editable in Settings > Hotkeys. The global summon hotkey stays [quake] hotkey.
+[hotkeys]
+new_tab = "Cmd+T"
+close = "Cmd+W"           # close focused pane; the tab on its last pane
+reopen = "Cmd+Shift+T"
+toggle_last_tab = "Cmd+O"
+find = "Cmd+F"
+palette = "Cmd+Shift+P"
+settings = "Cmd+,"
+broadcast = "Cmd+Shift+I" # broadcast input to every pane in the tab
+split_right = "Cmd+D"
+split_down = "Cmd+Shift+D"
+select_all = "Cmd+A"
+clear = "Cmd+K"           # wipe screen + scrollback
+zoom_in = "Cmd+="
+zoom_out = "Cmd+-"
+zoom_reset = "Cmd+0"
+
 # Named launch profiles (Tabby-style). Repeat the [[profiles]] block per profile;
 # only `name` is required - omitted fields fall back to the regular tab defaults.
+# Also editable in Settings > Profiles (list + inline editor + per-profile Launch).
 # [[profiles]]
 # name = "work"
 # shell = "/bin/zsh"        # override $SHELL for tabs opened with this profile

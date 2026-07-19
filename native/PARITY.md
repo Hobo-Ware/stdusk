@@ -119,9 +119,9 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Feature | State | Notes |
 |---|---|---|
 | cwd tracking + new-tab-in-cwd | ✅ | |
-| Named profiles (shell/args/cwd/env/color) | ✅ | `[[profiles]]`; tab menu + '+' right-click + palette; icon ⬜ |
-| Per-profile env editor / command-line editor | ⬜ | with profiles |
-| `switch-profile` in active pane | ⬜ | with profiles |
+| Named profiles (shell/args/cwd/env/color) | ✅ | `[[profiles]]`; tab menu + '+' right-click + palette + Settings > Profiles editor (0.5.0); icon ⬜ |
+| Per-profile env editor / command-line editor | ✅ | Settings > Profiles: add/duplicate/delete/launch, inline editor (name/shell/args w/ quoted parsing/cwd/env rows/color swatches); Save round-trips through config.toml |
+| `switch-profile` in active pane | ⬜ | deliberately deferred (V1 §P2): stdusk profiles launch new tabs; in-place respawn-with-profile revisited on demand |
 | Shell auto-detection list (zsh/bash/fish/pwsh/...) | 🟡 | uses `$SHELL`; no picker. (Tabby fork ships no concrete ShellProvider either) |
 | Run-as-administrator / UAC | ⛔ | security smell (PLAN §9) |
 
@@ -152,8 +152,9 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 ## Settings GUI (M11)
 | Feature | State | Notes |
 |---|---|---|
-| egui settings panel | ✅ | gear or Cmd+, opens the full view: Appearance/Terminal/Quake/Session/About sidebar, scheme browser w/ search + live preview card, unsaved-changes guard, live-apply + Save-to-toml. Quake hotkey editable (live re-register); general keybinding editor still ⬜ |
-| Settings sync via git (config + custom schemes) | ✅ | `[sync] repo` push/pull with the user's own git creds (`sync.rs`); replaces the dropped SaaS sync |
+| egui settings panel | ✅ | gear or Cmd+, opens the full view: Appearance/Color scheme/Terminal/Profiles/Hotkeys/Quake/Session/About sidebar, scheme browser w/ search + live preview card, unsaved-changes guard, live-apply + Save-to-toml. Quake hotkey editable (live re-register) |
+| Hotkey remapping (`hotkeys.ts` rebinding) | ✅ | `[hotkeys]` table (15 app actions, per-field defaults, empty = unbound) + Settings > Hotkeys editable rows w/ parse validation; exact-modifier matcher (`ui::hotkey_matches`, tested). Live key-capture widget ⬜; pane-nav/tab-index/scroll binds stay fixed |
+| Settings sync via git (config + custom schemes) | ✅ | `[sync] repo` push/pull with the user's own git creds (`sync.rs`); replaces the dropped SaaS sync. `[sync] auto` (0.5.0): pull on launch + push on save (leaner than Tabby's 60s loop) |
 | Raw config editor / show-defaults | 🟡 | "Open config file/folder" link rows in settings About section |
 
 ## Session / lifecycle

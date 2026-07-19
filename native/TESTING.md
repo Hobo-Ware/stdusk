@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 0.4.1.
+Step-by-step verification for everything shipped through 0.5.0.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -207,3 +207,26 @@ config edits restart stdusk. Open a NEW tab after install so fresh shell hooks l
 | View the tab, switch away again, produce output | Notification fires again (viewing re-armed it) |
 | Toggle "Notify on activity" off | Check gone; no notifications |
 | `STDUSK_SHOT_BROADCAST=1 cargo run -- --screenshot /tmp/s.png` | Renders a split active tab with the broadcast border on both panes and exits 0 |
+
+## 18. 0.5.0 - profiles editor, hotkey remapping, autosync
+| Step | Expect |
+|---|---|
+| Settings > Profiles > Add profile | "profile N" appears in the list, expanded into the inline editor; footer Save persists a `[[profiles]]` block |
+| Edit Name / Shell / Working directory | List row updates live (shell summary line); empty Shell shows "default shell ($SHELL)" |
+| Arguments: type `-c "echo hi there"` | Save writes `args = ["-c", "echo hi there"]` (quotes group; check the config file) |
+| Environment: Add variable, type `AWS_PROFILE` = `work`; add a second row, leave its NAME blank | Save persists only the named variable (blank keys are dropped) |
+| Tab color: click a swatch / "No color" | Row's leading dot recolors; a launched tab gets the underline |
+| Row's ▶ (Launch) | New tab spawns with the profile (name/color/cwd/env) - visible in the tab bar above settings; "Launched <name>" toast |
+| Row's duplicate icon | "<name> copy" inserted after, selected for editing |
+| Row's trash icon | Profile gone; Save persists the removal; Revert restores it |
+| Edit args, then footer Revert (or Discard on close) | Editor buffers reload from the restored config (no stale text) |
+| Settings > Hotkeys: set New tab to `Cmd+N`, Save | Cmd+N opens a tab; Cmd+T stops (exact chords only); tab-menu/+ tooltips show the new chord |
+| Type `garbage` in a field, click elsewhere | Text turns red while typing; "Invalid hotkey: garbage" toast on blur; the action simply never fires |
+| Clear a field ("" = unbound) | No toast; the action has no hotkey; its menu hint disappears |
+| Set Clear terminal to `Ctrl+K` | Ctrl+K wipes the scrollback AND sends ^K to the shell (documented collision - app bind + terminal byte both fire) |
+| `[hotkeys] new_tab = "Cmd+N"` in config, restart | Bind applies from the file; missing fields keep defaults |
+| Hotkeys > Reset to defaults | All 15 rows back to the shipped chords |
+| Cmd+Shift+P / Cmd+, while a rename or paste-confirm modal is open | Still suppressed (text modals own the keyboard), rebound or not |
+| Settings > Session > Auto sync (repo set), Save | Toggle enabled only with a repo; every Save pushes ("Settings pushed" toast); rapid saves don't stack pushes |
+| `[sync] auto = true`, relaunch | One background pull on launch ("Settings pulled" toast; theme/hotkey re-apply); a failing repo toasts once and startup still completes |
+| `STDUSK_SHOT_SECTION=profiles cargo run -- --screenshot-settings /tmp/s.png` | Renders the Profiles section (demo profiles + open editor) and exits 0; `=hotkeys` renders the Hotkeys section |

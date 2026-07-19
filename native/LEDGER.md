@@ -453,6 +453,10 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
 - **Headless egui end-to-end tests** (`Context::run_ui` driving real frames) are the sanctioned
   harness for interaction/hit-test/focus regressions - see the tab click/drag/close-x + find-bar
   backspace tests in `src/ui.rs` and the pattern in `.agents/rules/testing.md`.
+- **Custom `[hotkeys]` binds can collide with terminal keys.** The app bind wins cleanly only
+  for the combos `key_to_bytes` already reserves (the defaults are chosen that way); a rebind
+  onto a terminal-bound chord (e.g. Ctrl+letter) fires the action AND the pty byte - by
+  design, asserted in `rebound_terminal_chords_double_fire_by_design`. See the 0.5.0 entry.
 - **font-kit on macOS lies about faces**: `select_best_match("Menlo", regular)` returns Menlo
   *Italic*, and `Font::properties()` reports `Italic, w400` for EVERY Menlo face. Only
   `full_name()` (and the handle's bytes + `.ttc` face index) are trustworthy - pick faces by
@@ -526,6 +530,78 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   guard (Save/Discard/Keep editing); close-busy-tab confirm (`procwatch::busy_child`, opt-out
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
+
+## 0.5.0 - "Make it yours": profiles editor GUI, hotkey remapping, autosync (V1 P1s)
+- **Profiles editor (Settings > Profiles**, sidebar between Terminal and Quake, Phosphor
+  identification-badge E6F6): list of configured profiles (color dot + name + shell summary,
+  trailing Launch/Duplicate/Delete icons via `inline_icon` - row interacted FIRST so the
+  icons, registered after, win their clicks, same ordering as the tab close-x), Add profile,
+  and a click-to-edit inline panel: name/shell/cwd (plain `text_field`s; Option fields use a
+  per-frame buffer, `"" = None`), args as ONE line parsed by pure `settings::split_args`
+  (whitespace splits, '/" quote, backslash escapes; `join_args` renders back, round-trip
+  tested), env as key=value `text_field` rows + Add/Remove (blank keys dropped by pure
+  `env_rows_to_map`, tested), color = "No color" chip + the `color_swatch` palette (2x6).
+  Args/env edit through `SettingsState` buffers (half-typed quotes and blank rows must
+  survive re-render) that write into `cfg.profiles` on every change; buffers reload on
+  selection change AND after Revert/Discard/sync-pull (`profile_loaded = None` in those
+  paths - stale buffers were the failure mode). Launch = `TabAction::NewWithProfile` fx from
+  the section (the new tab is visible in the tab bar above the settings view) + toast.
+- **`Profile.env` is now a `BTreeMap`** (was HashMap): deterministic iteration = stable TOML
+  serialization, so `config_dirty` and Save diffs can't flap on map order. Round-trip incl.
+  args/env re-verified (`config_to_toml_round_trips`).
+- **Hotkey remapping (`[hotkeys]`)**: a `config::Hotkeys` STRUCT (15 String fields with
+  per-field defaults via struct `Default` + `#[serde(default)]`, not a map - a typoed action
+  name is an ignored unknown field, never a silently dead bind; empty = unbound) for new_tab
+  close reopen toggle_last_tab find palette settings broadcast split_right split_down
+  select_all clear zoom_in zoom_out zoom_reset. Pure egui-side matcher in `ui.rs`:
+  `parse_hotkey_spec` (own name table incl. punctuation literals "," "=" "-"; "+"/"=" both
+  mean `Equals` - shared physical key, pressed `Plus` normalized too, so "Cmd+=" zooms on
+  either report; bare/shift-only single keys REJECTED - they'd shadow typing - only F-keys
+  bind bare) + `hotkey_matches` (EXACT modifier match: Cmd+T never fires on Cmd+Shift+T;
+  garbage/empty never matches). Table-tested incl. garbage, precedence, plus/equals.
+- **The main.rs collection block** iterates `i.events` `Event::Key` presses against the map;
+  first match wins per event (a user binding two actions to one chord fires only the earlier
+  action). palette/settings toggles stay live outside TEXT modals exactly as before; all
+  other actions still obey `hard_modal`; the `input_captured` gate on terminal-input actions
+  (select_all/clear/scroll) is unchanged. Pane nav/resize (Cmd+Alt/Cmd+Ctrl), tab cycle,
+  Cmd+1-9, move-tab, scroll keys stay FIXED (not remappable). Menu hints/tooltips (tab menu
+  New tab/Close, Tabs-popup palette row, +/gear tooltips) read the configured chords
+  (`ui::shortcut_tip` hides unbound ones).
+- **Settings > Hotkeys** (Phosphor keyboard E2D8): grouped rows (Tabs/Panes/Terminal/App),
+  each an editable chord field with the default in the row description - red text while the
+  spec doesn't parse, "Invalid hotkey" toast on blur (`HotkeysFx.invalid`), Reset-to-defaults
+  button. Live capture widget deliberately skipped (stretch goal, >30min).
+- **Reserved-combo integrity (READ THIS before touching binds)**: the DEFAULT chords are
+  chosen so `key_to_bytes` sends nothing for them (Cmd+letter combos are unmapped; Cmd+O/
+  Cmd+K etc. produce no pty bytes) - no double-fire out of the box. A USER rebind onto a
+  terminal-bound chord (e.g. Ctrl+K) fires the app action AND still sends the control byte
+  to the pty: the key_to_bytes reservations cover only the exact default modifier
+  combinations already handled there, and the collect path does not consult the hotkey map.
+  Documented in config.example + the settings intro; asserted in
+  `ui::tests::rebound_terminal_chords_double_fire_by_design` so it can't drift silently.
+- **Autosync (`[sync] auto`, default false, user addendum)**: with a repo set, ONE background
+  pull on launch (spawned in `Stdusk::new` via the existing `sync::spawn`/`SyncSlot`; the
+  per-frame sync_done handler applies it like a manual Pull - config reload + theme/hotkey/
+  font re-apply; a failed pull toasts once and never blocks startup) and a push after every
+  successful settings Save (`save_settings` is the only disk write, so it's THE push hook).
+  Pure `sync::should_autosync(auto, repo_set, busy)` (tested) is the gate; `sync_busy` doubles
+  as the debounce - rapid saves collapse into the in-flight push, and the manual Push button
+  skips its own spawn when Save already kicked one. Design choice: Tabby's config-sync polls
+  on a 60s loop; pull-on-launch + push-on-save is the leaner git-appropriate equivalent
+  (documented here on purpose). Settings > Session > "Auto sync" toggle, enabled only with a
+  repo, hint "Pull on launch, push on save".
+- **Screenshot harness**: `STDUSK_SHOT_SECTION=profiles|hotkeys` added; the profiles shot
+  injects two demo profiles (only when the user config has none) and expands the editor
+  (`SettingsState::select_profile`). Both verified + the default shot unchanged.
+- 192 tests green (+13); clippy -D warnings + fmt clean. New tests: config
+  `hotkeys_default_to_the_shipped_binds` / `partial_hotkeys_table_keeps_other_defaults` /
+  `hotkeys_round_trip_through_toml`; ui `hotkey_matches_exact_chords_only` /
+  `hotkey_plus_and_equals_share_the_key` / `garbage_hotkey_specs_never_match` /
+  `bare_single_keys_are_rejected_but_fkeys_pass` /
+  `rebound_terminal_chords_double_fire_by_design` / `shortcut_tip_hides_unbound_chords`;
+  settings `args_split_handles_quotes_and_escapes` / `args_join_round_trips_through_split` /
+  `env_rows_drop_blank_keys_and_last_write_wins` (+ `sections_render_headless` now drives
+  the profiles editor + hotkey rows); sync `autosync_needs_opt_in_repo_and_an_idle_worker`.
 
 ## 0.4.1 - "Panes & tabs polish": broadcast input, aggregated tab state, menu polish (V1 P1s)
 - **Broadcast input (Tabby `pane-focus-all`)**: Cmd+Shift+I (Tabby's exact default binding) or

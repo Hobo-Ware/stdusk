@@ -26,16 +26,20 @@ pub(crate) enum Section {
     Appearance,
     ColorScheme,
     Terminal,
+    Profiles,
+    Hotkeys,
     Quake,
     Session,
     About,
 }
 
 impl Section {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 8] = [
         Self::Appearance,
         Self::ColorScheme,
         Self::Terminal,
+        Self::Profiles,
+        Self::Hotkeys,
         Self::Quake,
         Self::Session,
         Self::About,
@@ -46,6 +50,8 @@ impl Section {
             Self::Appearance => "Appearance",
             Self::ColorScheme => "Color scheme",
             Self::Terminal => "Terminal",
+            Self::Profiles => "Profiles",
+            Self::Hotkeys => "Hotkeys",
             Self::Quake => "Quake",
             Self::Session => "Session",
             Self::About => "About",
@@ -57,6 +63,8 @@ impl Section {
             Self::Appearance => icons::PALETTE,
             Self::ColorScheme => icons::SWATCHES,
             Self::Terminal => icons::TERMINAL_WINDOW,
+            Self::Profiles => icons::IDENTIFICATION_BADGE,
+            Self::Hotkeys => icons::KEYBOARD,
             Self::Quake => icons::LIGHTNING,
             Self::Session => icons::CLOCK_COUNTER_CLOCKWISE,
             Self::About => icons::INFO,
@@ -76,6 +84,10 @@ pub(crate) struct SettingsState {
     dropdown_open: Option<egui::Id>, // which searchable theme dropdown is open, if any
     dropdown_filter: String,      // the open dropdown's search query
     dropdown_focus: bool,         // focus the dropdown filter once, on open
+    profile_sel: Option<usize>,   // profile expanded in the Profiles editor
+    profile_loaded: Option<usize>, // which profile index the edit buffers below reflect
+    profile_args: String,         // args line as typed (parsed into the Vec on change)
+    profile_env: Vec<(String, String)>, // env rows as typed (folded into the map on change)
 }
 
 impl SettingsState {
@@ -90,14 +102,26 @@ impl SettingsState {
             dropdown_open: None,
             dropdown_filter: String::new(),
             dropdown_focus: false,
+            profile_sel: None,
+            profile_loaded: None,
+            profile_args: String::new(),
+            profile_env: Vec::new(),
         }
     }
 
-    /// Switch section; entering the scheme browser jumps its list to the active scheme.
+    /// Switch section; entering the scheme browser jumps its list to the active scheme. The
+    /// profile edit buffers reload too (the config may have been replaced underneath).
     pub(crate) fn open_section(&mut self, section: Section) {
         self.section = section;
         self.scroll_to_active = section == Section::ColorScheme;
         self.dropdown_open = None;
+        self.profile_loaded = None;
+    }
+
+    /// Expand a profile into the inline editor (the screenshot harness's Profiles shot).
+    pub(crate) fn select_profile(&mut self, i: usize) {
+        self.profile_sel = Some(i);
+        self.profile_loaded = None;
     }
 }
 
@@ -210,6 +234,80 @@ pub(crate) fn resolved_theme_name(a: &config::Appearance, system_light: bool) ->
         SchemeSlot::Light => a.theme_light.clone(),
         SchemeSlot::Dark => a.theme_dark.clone(),
     }
+}
+
+/// Split a profile's arguments line into argv entries: whitespace separates, single/double
+/// quotes group (and are stripped), backslash escapes the next char (outside single quotes).
+/// An unterminated quote runs to the end - lenient, since the editor re-parses per keystroke.
+pub(crate) fn split_args(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_token = false; // an empty quoted token ("") still counts
+    let mut quote: Option<char> = None;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some('"') if c == '\\' => cur.push(chars.next().unwrap_or('\\')),
+            Some(_) => cur.push(c),
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                in_token = true;
+            }
+            None if c == '\\' => {
+                cur.push(chars.next().unwrap_or('\\'));
+                in_token = true;
+            }
+            None if c.is_whitespace() => {
+                if in_token {
+                    out.push(std::mem::take(&mut cur));
+                    in_token = false;
+                }
+            }
+            None => {
+                cur.push(c);
+                in_token = true;
+            }
+        }
+    }
+    if in_token {
+        out.push(cur);
+    }
+    out
+}
+
+/// Render argv entries back into one editable line: entries with whitespace / quotes /
+/// backslashes (or empty ones) get double-quoted with inner escapes, the rest stay bare.
+/// Round-trips: `split_args(&join_args(a)) == a`.
+pub(crate) fn join_args(args: &[String]) -> String {
+    let quote = |a: &String| -> String {
+        let plain = !a.is_empty()
+            && !a.chars().any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'));
+        if plain {
+            return a.clone();
+        }
+        let mut out = String::from("\"");
+        for c in a.chars() {
+            if matches!(c, '"' | '\\') {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out.push('"');
+        out
+    };
+    args.iter().map(quote).collect::<Vec<_>>().join(" ")
+}
+
+/// Fold the editor's env rows into the profile map: blank keys dropped (half-typed rows),
+/// keys trimmed, duplicate keys last-write-wins (what the spawned shell would see anyway).
+pub(crate) fn env_rows_to_map(
+    rows: &[(String, String)],
+) -> std::collections::BTreeMap<String, String> {
+    rows.iter()
+        .filter(|(k, _)| !k.trim().is_empty())
+        .map(|(k, v)| (k.trim().to_string(), v.clone()))
+        .collect()
 }
 
 // ---- content-pane building blocks ----
@@ -948,6 +1046,354 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
     // covers them all. Terminal is behavior only.)
 }
 
+// ---- Profiles section ----
+
+/// Side effects the Profiles section needs applied by the caller (which has `&mut Stdusk`).
+struct ProfilesFx {
+    launch: Option<usize>, // spawn a tab with this profile (index into cfg.profiles)
+}
+
+/// Deferred list mutations (collected while iterating, applied after - ui.md §2).
+enum ProfileAct {
+    Add,
+    Duplicate(usize),
+    Delete(usize),
+}
+
+/// A small hover-highlighted Phosphor icon hit-box painted INSIDE another widget's rect
+/// (the profile rows' trailing Launch/Duplicate/Delete). Registered after the row's own
+/// interact so it wins its clicks (same ordering trick as the tab close-x).
+fn inline_icon(ui: &mut egui::Ui, id: egui::Id, center: egui::Pos2, icon: &str, tip: &str) -> bool {
+    let rect = egui::Rect::from_center_size(center, egui::vec2(24.0, 24.0));
+    let resp = ui.interact(rect, id, egui::Sense::click()).on_hover_text(tip);
+    let hovered = resp.hovered();
+    let p = ui.painter();
+    if hovered {
+        p.rect_filled(rect, 6.0, colors::hover_elevated());
+    }
+    p.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(14.0),
+        if hovered { colors::fg() } else { colors::dim() },
+    );
+    resp.clicked()
+}
+
+/// One profile list row: color dot + name + shell summary, with trailing Launch / Duplicate /
+/// Delete icons. Returns (row clicked, launch, duplicate, delete).
+fn profile_row(
+    ui: &mut egui::Ui,
+    i: usize,
+    p: &config::Profile,
+    selected: bool,
+) -> (bool, bool, bool, bool) {
+    let w = ui.available_width().min(CONTENT_MAX_W);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 46.0), egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let painter = ui.painter();
+    if selected {
+        painter.rect_filled(rect, 9.0, colors::selection());
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 9.0, colors::hover());
+    }
+    let stroke = if selected {
+        egui::Stroke::new(1.5, colors::accent())
+    } else {
+        egui::Stroke::new(1.0, colors::border())
+    };
+    painter.rect_stroke(rect, 9.0, stroke, egui::StrokeKind::Inside);
+    // Color dot: the profile's tab color, or a hollow ring for "no color".
+    let dot = egui::pos2(rect.left() + 20.0, rect.center().y);
+    match p.color.as_deref().and_then(crate::session::hex_to_color) {
+        Some(c) => {
+            painter.circle_filled(dot, 6.0, c);
+        }
+        None => {
+            painter.circle_stroke(dot, 5.5, egui::Stroke::new(1.5, colors::dim()));
+        }
+    }
+    painter.text(
+        egui::pos2(rect.left() + 38.0, rect.center().y - 8.0),
+        egui::Align2::LEFT_CENTER,
+        &p.name,
+        egui::FontId::proportional(13.5),
+        colors::fg(),
+    );
+    let shell = p.shell.as_deref().unwrap_or("default shell ($SHELL)");
+    painter.text(
+        egui::pos2(rect.left() + 38.0, rect.center().y + 8.0),
+        egui::Align2::LEFT_CENTER,
+        shell,
+        egui::FontId::proportional(11.0),
+        colors::dim(),
+    );
+    // Trailing icons, right to left: Delete, Duplicate, Launch.
+    let mut x = rect.right() - 22.0;
+    let mut hits = [false; 3];
+    for (slot, (icon, tip)) in [
+        (icons::TRASH, "Delete profile"),
+        (icons::COPY, "Duplicate profile"),
+        (icons::PLAY, "Launch (new tab with this profile)"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = ui.id().with(("profile_icon", i, slot));
+        hits[slot] = inline_icon(ui, id, egui::pos2(x, rect.center().y), icon, tip);
+        x -= 30.0;
+    }
+    (resp.clicked(), hits[2], hits[1], hits[0])
+}
+
+/// The inline profile editor (shown for the selected row): plain fields edit the profile
+/// directly; args/env go through `SettingsState` buffers so half-typed quotes and blank env
+/// rows survive re-render (the parsed result lands in `cfg.profiles` on every change).
+fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut SettingsState, i: usize) {
+    if st.profile_loaded != Some(i) {
+        st.profile_loaded = Some(i);
+        st.profile_args = join_args(&cfg.profiles[i].args);
+        st.profile_env = cfg.profiles[i].env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    }
+    let p = &mut cfg.profiles[i];
+    subheading(ui, "Edit profile");
+    rows(ui, |ui| {
+        row(ui, "Name", "", |ui| {
+            ui::text_field(ui, &mut p.name, "profile name", 200.0, colors::fg());
+        });
+        row_full(ui, "Shell", "Command run for this profile's tabs", "Empty uses $SHELL", |ui| {
+            let mut buf = p.shell.clone().unwrap_or_default();
+            if ui::text_field(ui, &mut buf, "/bin/zsh", 200.0, colors::fg()).changed() {
+                p.shell = (!buf.is_empty()).then_some(buf);
+            }
+        });
+        row_full(
+            ui,
+            "Arguments",
+            "Extra shell arguments",
+            "Space-separated; quote to keep spaces",
+            |ui| {
+                if ui::text_field(ui, &mut st.profile_args, "-l -i", 200.0, colors::fg()).changed()
+                {
+                    p.args = split_args(&st.profile_args);
+                }
+            },
+        );
+        row_full(ui, "Working directory", "", "~ expands to your home", |ui| {
+            let mut buf = p.cwd.clone().unwrap_or_default();
+            if ui::text_field(ui, &mut buf, "~/Git", 200.0, colors::fg()).changed() {
+                p.cwd = (!buf.is_empty()).then_some(buf);
+            }
+        });
+        row(ui, "Tab color", "", |ui| {
+            ui.vertical(|ui| {
+                if ui::chip(ui, "No color", p.color.is_none()).clicked() {
+                    p.color = None;
+                }
+                ui.add_space(4.0);
+                for swatch_row in colors::tab_colors().chunks(6) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for &c in swatch_row {
+                            let hex = crate::session::color_to_hex(c);
+                            if ui::color_swatch(ui, c, p.color.as_deref() == Some(hex.as_str()))
+                                .clicked()
+                            {
+                                p.color = Some(hex);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    });
+
+    subheading(ui, "Environment");
+    let mut env_changed = false;
+    let mut remove: Option<usize> = None;
+    for (ri, (k, v)) in st.profile_env.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            env_changed |= ui::text_field(ui, k, "NAME", 150.0, colors::fg()).changed();
+            ui.label(egui::RichText::new("=").color(colors::dim()));
+            env_changed |= ui::text_field(ui, v, "value", 200.0, colors::fg()).changed();
+            if ui::icon_button(ui, icons::TRASH, "Remove variable").clicked() {
+                remove = Some(ri);
+            }
+        });
+    }
+    if let Some(ri) = remove {
+        st.profile_env.remove(ri);
+        env_changed = true;
+    }
+    ui.add_space(4.0);
+    if ui::action_button(ui, "Add variable", false).clicked() {
+        st.profile_env.push((String::new(), String::new()));
+    }
+    if env_changed {
+        p.env = env_rows_to_map(&st.profile_env);
+    }
+}
+
+/// The Profiles section: list + Add / Duplicate / Delete / Launch, with a click-to-edit
+/// inline panel. All edits live in `cfg.profiles`; the footer Save persists them.
+fn profiles_section(
+    ui: &mut egui::Ui,
+    cfg: &mut config::Config,
+    st: &mut SettingsState,
+) -> ProfilesFx {
+    title(ui, "Profiles");
+    ui.label(
+        egui::RichText::new(
+            "Named launch presets: shell, arguments, directory, environment, tab color. \
+             Launch from here, the tab bar's + (right-click), the tab menu, or the palette.",
+        )
+        .size(11.5)
+        .color(colors::dim()),
+    );
+    ui.add_space(12.0);
+
+    let mut fx = ProfilesFx { launch: None };
+    let mut act: Option<ProfileAct> = None;
+    ui.spacing_mut().item_spacing.y = 6.0;
+    for (i, p) in cfg.profiles.iter().enumerate() {
+        let selected = st.profile_sel == Some(i);
+        let (clicked, launch, dup, del) = profile_row(ui, i, p, selected);
+        if launch {
+            fx.launch = Some(i);
+        }
+        if dup {
+            act = Some(ProfileAct::Duplicate(i));
+        }
+        if del {
+            act = Some(ProfileAct::Delete(i));
+        }
+        if clicked {
+            st.profile_sel = if selected { None } else { Some(i) };
+            st.profile_loaded = None;
+        }
+    }
+    if cfg.profiles.is_empty() {
+        ui.label(egui::RichText::new("No profiles yet.").color(colors::dim()));
+    }
+    ui.add_space(8.0);
+    if ui::action_button(ui, "Add profile", true).clicked() {
+        act = Some(ProfileAct::Add);
+    }
+    match act {
+        Some(ProfileAct::Add) => {
+            cfg.profiles.push(config::Profile {
+                name: format!("profile {}", cfg.profiles.len() + 1),
+                shell: None,
+                args: Vec::new(),
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                color: None,
+            });
+            st.profile_sel = Some(cfg.profiles.len() - 1);
+            st.profile_loaded = None;
+        }
+        Some(ProfileAct::Duplicate(i)) => {
+            let mut copy = cfg.profiles[i].clone();
+            copy.name.push_str(" copy");
+            cfg.profiles.insert(i + 1, copy);
+            st.profile_sel = Some(i + 1);
+            st.profile_loaded = None;
+        }
+        Some(ProfileAct::Delete(i)) => {
+            cfg.profiles.remove(i);
+            st.profile_sel = None;
+            st.profile_loaded = None;
+        }
+        None => {}
+    }
+    if let Some(i) = st.profile_sel {
+        if i < cfg.profiles.len() {
+            profile_editor(ui, cfg, st, i);
+        } else {
+            st.profile_sel = None; // selection outlived the list (delete)
+        }
+    }
+    fx
+}
+
+// ---- Hotkeys section ----
+
+/// Side effects the Hotkeys section needs applied by the caller (invalid-spec toast).
+struct HotkeysFx {
+    invalid: Option<String>, // a field committed (blur) with an unparseable chord
+}
+
+/// One hotkey row: action label + editable chord field. Invalid non-empty specs render red
+/// live and toast on blur; they simply never fire (empty = unbound on purpose).
+fn hotkey_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    default: &str,
+    value: &mut String,
+    fx: &mut HotkeysFx,
+) {
+    row(ui, name, &format!("Default {default}"), |ui| {
+        let invalid = !value.trim().is_empty() && ui::parse_hotkey_spec(value).is_none();
+        let color = if invalid { colors::red() } else { colors::fg() };
+        let r = ui::text_field(ui, value, "unbound", 160.0, color);
+        if r.lost_focus() && invalid {
+            fx.invalid = Some(value.clone());
+        }
+    });
+}
+
+/// The Hotkeys section: every remappable app action with its current chord. Edits live in
+/// `cfg.hotkeys` and apply instantly; Save persists the `[hotkeys]` table.
+fn hotkeys_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> HotkeysFx {
+    title(ui, "Hotkeys");
+    ui.label(
+        egui::RichText::new(
+            "Chords are modifiers (Cmd / Ctrl / Alt / Shift) + a key, e.g. Cmd+Shift+K. \
+             Applies as you type; empty = unbound. A bind that collides with a terminal key \
+             (e.g. Ctrl+letter) also reaches the shell. The global summon hotkey lives in Quake.",
+        )
+        .size(11.5)
+        .color(colors::dim()),
+    );
+    let mut fx = HotkeysFx { invalid: None };
+    let d = config::Hotkeys::default();
+    let h = &mut cfg.hotkeys;
+
+    subheading(ui, "Tabs");
+    rows(ui, |ui| {
+        hotkey_row(ui, "New tab", &d.new_tab, &mut h.new_tab, &mut fx);
+        hotkey_row(ui, "Close pane / tab", &d.close, &mut h.close, &mut fx);
+        hotkey_row(ui, "Reopen closed tab", &d.reopen, &mut h.reopen, &mut fx);
+        hotkey_row(ui, "Toggle last tab", &d.toggle_last_tab, &mut h.toggle_last_tab, &mut fx);
+    });
+    subheading(ui, "Panes");
+    rows(ui, |ui| {
+        hotkey_row(ui, "Split right", &d.split_right, &mut h.split_right, &mut fx);
+        hotkey_row(ui, "Split down", &d.split_down, &mut h.split_down, &mut fx);
+        hotkey_row(ui, "Broadcast input", &d.broadcast, &mut h.broadcast, &mut fx);
+    });
+    subheading(ui, "Terminal");
+    rows(ui, |ui| {
+        hotkey_row(ui, "Find", &d.find, &mut h.find, &mut fx);
+        hotkey_row(ui, "Select all", &d.select_all, &mut h.select_all, &mut fx);
+        hotkey_row(ui, "Clear terminal", &d.clear, &mut h.clear, &mut fx);
+        hotkey_row(ui, "Zoom in", &d.zoom_in, &mut h.zoom_in, &mut fx);
+        hotkey_row(ui, "Zoom out", &d.zoom_out, &mut h.zoom_out, &mut fx);
+        hotkey_row(ui, "Zoom reset", &d.zoom_reset, &mut h.zoom_reset, &mut fx);
+    });
+    subheading(ui, "App");
+    rows(ui, |ui| {
+        hotkey_row(ui, "Command palette", &d.palette, &mut h.palette, &mut fx);
+        hotkey_row(ui, "Settings", &d.settings, &mut h.settings, &mut fx);
+    });
+    ui.add_space(14.0);
+    if ui::action_button(ui, "Reset to defaults", false).clicked() {
+        *h = d;
+    }
+    fx
+}
+
 /// Side effects the Quake section needs applied by the caller (which has `&mut Stdusk`).
 struct QuakeFx {
     hotkey_commit: bool,  // the hotkey field lost focus - re-register if it changed
@@ -1020,6 +1466,17 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
                     300.0,
                     colors::fg(),
                 );
+            },
+        );
+        row_full(
+            ui,
+            "Auto sync",
+            "Pull on launch, push on save",
+            "Needs a sync repo above",
+            |ui| {
+                ui.add_enabled_ui(!cfg.sync.repo.trim().is_empty(), |ui| {
+                    ui::toggle_switch(ui, &mut cfg.sync.auto);
+                });
             },
         );
         row(ui, "Sync now", "Uses your own git credentials (SSH key / helper)", |ui| {
@@ -1203,6 +1660,8 @@ impl Stdusk {
 
     /// Write the config file, re-baseline the unsaved-changes guard, and re-register the
     /// hotkey if it changed. Shared by the footer Save and the unsaved-changes modal.
+    /// With `[sync] auto` on, every successful Save also pushes (Save is the only disk
+    /// write, so this is THE autosync push hook); an in-flight sync op absorbs rapid saves.
     fn save_settings(&mut self, ctx: &egui::Context) {
         if let Some(p) = config::ensure_and_path()
             && std::fs::write(p, config::config_to_toml(&self.cfg)).is_ok()
@@ -1212,6 +1671,11 @@ impl Stdusk {
             self.reapply_font(ctx);
             let now = ctx.input(|i| i.time);
             self.toast = Some(("Saved".into(), now + 1.4));
+            let repo = self.cfg.sync.repo.trim();
+            if sync::should_autosync(self.cfg.sync.auto, !repo.is_empty(), self.sync_busy) {
+                self.sync_busy = true;
+                sync::spawn(sync::Op::Push, repo.to_owned(), &self.sync_slot, ctx.clone());
+            }
         }
     }
 
@@ -1226,8 +1690,10 @@ impl Stdusk {
     }
 
     /// Reset the unsaved-changes baseline to the current config (after an external reload).
+    /// The profile edit buffers reload too - they'd otherwise show the replaced config.
     pub(crate) fn rebaseline_settings(&mut self) {
         self.settings.baseline = Some(self.cfg.clone());
+        self.settings.profile_loaded = None;
     }
 
     /// Sticky footer: Save / Close / Revert, right-aligned. Returns true when Close was hit.
@@ -1243,6 +1709,7 @@ impl Stdusk {
             if ui::action_button(ui, "Revert", false).clicked() {
                 self.cfg = config::Config::load();
                 self.settings.baseline = Some(self.cfg.clone());
+                self.settings.profile_loaded = None; // buffers reload from the restored config
                 self.reapply_appearance(ctx);
                 self.reregister_hotkey();
                 self.reapply_font(ctx);
@@ -1269,6 +1736,8 @@ impl Stdusk {
         let dropdown_was_open = self.settings.dropdown_open.is_some();
         let mut appearance_fx: Option<AppearanceFx> = None;
         let mut quake_fx: Option<QuakeFx> = None;
+        let mut profiles_fx: Option<ProfilesFx> = None;
+        let mut hotkeys_fx: Option<HotkeysFx> = None;
         let mut sync_op: Option<sync::Op> = None;
 
         let nav = egui::Panel::left("settings_nav")
@@ -1372,6 +1841,16 @@ impl Stdusk {
                                             ));
                                         }
                                         Section::Terminal => terminal_section(ui, &mut self.cfg),
+                                        Section::Profiles => {
+                                            profiles_fx = Some(profiles_section(
+                                                ui,
+                                                &mut self.cfg,
+                                                &mut self.settings,
+                                            ));
+                                        }
+                                        Section::Hotkeys => {
+                                            hotkeys_fx = Some(hotkeys_section(ui, &mut self.cfg));
+                                        }
                                         Section::Quake => {
                                             quake_fx = Some(quake_section(ui, &mut self.cfg));
                                         }
@@ -1407,13 +1886,36 @@ impl Stdusk {
             }
         }
 
+        // Profiles-section side effects: Launch spawns a tab with the profile (visible in the
+        // tab bar right above the settings view).
+        if let Some(fx) = profiles_fx
+            && let Some(i) = fx.launch
+            && let Some(name) = self.cfg.profiles.get(i).map(|p| p.name.clone())
+        {
+            self.apply_tab_action(Some(crate::tabs::TabAction::NewWithProfile(i)), ctx);
+            let now = ctx.input(|i| i.time);
+            self.toast = Some((format!("Launched {name}"), now + 1.4));
+        }
+
+        // Hotkeys-section side effects: an invalid chord committed on blur toasts (the bind
+        // itself is harmless - an unparseable spec never matches).
+        if let Some(fx) = hotkeys_fx
+            && let Some(bad) = fx.invalid
+        {
+            let now = ctx.input(|i| i.time);
+            self.toast = Some((format!("Invalid hotkey: {bad}"), now + 2.2));
+        }
+
         // Kick off a settings push/pull; a push saves first so the repo gets what you see.
+        // With autosync on, the save itself may have started the push - don't stack a second.
         if let Some(op) = sync_op {
             if op == sync::Op::Push {
                 self.save_settings(ctx);
             }
-            self.sync_busy = true;
-            sync::spawn(op, self.cfg.sync.repo.trim().to_owned(), &self.sync_slot, ctx.clone());
+            if !self.sync_busy {
+                self.sync_busy = true;
+                sync::spawn(op, self.cfg.sync.repo.trim().to_owned(), &self.sync_slot, ctx.clone());
+            }
         }
 
         // Esc closes - but not while a hard modal (rename/paste/close/palette) or the find bar
@@ -1483,6 +1985,7 @@ impl Stdusk {
             if let Some(b) = self.settings.baseline.take() {
                 self.cfg = b;
             }
+            self.settings.profile_loaded = None; // buffers reload from the restored config
             self.reapply_appearance(ctx);
             self.reregister_hotkey();
             self.reapply_font(ctx);
@@ -1575,6 +2078,62 @@ mod tests {
         assert_eq!(normalize_name("nord"), "nord");
     }
 
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn args_split_handles_quotes_and_escapes() {
+        let cases: [(&str, &[&str]); 10] = [
+            ("", &[]),
+            ("   ", &[]),
+            ("-l -i", &["-l", "-i"]),
+            ("  -c   'echo hi'  ", &["-c", "echo hi"]), // single quotes group
+            ("-c \"echo hi there\"", &["-c", "echo hi there"]), // double quotes group
+            ("a\\ b c", &["a b", "c"]),                 // backslash-escaped space
+            ("\"a\\\"b\"", &["a\"b"]),                  // escaped quote inside double quotes
+            ("'don\"t'", &["don\"t"]),                  // double quote literal in single quotes
+            ("\"\" x", &["", "x"]),                     // empty quoted arg survives
+            ("\"unterminated rest", &["unterminated rest"]), // lenient: runs to the end
+        ];
+        for (input, want) in cases {
+            assert_eq!(split_args(input), v(want), "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn args_join_round_trips_through_split() {
+        let cases: [&[&str]; 5] = [
+            &[],
+            &["-l", "-i"],
+            &["-c", "echo hi there"],
+            &["with\"quote", "with\\slash", ""],
+            &["plain", "two words", "'single'"],
+        ];
+        for args in cases {
+            let args = v(args);
+            assert_eq!(split_args(&join_args(&args)), args, "{args:?}");
+        }
+        // Plain args stay readable (no gratuitous quoting).
+        assert_eq!(join_args(&v(&["-l", "-i"])), "-l -i");
+        assert_eq!(join_args(&v(&["a b"])), "\"a b\"");
+    }
+
+    #[test]
+    fn env_rows_drop_blank_keys_and_last_write_wins() {
+        let rows = vec![
+            ("A".to_string(), "1".to_string()),
+            (String::new(), "ignored".to_string()), // half-typed row: dropped
+            ("  ".to_string(), "ignored".to_string()),
+            (" B ".to_string(), "2".to_string()), // key trimmed
+            ("A".to_string(), "3".to_string()),   // duplicate: last write wins
+        ];
+        let map = env_rows_to_map(&rows);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["A"], "3");
+        assert_eq!(map["B"], "2");
+    }
+
     fn run_frame(ctx: &egui::Context, events: Vec<egui::Event>, add: impl FnMut(&mut egui::Ui)) {
         let mut add = add;
         let raw = egui::RawInput {
@@ -1594,18 +2153,35 @@ mod tests {
     #[test]
     fn sections_render_headless() {
         // Smoke: the reworked sections (searchable theme dropdowns, cursor preview, new-tab
-        // hints, quake fx rows) build real frames without panicking.
+        // hints, quake fx rows, profiles list + editor, hotkey rows) build real frames
+        // without panicking.
         let ctx = egui::Context::default();
         let mut cfg = config::Config::default();
+        cfg.profiles.push(config::Profile {
+            name: "work".into(),
+            shell: Some("/bin/zsh".into()),
+            args: vec!["-l".into()],
+            cwd: Some("~/Git".into()),
+            env: [("AWS_PROFILE".to_string(), "work".to_string())].into(),
+            color: Some("#61afef".into()),
+        });
+        cfg.hotkeys.clear = "garbage!!".into(); // invalid chord renders red, must not panic
         let mut st = SettingsState::new();
+        st.profile_sel = Some(0); // exercise the inline editor incl. env rows
         for _ in 0..2 {
             run_frame(&ctx, vec![], |ui| {
                 let _fx = appearance_section(ui, &mut cfg, &mut st);
                 let _fx = quake_section(ui, &mut cfg);
                 terminal_section(ui, &mut cfg);
+                let _fx = profiles_section(ui, &mut cfg, &mut st);
+                let _fx = hotkeys_section(ui, &mut cfg);
             });
         }
         assert!(st.dropdown_open.is_none());
+        // The editor buffers loaded from the selected profile.
+        assert_eq!(st.profile_loaded, Some(0));
+        assert_eq!(st.profile_args, "-l");
+        assert_eq!(st.profile_env, vec![("AWS_PROFILE".to_string(), "work".to_string())]);
     }
 
     #[test]

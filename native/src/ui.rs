@@ -32,6 +32,12 @@ pub(crate) mod icons {
     pub(crate) const FOLDER: &str = "\u{E24A}"; // open config folder
     pub(crate) const CHECK: &str = "\u{E182}"; // active scheme mark
     pub(crate) const PUSH_PIN: &str = "\u{E3E2}"; // pinned-tab marker
+    // 0.5.0 (all cmap-verified against the vendored font; codepoints from the official CSS).
+    pub(crate) const IDENTIFICATION_BADGE: &str = "\u{E6F6}"; // Profiles section
+    pub(crate) const KEYBOARD: &str = "\u{E2D8}"; // Hotkeys section
+    pub(crate) const PLAY: &str = "\u{E3D0}"; // launch profile
+    pub(crate) const COPY: &str = "\u{E1CA}"; // duplicate profile
+    pub(crate) const TRASH: &str = "\u{E4A6}"; // delete profile / env row
 }
 
 // ---- pure helpers (no egui state; unit-tested below) ----
@@ -475,6 +481,154 @@ pub(crate) fn link_modifier_held(mods: egui::Modifiers, setting: &str) -> bool {
         "shift" => mods.shift,
         _ => true, // "none" / unrecognized: no modifier required
     }
+}
+
+/// Parse a `[hotkeys]` chord spec ("Cmd+Shift+T", "Cmd+,", "F13") into (modifiers, key).
+/// `None` for anything unparseable - a garbage spec must never match a key press.
+/// Rules: the LAST `+`-part is the key, everything before it a modifier; single-character
+/// keys (letters/digits/punctuation) and nav keys REQUIRE Cmd/Ctrl/Alt (a bare "T" bind
+/// would swallow typing); only F-keys may be bound bare. "+"/"=" both mean `Equals` (they
+/// share the physical key; `hotkey_matches` normalizes the pressed side the same way).
+pub(crate) fn parse_hotkey_spec(spec: &str) -> Option<(egui::Modifiers, egui::Key)> {
+    let parts: Vec<&str> = spec.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
+    let (&key_part, mod_parts) = parts.split_last()?;
+    let mut mods = egui::Modifiers::NONE;
+    for m in mod_parts {
+        match m.to_ascii_lowercase().as_str() {
+            "cmd" | "command" | "super" | "meta" => {
+                mods.command = true;
+                mods.mac_cmd = true;
+            }
+            "ctrl" | "control" => mods.ctrl = true,
+            "alt" | "option" | "opt" => mods.alt = true,
+            "shift" => mods.shift = true,
+            _ => return None, // unknown modifier: never match
+        }
+    }
+    let key = key_from_name(key_part)?;
+    let is_fkey = matches!(key_part.to_ascii_lowercase().strip_prefix('f'), Some(d) if d.parse::<u8>().is_ok());
+    if !(is_fkey || mods.command || mods.ctrl || mods.alt) {
+        return None; // bare / shift-only single keys would shadow typing
+    }
+    Some((mods, key))
+}
+
+/// Friendly key name -> `egui::Key`. Case-insensitive; accepts punctuation literals.
+#[allow(clippy::too_many_lines)] // a flat name table; splitting it would obscure it
+fn key_from_name(name: &str) -> Option<egui::Key> {
+    use egui::Key;
+    let n = name.to_ascii_lowercase();
+    // F-keys first so "f1" doesn't fall into the single-letter branch.
+    if let Some(num) = n.strip_prefix('f').and_then(|d| d.parse::<u8>().ok()) {
+        let fkeys = [
+            Key::F1,
+            Key::F2,
+            Key::F3,
+            Key::F4,
+            Key::F5,
+            Key::F6,
+            Key::F7,
+            Key::F8,
+            Key::F9,
+            Key::F10,
+            Key::F11,
+            Key::F12,
+            Key::F13,
+            Key::F14,
+            Key::F15,
+            Key::F16,
+            Key::F17,
+            Key::F18,
+            Key::F19,
+            Key::F20,
+        ];
+        return (1..=20).contains(&num).then(|| fkeys[usize::from(num) - 1]);
+    }
+    let key = match n.as_str() {
+        "a" => Key::A,
+        "b" => Key::B,
+        "c" => Key::C,
+        "d" => Key::D,
+        "e" => Key::E,
+        "f" => Key::F,
+        "g" => Key::G,
+        "h" => Key::H,
+        "i" => Key::I,
+        "j" => Key::J,
+        "k" => Key::K,
+        "l" => Key::L,
+        "m" => Key::M,
+        "n" => Key::N,
+        "o" => Key::O,
+        "p" => Key::P,
+        "q" => Key::Q,
+        "r" => Key::R,
+        "s" => Key::S,
+        "t" => Key::T,
+        "u" => Key::U,
+        "v" => Key::V,
+        "w" => Key::W,
+        "x" => Key::X,
+        "y" => Key::Y,
+        "z" => Key::Z,
+        "0" | "num0" => Key::Num0,
+        "1" | "num1" => Key::Num1,
+        "2" | "num2" => Key::Num2,
+        "3" | "num3" => Key::Num3,
+        "4" | "num4" => Key::Num4,
+        "5" | "num5" => Key::Num5,
+        "6" | "num6" => Key::Num6,
+        "7" | "num7" => Key::Num7,
+        "8" | "num8" => Key::Num8,
+        "9" | "num9" => Key::Num9,
+        "," | "comma" => Key::Comma,
+        "." | "period" => Key::Period,
+        ";" | "semicolon" => Key::Semicolon,
+        "/" | "slash" => Key::Slash,
+        "\\" | "backslash" => Key::Backslash,
+        "-" | "minus" => Key::Minus,
+        "=" | "plus" | "equals" => Key::Equals, // shared physical key, normalized
+        "`" | "grave" | "backtick" | "backquote" => Key::Backtick,
+        "space" => Key::Space,
+        "enter" | "return" => Key::Enter,
+        "tab" => Key::Tab,
+        "escape" | "esc" => Key::Escape,
+        "backspace" => Key::Backspace,
+        "delete" => Key::Delete,
+        "insert" => Key::Insert,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
+        "up" | "arrowup" => Key::ArrowUp,
+        "down" | "arrowdown" => Key::ArrowDown,
+        "left" | "arrowleft" => Key::ArrowLeft,
+        "right" | "arrowright" => Key::ArrowRight,
+        _ => return None,
+    };
+    Some(key)
+}
+
+/// "Label (Chord)" tooltip text, or just the label when the action is unbound.
+pub(crate) fn shortcut_tip(label: &str, chord: &str) -> String {
+    if chord.trim().is_empty() { label.to_string() } else { format!("{label} ({chord})") }
+}
+
+/// Does a pressed (key, modifiers) match a `[hotkeys]` spec? EXACT modifier match (Cmd+T does
+/// not fire on Cmd+Shift+T and vice versa); a spec that doesn't parse (or is empty = unbound)
+/// never matches. Pressed `Plus` is normalized to `Equals` so "Cmd+=" keeps zooming on layouts
+/// where the same key reports either. NOTE (macOS): `mods.command` is Cmd, `mods.ctrl` is the
+/// real Ctrl - the comparison relies on that split.
+pub(crate) fn hotkey_matches(spec: &str, key: egui::Key, mods: egui::Modifiers) -> bool {
+    let Some((want_mods, want_key)) = parse_hotkey_spec(spec) else {
+        return false;
+    };
+    let key = if key == egui::Key::Plus { egui::Key::Equals } else { key };
+    key == want_key
+        && mods.command == want_mods.command
+        && mods.ctrl == want_mods.ctrl
+        && mods.alt == want_mods.alt
+        && mods.shift == want_mods.shift
 }
 
 // ---- egui drawing widgets (thin; not unit-tested) ----
@@ -1746,6 +1900,91 @@ mod tests {
         assert!(link_modifier_held(cmd, "cmd"));
         assert!(link_modifier_held(mods(true, false, false), "ctrl"));
         assert!(!link_modifier_held(cmd, "alt"));
+    }
+
+    #[test]
+    fn hotkey_matches_exact_chords_only() {
+        let cmd = mods(false, false, true);
+        let cmd_shift = Modifiers { shift: true, ..cmd };
+        let ctrl = mods(true, false, false);
+        // (spec, key, mods) -> matches?
+        let cases = [
+            ("Cmd+T", Key::T, cmd, true),
+            ("cmd+t", Key::T, cmd, true),        // case-insensitive
+            ("Cmd+T", Key::T, cmd_shift, false), // superset modifiers don't fire
+            ("Cmd+Shift+T", Key::T, cmd_shift, true),
+            ("Cmd+Shift+T", Key::T, cmd, false), // subset modifiers don't fire
+            ("Cmd+T", Key::W, cmd, false),
+            ("Cmd+,", Key::Comma, cmd, true),
+            ("Cmd+Comma", Key::Comma, cmd, true),
+            ("Cmd+0", Key::Num0, cmd, true),
+            ("Ctrl+K", Key::K, ctrl, true), // ctrl chords are matchable (see reserved-combo note)
+            ("Ctrl+K", Key::K, cmd, false), // Cmd is not Ctrl on macOS
+            ("Cmd+Up", Key::ArrowUp, cmd, true),
+            ("F13", Key::F13, Modifiers::default(), true), // F-keys may be bare
+            ("Shift+F5", Key::F5, Modifiers { shift: true, ..Modifiers::default() }, true),
+        ];
+        for (spec, key, m, want) in cases {
+            assert_eq!(hotkey_matches(spec, key, m), want, "{spec} vs {key:?}");
+        }
+    }
+
+    #[test]
+    fn hotkey_plus_and_equals_share_the_key() {
+        let cmd = mods(false, false, true);
+        assert!(hotkey_matches("Cmd+=", Key::Equals, cmd));
+        assert!(hotkey_matches("Cmd+=", Key::Plus, cmd)); // shifted layouts report Plus
+        assert!(hotkey_matches("Cmd+Plus", Key::Equals, cmd));
+        assert!(hotkey_matches("Cmd+-", Key::Minus, cmd));
+    }
+
+    #[test]
+    fn garbage_hotkey_specs_never_match() {
+        let cmd = mods(false, false, true);
+        for spec in ["", "   ", "nonsense", "Cmd+", "Cmd+Nope", "Hyper+T", "Cmd+F99", "+++"] {
+            for key in [Key::T, Key::Comma, Key::F13, Key::Enter] {
+                assert!(!hotkey_matches(spec, key, cmd), "{spec:?} must never match {key:?}");
+                assert!(!hotkey_matches(spec, key, Modifiers::default()));
+            }
+        }
+    }
+
+    #[test]
+    fn shortcut_tip_hides_unbound_chords() {
+        assert_eq!(shortcut_tip("New tab", "Cmd+T"), "New tab (Cmd+T)");
+        assert_eq!(shortcut_tip("New tab", ""), "New tab");
+        assert_eq!(shortcut_tip("New tab", "  "), "New tab");
+    }
+
+    #[test]
+    fn bare_single_keys_are_rejected_but_fkeys_pass() {
+        // A bare letter/digit/punct bind would swallow typing - parse refuses it.
+        assert_eq!(parse_hotkey_spec("T"), None);
+        assert_eq!(parse_hotkey_spec("7"), None);
+        assert_eq!(parse_hotkey_spec(","), None);
+        assert_eq!(parse_hotkey_spec("Shift+T"), None); // shift-only too (it's just typing 'T')
+        assert_eq!(parse_hotkey_spec("Enter"), None);
+        assert!(parse_hotkey_spec("F13").is_some());
+        assert!(parse_hotkey_spec("Cmd+T").is_some());
+        assert!(parse_hotkey_spec("Alt+Space").is_some());
+    }
+
+    #[test]
+    fn rebound_terminal_chords_double_fire_by_design() {
+        // Reserved-combo integrity (LEDGER 0.5.0): the DEFAULT binds are chosen so key_to_bytes
+        // sends nothing for them (no double-fire). A user rebind onto a terminal-bound chord
+        // (e.g. Ctrl+K = Ctrl-L-style kill) matches the app action AND still reaches the pty -
+        // documented behavior, asserted here so it can't silently change.
+        let cmd = mods(false, false, true);
+        let ctrl = mods(true, false, false);
+        // Defaults: app-only (no pty bytes). Cmd+letter chords are unmapped in key_to_bytes.
+        for (spec, key) in [("Cmd+T", Key::T), ("Cmd+W", Key::W), ("Cmd+O", Key::O)] {
+            assert!(hotkey_matches(spec, key, cmd));
+            assert_eq!(key_to_bytes(key, cmd, false), None, "{spec} must not leak to the pty");
+        }
+        // A custom Ctrl+letter rebind collides: both the app action and the control byte fire.
+        assert!(hotkey_matches("Ctrl+K", Key::K, ctrl));
+        assert_eq!(key_to_bytes(Key::K, ctrl, false), Some(vec![11]));
     }
 
     #[test]

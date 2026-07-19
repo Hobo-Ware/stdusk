@@ -13,6 +13,7 @@ pub(crate) struct Config {
     pub(crate) terminal: Terminal,
     pub(crate) session: Session,
     pub(crate) sync: Sync,
+    pub(crate) hotkeys: Hotkeys,
     pub(crate) profiles: Vec<Profile>,
 }
 
@@ -22,6 +23,54 @@ pub(crate) struct Config {
 #[serde(default)]
 pub(crate) struct Sync {
     pub(crate) repo: String, // e.g. "git@github.com:you/stdusk-settings.git"; empty = off
+    pub(crate) auto: bool,   // pull on launch + push after every settings Save
+}
+
+/// App hotkey remapping (`[hotkeys]`): action -> chord string ("Cmd+Shift+K"). A struct with
+/// per-field defaults (not a map) so a typoed action name is a parse-ignored unknown field,
+/// never a silently dead bind; missing fields keep their default via `#[serde(default)]`.
+/// Empty string = unbound. The quake summon hotkey stays in `[quake] hotkey` (a GLOBAL OS
+/// hotkey with its own parser/registration, not an in-app bind).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub(crate) struct Hotkeys {
+    pub(crate) new_tab: String,
+    pub(crate) close: String,
+    pub(crate) reopen: String,
+    pub(crate) toggle_last_tab: String,
+    pub(crate) find: String,
+    pub(crate) palette: String,
+    pub(crate) settings: String,
+    pub(crate) broadcast: String,
+    pub(crate) split_right: String,
+    pub(crate) split_down: String,
+    pub(crate) select_all: String,
+    pub(crate) clear: String,
+    pub(crate) zoom_in: String,
+    pub(crate) zoom_out: String,
+    pub(crate) zoom_reset: String,
+}
+
+impl Default for Hotkeys {
+    fn default() -> Self {
+        Self {
+            new_tab: "Cmd+T".into(),
+            close: "Cmd+W".into(),
+            reopen: "Cmd+Shift+T".into(),
+            toggle_last_tab: "Cmd+O".into(),
+            find: "Cmd+F".into(),
+            palette: "Cmd+Shift+P".into(),
+            settings: "Cmd+,".into(),
+            broadcast: "Cmd+Shift+I".into(),
+            split_right: "Cmd+D".into(),
+            split_down: "Cmd+Shift+D".into(),
+            select_all: "Cmd+A".into(),
+            clear: "Cmd+K".into(),
+            zoom_in: "Cmd+=".into(),
+            zoom_out: "Cmd+-".into(),
+            zoom_reset: "Cmd+0".into(),
+        }
+    }
 }
 
 /// A named launch profile (Tabby-style): per-tab shell/args/cwd/env overrides.
@@ -34,8 +83,10 @@ pub(crate) struct Profile {
     pub(crate) args: Vec<String>, // extra shell arguments
     #[serde(default)]
     pub(crate) cwd: Option<String>, // starting directory; leading ~ expands to $HOME
+    // BTreeMap (not HashMap): deterministic iteration = stable TOML output, so the settings
+    // dirty guard and Save diffs can't flap on map order.
     #[serde(default)]
-    pub(crate) env: std::collections::HashMap<String, String>,
+    pub(crate) env: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) color: Option<String>, // tab color, "#rrggbb"
 }
@@ -439,7 +490,7 @@ name = "ops"
             shell: None,
             args: Vec::new(),
             cwd: None,
-            env: std::collections::HashMap::new(),
+            env: std::collections::BTreeMap::new(),
             color: None,
         });
         let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
@@ -448,6 +499,47 @@ name = "ops"
         assert!(back.session.restore);
         assert_eq!(back.profiles[0].name, "ops");
         assert!(back.profiles[0].shell.is_none() && back.profiles[0].color.is_none());
+    }
+
+    #[test]
+    fn hotkeys_default_to_the_shipped_binds() {
+        let h = Hotkeys::default();
+        assert_eq!(h.new_tab, "Cmd+T");
+        assert_eq!(h.close, "Cmd+W");
+        assert_eq!(h.reopen, "Cmd+Shift+T");
+        assert_eq!(h.toggle_last_tab, "Cmd+O");
+        assert_eq!(h.find, "Cmd+F");
+        assert_eq!(h.palette, "Cmd+Shift+P");
+        assert_eq!(h.settings, "Cmd+,");
+        assert_eq!(h.broadcast, "Cmd+Shift+I");
+        assert_eq!(h.split_right, "Cmd+D");
+        assert_eq!(h.split_down, "Cmd+Shift+D");
+        assert_eq!(h.select_all, "Cmd+A");
+        assert_eq!(h.clear, "Cmd+K");
+        assert_eq!(h.zoom_in, "Cmd+=");
+        assert_eq!(h.zoom_out, "Cmd+-");
+        assert_eq!(h.zoom_reset, "Cmd+0");
+    }
+
+    #[test]
+    fn partial_hotkeys_table_keeps_other_defaults() {
+        let c: Config = toml::from_str("[hotkeys]\nnew_tab = \"Cmd+N\"\nclear = \"\"\n").unwrap();
+        assert_eq!(c.hotkeys.new_tab, "Cmd+N"); // remapped
+        assert_eq!(c.hotkeys.clear, ""); // explicitly unbound
+        assert_eq!(c.hotkeys.close, "Cmd+W"); // untouched field keeps its default
+        assert_eq!(c.hotkeys.palette, "Cmd+Shift+P");
+    }
+
+    #[test]
+    fn hotkeys_round_trip_through_toml() {
+        let mut cfg = Config::default();
+        cfg.hotkeys.find = "Cmd+Shift+F".into();
+        cfg.hotkeys.zoom_reset = String::new();
+        let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
+        assert_eq!(back.hotkeys.find, "Cmd+Shift+F");
+        assert_eq!(back.hotkeys.zoom_reset, "");
+        assert_eq!(back.hotkeys.new_tab, "Cmd+T");
+        assert!(!back.sync.auto); // default off
     }
 
     #[test]

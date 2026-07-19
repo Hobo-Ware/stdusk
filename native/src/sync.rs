@@ -78,6 +78,13 @@ fn run(op: Op, repo: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Should an automatic sync op start now? On only when the user opted in, a repo is
+/// configured, and no sync is already in flight (the in-flight check is the debounce:
+/// rapid Saves collapse into whatever push is already running).
+pub(crate) fn should_autosync(auto: bool, repo_set: bool, busy: bool) -> bool {
+    auto && repo_set && !busy
+}
+
 /// Result slot the UI polls: set once by the worker thread, taken by the frame loop.
 pub(crate) type SyncSlot = Arc<Mutex<Option<(Op, Result<(), String>)>>>;
 
@@ -131,6 +138,25 @@ mod tests {
         let last = &p[p.len() - 1];
         assert_eq!(last.args, ["reset", "-q", "--hard", "FETCH_HEAD"]);
         assert!(p.iter().any(|s| s.args.first() == Some(&"fetch")));
+    }
+
+    #[test]
+    fn autosync_needs_opt_in_repo_and_an_idle_worker() {
+        // (auto, repo_set, busy) -> start?
+        let cases = [
+            (true, true, false, true),
+            (true, true, true, false), // in-flight op wins (the debounce)
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, false, false),
+        ];
+        for (auto, repo, busy, want) in cases {
+            assert_eq!(
+                should_autosync(auto, repo, busy),
+                want,
+                "auto={auto} repo={repo} busy={busy}"
+            );
+        }
     }
 
     #[test]

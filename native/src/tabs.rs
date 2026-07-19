@@ -211,7 +211,7 @@ fn tab_menu(
     pinned: bool,
     proc: Option<&str>,
     notify_activity: bool,
-    profiles: &[Profile],
+    cfg: &Config,
     action: &mut Option<TabAction>,
     color_preview: &mut Option<(u64, Option<egui::Color32>)>,
 ) {
@@ -224,13 +224,13 @@ fn tab_menu(
         });
         ui.separator();
     }
-    if ui::menu_item(ui, "New tab", "Cmd+T").clicked() {
+    if ui::menu_item(ui, "New tab", &cfg.hotkeys.new_tab).clicked() {
         *action = Some(TabAction::New);
     }
-    if !profiles.is_empty() {
+    if !cfg.profiles.is_empty() {
         ui.menu_button("New tab with profile", |ui| {
             style_menu(ui);
-            profile_menu_rows(ui, profiles, action);
+            profile_menu_rows(ui, &cfg.profiles, action);
         });
     }
     if ui::menu_item(ui, "Duplicate", "").clicked() {
@@ -289,7 +289,7 @@ fn tab_menu(
         *action = Some(TabAction::MoveRight(i));
     }
     ui.separator();
-    if ui::menu_item(ui, "Close", "Cmd+W").clicked() {
+    if ui::menu_item(ui, "Close", &cfg.hotkeys.close).clicked() {
         *action = Some(TabAction::Close(i));
     }
     if ui::menu_item(ui, "Close other tabs", "").clicked() {
@@ -694,7 +694,7 @@ impl Stdusk {
                                 tab_pinned,
                                 tab_proc.as_deref(),
                                 tab_notify,
-                                &self.cfg.profiles,
+                                &self.cfg,
                                 &mut action,
                                 &mut color_preview,
                             );
@@ -726,7 +726,8 @@ impl Stdusk {
                         }
                     }
                     ui.add_space(6.0);
-                    let plus = icon_button(ui, icons::PLUS, "New tab (Cmd+T)");
+                    let plus_tip = ui::shortcut_tip("New tab", &self.cfg.hotkeys.new_tab);
+                    let plus = icon_button(ui, icons::PLUS, &plus_tip);
                     if plus.clicked() {
                         action = Some(TabAction::New);
                     }
@@ -748,16 +749,17 @@ impl Stdusk {
                             }
                         }
                         ui.separator();
-                        if ui::menu_item(ui, "Command palette…", "Cmd+Shift+P").clicked() {
+                        if ui::menu_item(ui, "Command palette…", &self.cfg.hotkeys.palette)
+                            .clicked()
+                        {
                             action = Some(TabAction::OpenPalette);
                         }
                     });
                     // Gear pinned to the right edge (spacer, not a nested layout); lit while
                     // the settings view is open.
                     ui.add_space((ui.available_width() - ui::ICON_TOGGLE_W).max(0.0));
-                    if ui::icon_toggle(ui, icons::GEAR, self.settings_open, "Settings (Cmd+,)")
-                        .clicked()
-                    {
+                    let gear_tip = ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings);
+                    if ui::icon_toggle(ui, icons::GEAR, self.settings_open, &gear_tip).clicked() {
                         self.toggle_settings();
                     }
                 });

@@ -388,7 +388,7 @@ mod tests {
                 shell: None,
                 args: Vec::new(),
                 cwd: None,
-                env: std::collections::HashMap::new(),
+                env: std::collections::BTreeMap::new(),
                 color: None,
             })
             .collect()

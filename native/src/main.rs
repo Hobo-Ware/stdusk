@@ -206,7 +206,7 @@ struct Stdusk {
 impl Stdusk {
     fn new(
         cc: &eframe::CreationContext<'_>,
-        cfg: Config,
+        mut cfg: Config,
         screenshot: Option<String>,
         settings_shot: bool,
     ) -> Self {
@@ -312,18 +312,55 @@ impl Stdusk {
             let section = match std::env::var("STDUSK_SHOT_SECTION").as_deref() {
                 Ok("appearance") => settings::Section::Appearance,
                 Ok("terminal") => settings::Section::Terminal,
+                Ok("profiles") => settings::Section::Profiles,
+                Ok("hotkeys") => settings::Section::Hotkeys,
                 Ok("quake") => settings::Section::Quake,
                 Ok("session") => settings::Section::Session,
                 Ok("about") => settings::Section::About,
                 _ => settings::Section::ColorScheme,
             };
             settings.open_section(section);
+            // The Profiles shot needs content: representative demo profiles (only when the
+            // user config has none) with the first one expanded into the inline editor.
+            if section == settings::Section::Profiles {
+                if cfg.profiles.is_empty() {
+                    cfg.profiles = vec![
+                        config::Profile {
+                            name: "work".into(),
+                            shell: Some("/bin/zsh".into()),
+                            args: vec!["-l".into()],
+                            cwd: Some("~/Git".into()),
+                            env: [("AWS_PROFILE".to_string(), "work".to_string())].into(),
+                            color: Some("#61afef".into()),
+                        },
+                        config::Profile {
+                            name: "ops".into(),
+                            shell: None,
+                            args: Vec::new(),
+                            cwd: None,
+                            env: std::collections::BTreeMap::new(),
+                            color: None,
+                        },
+                    ];
+                }
+                settings.select_profile(0);
+            }
         }
 
         let registered_hotkey = cfg.quake.hotkey.clone();
         let applied_font = cfg.appearance.font.clone();
         let toast = font_missing.then(|| (format!("Font not found: {}", cfg.appearance.font), 3.0));
         let fx_opacity = cfg.appearance.opacity;
+        // Autosync: pull once on launch (in the background - startup never blocks on git).
+        // The per-frame sync_done handler applies the result like a manual Pull; a failure
+        // toasts once. Pushes happen on settings Save (the only disk write).
+        let sync_slot = sync::SyncSlot::default();
+        let repo = cfg.sync.repo.trim().to_owned();
+        let sync_busy =
+            screenshot.is_none() && sync::should_autosync(cfg.sync.auto, !repo.is_empty(), false);
+        if sync_busy {
+            sync::spawn(sync::Op::Pull, repo, &sync_slot, cc.egui_ctx.clone());
+        }
         // Initial Dock presence must mirror the launch activation policy (see main()).
         let dock_shown = !cfg.quake.hide_from_dock || cfg.quake.dock_when_visible;
         Self {
@@ -360,8 +397,8 @@ impl Stdusk {
             next_session_save: 0.0,
             last_session: session::SavedSession::default(),
             tray,
-            sync_slot: sync::SyncSlot::default(),
-            sync_busy: false,
+            sync_slot,
+            sync_busy,
             screenshot,
         }
     }
@@ -726,29 +763,29 @@ impl eframe::App for Stdusk {
             }
         }
 
-        // Browser-style keybinds: Cmd+T new, Cmd+W close focused pane/tab, Cmd+1..9 switch,
-        // Cmd+D split side-by-side, Cmd+Shift+D split stacked.
-        let mut kb_new = false;
-        let mut kb_close = false;
-        let mut kb_find = false;
-        let mut kb_split: Option<pane::SplitDir> = None;
+        // App keybinds. The `[hotkeys]`-remappable actions (defaults in parentheses) are
+        // matched against the config below; pane/tab-index/scroll binds stay fixed.
+        let mut kb_new = false; // (Cmd+T)
+        let mut kb_close = false; // (Cmd+W) close focused pane, tab on its last pane
+        let mut kb_find = false; // (Cmd+F)
+        let mut kb_split: Option<pane::SplitDir> = None; // (Cmd+D right / Cmd+Shift+D down)
         let mut kb_switch: Option<usize> = None;
         let mut kb_pane_dir: Option<pane::Dir> = None; // Cmd+Alt+arrow: focus the neighbor pane
         let mut kb_maximize = false; // Cmd+Alt+Enter: toggle zooming the focused pane
-        let mut kb_select_all = false; // Cmd+A
-        let mut kb_clear = false; // Cmd+K
-        let mut kb_zoom: Option<i8> = None; // Cmd +/= (1), Cmd - (-1), Cmd 0 (0 = reset)
+        let mut kb_select_all = false; // (Cmd+A)
+        let mut kb_clear = false; // (Cmd+K)
+        let mut kb_zoom: Option<i8> = None; // (Cmd+= 1, Cmd+- -1, Cmd+0 reset)
         let mut kb_scroll_pages: Option<i32> = None; // Shift+PageUp/Down: -1 up, +1 down
         let mut kb_scroll_lines: Option<i32> = None; // Ctrl+Shift+Up/Down: one line (Tabby bind)
         let mut kb_tab_cycle: Option<i32> = None; // Ctrl+Tab next (+1) / Ctrl+Shift+Tab prev (-1)
-        let mut kb_toggle_last = false; // Cmd+O: jump to the previously active tab
-        let mut kb_reopen = false; // Cmd+Shift+T: reopen last closed tab
+        let mut kb_toggle_last = false; // (Cmd+O) jump to the previously active tab
+        let mut kb_reopen = false; // (Cmd+Shift+T) reopen last closed tab
         let mut kb_resize: Option<(pane::SplitDir, f32)> = None; // Cmd+Ctrl+arrow: resize focused pane
         let mut kb_move_tab: Option<i32> = None; // Cmd+Shift+←/→: move the active tab
         let mut kb_scroll_edge: Option<bool> = None; // Shift+Home/End: scroll to top (true) / bottom
-        let mut kb_palette = false; // Cmd+Shift+P: toggle the command palette
-        let mut kb_settings = false; // Cmd+,: toggle the settings view
-        let mut kb_broadcast = false; // Cmd+Shift+I: broadcast input to all panes (pane-focus-all)
+        let mut kb_palette = false; // (Cmd+Shift+P) toggle the command palette
+        let mut kb_settings = false; // (Cmd+,) toggle the settings view
+        let mut kb_broadcast = false; // (Cmd+Shift+I) broadcast input to all panes (pane-focus-all)
         // A hard modal (rename / paste confirm / close confirm / palette) owns the keyboard
         // entirely: tab switching or Cmd+W while a confirm shows would retarget/kill the tab
         // under it. The settings view suppresses them too - tab/pane mutations under a hidden
@@ -758,22 +795,61 @@ impl eframe::App for Stdusk {
             || self.pending_close.is_some();
         let hard_modal = text_modal || self.palette.is_some() || self.settings_open;
         ctx.input(|i| {
-            // Cmd+Shift+P toggles the palette even while it's open (it's its own dismissal),
-            // but stays suppressed under the rename/paste-confirm modals. Cmd+, does the same
-            // for the settings view.
-            if !text_modal
-                && i.modifiers.command
-                && i.modifiers.shift
-                && i.key_pressed(egui::Key::P)
-            {
-                kb_palette = true;
-            }
-            if !text_modal && i.modifiers.command && i.key_pressed(egui::Key::Comma) {
-                kb_settings = true;
+            // Remappable app hotkeys (`[hotkeys]`, defaults = the shipped binds): every key
+            // event is matched against the configured chords (EXACT modifiers - see
+            // ui::hotkey_matches; first match wins, so a user binding two actions to one
+            // chord fires only the earlier action, never both). The palette / settings
+            // toggles stay live over their own overlays (each is its own dismissal) and are
+            // suppressed only under the text modals; every other action obeys hard_modal.
+            let hk = &self.cfg.hotkeys;
+            for ev in &i.events {
+                let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else {
+                    continue;
+                };
+                let (key, mods) = (*key, *modifiers);
+                if !text_modal && ui::hotkey_matches(&hk.palette, key, mods) {
+                    kb_palette = true;
+                    continue;
+                }
+                if !text_modal && ui::hotkey_matches(&hk.settings, key, mods) {
+                    kb_settings = true;
+                    continue;
+                }
+                if hard_modal {
+                    continue;
+                }
+                if ui::hotkey_matches(&hk.new_tab, key, mods) {
+                    kb_new = true;
+                } else if ui::hotkey_matches(&hk.close, key, mods) {
+                    kb_close = true;
+                } else if ui::hotkey_matches(&hk.reopen, key, mods) {
+                    kb_reopen = true;
+                } else if ui::hotkey_matches(&hk.toggle_last_tab, key, mods) {
+                    kb_toggle_last = true;
+                } else if ui::hotkey_matches(&hk.find, key, mods) {
+                    kb_find = true;
+                } else if ui::hotkey_matches(&hk.split_right, key, mods) {
+                    kb_split = Some(pane::SplitDir::Row);
+                } else if ui::hotkey_matches(&hk.split_down, key, mods) {
+                    kb_split = Some(pane::SplitDir::Column);
+                } else if ui::hotkey_matches(&hk.broadcast, key, mods) {
+                    kb_broadcast = true;
+                } else if ui::hotkey_matches(&hk.select_all, key, mods) {
+                    kb_select_all = true;
+                } else if ui::hotkey_matches(&hk.clear, key, mods) {
+                    kb_clear = true;
+                } else if ui::hotkey_matches(&hk.zoom_in, key, mods) {
+                    kb_zoom = Some(1);
+                } else if ui::hotkey_matches(&hk.zoom_out, key, mods) {
+                    kb_zoom = Some(-1);
+                } else if ui::hotkey_matches(&hk.zoom_reset, key, mods) {
+                    kb_zoom = Some(0);
+                }
             }
             if hard_modal {
                 return;
             }
+            // Fixed (non-remappable) binds from here down.
             if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
                 kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
             }
@@ -811,24 +887,9 @@ impl eframe::App for Stdusk {
             }
             if i.modifiers.command {
                 use egui::Key::{
-                    A, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, D, Enter, Equals, F, K, Minus,
-                    Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, Plus, T, W,
+                    ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Enter, Num1, Num2, Num3, Num4, Num5,
+                    Num6, Num7, Num8, Num9,
                 };
-                if i.key_pressed(A) {
-                    kb_select_all = true;
-                }
-                if i.key_pressed(K) {
-                    kb_clear = true;
-                }
-                if i.key_pressed(Plus) || i.key_pressed(Equals) {
-                    kb_zoom = Some(1);
-                }
-                if i.key_pressed(Minus) {
-                    kb_zoom = Some(-1);
-                }
-                if i.key_pressed(Num0) {
-                    kb_zoom = Some(0);
-                }
                 // Cmd+Alt: pane navigation / maximize (kept separate from the terminal's own
                 // Cmd/Alt+arrow line/word motion, which key_to_bytes reserves against Cmd+Alt).
                 if i.modifiers.alt {
@@ -863,36 +924,6 @@ impl eframe::App for Stdusk {
                     if i.key_pressed(ArrowUp) {
                         kb_resize = Some((pane::SplitDir::Column, -STEP));
                     }
-                }
-                if i.key_pressed(T) {
-                    if i.modifiers.shift {
-                        kb_reopen = true; // Cmd+Shift+T
-                    } else {
-                        kb_new = true; // Cmd+T
-                    }
-                }
-                // Broadcast input (Tabby's default pane-focus-all binding, ⌘-Shift-I).
-                // Cmd+I produces no pty bytes, so no key_to_bytes reservation is needed.
-                if i.modifiers.shift && i.key_pressed(egui::Key::I) {
-                    kb_broadcast = true;
-                }
-                // Toggle-last-tab. Tabby ships `toggle-last-tab` unbound on every platform, so
-                // there is no default to mirror - Cmd+O is stdusk's (conflict-free) choice.
-                if i.key_pressed(egui::Key::O) {
-                    kb_toggle_last = true;
-                }
-                if i.key_pressed(W) {
-                    kb_close = true;
-                }
-                if i.key_pressed(F) {
-                    kb_find = true;
-                }
-                if i.key_pressed(D) {
-                    kb_split = Some(if i.modifiers.shift {
-                        pane::SplitDir::Column
-                    } else {
-                        pane::SplitDir::Row
-                    });
                 }
                 for (n, k) in
                     [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9].into_iter().enumerate()

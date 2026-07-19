@@ -668,7 +668,7 @@ mod tests {
             shell: shell.map(Into::into),
             args: Vec::new(),
             cwd: cwd.map(Into::into),
-            env: std::collections::HashMap::new(),
+            env: std::collections::BTreeMap::new(),
             color: None,
         }
     }
@@ -751,7 +751,7 @@ mod tests {
                 shell: Some("/bin/sh".into()),
                 args: vec!["-c".into(), script.into()],
                 cwd: None,
-                env: std::collections::HashMap::new(),
+                env: std::collections::BTreeMap::new(),
                 color: None,
             }),
         };
