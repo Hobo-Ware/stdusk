@@ -679,6 +679,23 @@ builder agent; implementation + integration here.
   macOS 26 Icon Composer `.icon` format (a GUI/Xcode-26 step, not scriptable here) - static .icns
   for now.
 
+## Tab-bar QoL batch (post-0.2.4, uncommitted)
+- **Flush underlines / dead-band root cause**: `egui::Panel::top` (0.35) paints its frame fill +
+  clip at its own height estimate (`margin + interact_size.y` = 24px) while the content row is
+  40px - the fill stopped short and the strip's lower ~16px read as a dead band, with the tab
+  colors floating in it. Fix: `.exact_size(ui::TAB_H + 6.0)` pins the panel so fill/clip/content
+  agree; tabs now fill the full `TAB_H` row (bar bottom margin 0) and the underline paints at
+  `rect.bottom()-3` = the strip's true bottom edge, over the hairline (deco layer is above it).
+- **`appearance.tab_width`** = `"fixed"` (default; equal ~200px tabs, shrink evenly on overflow,
+  titles ellipsized to fit) | `"dynamic"` (content-sized). `ui::tab_width_mode` +
+  `ui::fixed_tab_width` are pure + tested; settings chips under Appearance > Window.
+- **Close-x hidden until hover; swaps with the CLI chip**: `draw_tab` was rebuilt as one
+  manually-painted widget with a LEADING slot - the CLI chip lives there, and hovering the tab
+  replaces it with the close-x (no x anywhere otherwise, active tab included), so chip/x overlap
+  is structurally impossible. Tab-first interaction ordering kept (x registered after, wins its
+  clicks); x id now seeds from the stable tab id. Chip tooltip was dropped (a hovered tab always
+  shows the x instead of the chip).
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:

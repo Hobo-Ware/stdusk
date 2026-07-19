@@ -10,8 +10,9 @@ use crate::terminal::{self, PtyTerm};
 use crate::ui::{self, color_swatch, draw_tab, icon_button, icons, style_menu, tint};
 use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch, session};
 
-/// Fixed tab-bar row height - keeps every control centered on the same line (no drift).
-const TABBAR_ROW_H: f32 = 34.0;
+/// Width the bar's right-side controls need: "+", the Tabs popup, the gear, and their
+/// spacing/spacer - reserved when splitting the rest into equal fixed-width tabs.
+const BAR_CONTROLS_W: f32 = 6.0 + ui::ICON_BTN_W * 2.0 + ui::ICON_TOGGLE_W + 3.0 * 4.0;
 
 /// Monotonic tab identity - stable across reorders/closes (used to target deferred actions).
 static NEXT_TAB_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -415,15 +416,22 @@ impl Stdusk {
         // Rebuilt every frame from the Color menu's hovered swatch (None once the hover ends).
         let mut color_preview: Option<(u64, Option<egui::Color32>)> = None;
         let bar = egui::Panel::top("tabbar")
+            // Exact height: the panel's own estimate paints its fill/clip at margin +
+            // interact_size (24px) while the content is 40px tall - the fill stopping short
+            // was the "dead band" between the tabs and the terminal. Pinning the height makes
+            // fill, clip, and content agree, so the tabs (and their colored underlines, drawn
+            // flush at the tab bottom) reach the strip's true bottom edge.
+            .exact_size(ui::TAB_H + 6.0)
             .frame(
                 egui::Frame::new()
                     // Distinct darker strip with rounded top corners, so the bar reads
                     // separately from the terminal body.
                     .fill(tint(colors::titlebar(), opacity))
                     .corner_radius(egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
-                    // No bottom margin: tabs sit flush against the terminal area (Tabby-style)
+                    // No bottom margin: tabs fill the row height, so their bottom edge (and the
+                    // colored underline) sits flush against the terminal area (Tabby-style)
                     // instead of floating above a strip of dead bar.
-                    .inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 1 }),
+                    .inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 0 }),
             )
             .show(ui, |ui| {
                 // ONE left-to-right, center-aligned row for every control (tabs + icons). Nesting
@@ -431,8 +439,18 @@ impl Stdusk {
                 // to the right edge with a computed spacer instead. Fixed row height keeps every
                 // item centered on the same line regardless of tab content.
                 ui.horizontal(|ui| {
-                    ui.set_min_height(TABBAR_ROW_H);
+                    ui.set_min_height(ui::TAB_H);
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    // Fixed mode (the default): every tab gets the same width, shrinking evenly
+                    // once the bar fills up. Dynamic sizes each tab to its title.
+                    let tab_width = match ui::tab_width_mode(&self.cfg.appearance.tab_width) {
+                        ui::TabWidthMode::Dynamic => None,
+                        ui::TabWidthMode::Fixed => Some(ui::fixed_tab_width(
+                            ui.available_width() - BAR_CONTROLS_W,
+                            self.tabs.len(),
+                            4.0,
+                        )),
+                    };
                     // Drag-to-reorder state, derived per frame (nothing persists): the tab
                     // whose drag response is active + the pointer x, plus every tab's rect.
                     let mut rects: Vec<egui::Rect> = Vec::with_capacity(self.tabs.len());
@@ -462,6 +480,7 @@ impl Stdusk {
                             tab.focused_term().cmd_state(),
                             &tab.root().miniature(),
                             tab.cli,
+                            tab_width,
                         );
                         if close {
                             action = Some(TabAction::Close(i));

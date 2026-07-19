@@ -78,6 +78,7 @@ pub(crate) struct Appearance {
     pub(crate) follow_system: bool, // pick theme_light/theme_dark by the OS appearance
     pub(crate) theme_light: String,
     pub(crate) theme_dark: String,
+    pub(crate) tab_width: String, // "fixed" (equal widths, the default) | "dynamic" (fit title)
 }
 
 #[allow(clippy::struct_excessive_bools)] // independent quake toggles, not a mode
@@ -138,6 +139,7 @@ impl Default for Appearance {
             follow_system: true,
             theme_light: "one-half-light".into(),
             theme_dark: "one-half-dark".into(),
+            tab_width: "fixed".into(),
         }
     }
 }
@@ -279,6 +281,7 @@ mod tests {
         let c = Config::default();
         assert_eq!(c.appearance.theme, "one-half-dark");
         assert_eq!(c.appearance.opacity, 0.85);
+        assert_eq!(c.appearance.tab_width, "fixed");
         assert_eq!(c.quake.hotkey, "Ctrl+Grave");
         assert!(c.quake.hide_on_focus_loss);
         assert_eq!(c.quake.unfocused_opacity, 1.0); // off by default

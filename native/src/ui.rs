@@ -332,6 +332,28 @@ pub(crate) fn cursor_style(s: &str) -> CursorStyle {
     }
 }
 
+/// Tab sizing mode (`appearance.tab_width`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabWidthMode {
+    Fixed,
+    Dynamic,
+}
+
+/// Parse the config `tab_width` string; unknown values fall back to `Fixed` (the default).
+pub(crate) fn tab_width_mode(s: &str) -> TabWidthMode {
+    match s.to_ascii_lowercase().as_str() {
+        "dynamic" | "auto" => TabWidthMode::Dynamic,
+        _ => TabWidthMode::Fixed,
+    }
+}
+
+/// Equal per-tab width for fixed mode: an even share of `avail` (minus inter-tab spacing),
+/// capped at the Tabby-like standard width and floored so tabs stay clickable on overflow.
+pub(crate) fn fixed_tab_width(avail: f32, n: usize, spacing: f32) -> f32 {
+    let share = (avail - spacing * (n.saturating_sub(1)) as f32) / (n.max(1)) as f32;
+    share.clamp(TAB_MIN_W, TAB_FIXED_W)
+}
+
 /// Is the configured link-activation modifier satisfied? `"none"` (or unknown) means links react
 /// on plain hover/click (Tabby default); otherwise the named modifier must be held.
 pub(crate) fn link_modifier_held(mods: egui::Modifiers, setting: &str) -> bool {
@@ -735,32 +757,27 @@ fn progress_bar(p: Progress) -> Option<(f32, egui::Color32)> {
 
 /// A tiny glyph on the tab that previews the pane split layout (nested rectangles). `rects` are
 /// the leaf rects of `Pane::miniature()` in a unit square; drawn only when there's >1 pane.
-fn draw_mini_layout(ui: &mut egui::Ui, rects: &[egui::Rect], active: bool) {
-    let (box_rect, _) = ui.allocate_exact_size(egui::vec2(15.0, 15.0), egui::Sense::hover());
+fn paint_mini_layout(p: &egui::Painter, box_rect: egui::Rect, rects: &[egui::Rect], active: bool) {
     let inner = box_rect.shrink(1.0);
     let col = if active { colors::fg() } else { colors::dim() };
-    let painter = ui.painter();
     for r in rects {
         let cell = egui::Rect::from_min_max(
             inner.min + egui::vec2(r.min.x * inner.width(), r.min.y * inner.height()),
             inner.min + egui::vec2(r.max.x * inner.width(), r.max.y * inner.height()),
         );
-        painter.rect_filled(cell, 1.0, col);
+        p.rect_filled(cell, 1.0, col);
     }
 }
 
 /// A compact brand-colored chip marking a known AI CLI running in the tab: a small rounded
-/// square in the CLI's brand color with its initial letter, full name on hover. Drawn BEFORE
-/// the tab title so it can never collide with the close-x at the tab's trailing edge.
-fn draw_cli_chip(ui: &mut egui::Ui, cli: crate::procwatch::Cli) {
+/// square in the CLI's brand color with its initial letter. Lives in the tab's leading slot
+/// and hides while the tab is hovered (the close-x takes the slot over).
+fn paint_cli_chip(p: &egui::Painter, rect: egui::Rect, cli: crate::procwatch::Cli) {
     let col = cli.color();
-    let label = cli.label();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
     // Contrast ink by the brand color's luminance so the initial reads on light and dark chips.
     let lum = 0.299 * f32::from(col.r()) + 0.587 * f32::from(col.g()) + 0.114 * f32::from(col.b());
     let ink = if lum > 150.0 { egui::Color32::from_rgb(24, 24, 24) } else { egui::Color32::WHITE };
-    let initial = label.chars().next().unwrap_or('?').to_ascii_uppercase();
-    let p = ui.painter();
+    let initial = cli.label().chars().next().unwrap_or('?').to_ascii_uppercase();
     p.rect_filled(rect, 4.0, col);
     p.text(
         rect.center(),
@@ -769,13 +786,26 @@ fn draw_cli_chip(ui: &mut egui::Ui, cli: crate::procwatch::Cli) {
         egui::FontId::proportional(10.0),
         ink,
     );
-    resp.on_hover_text(format!("{label} is running in this tab"));
 }
 
-/// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline, a
-/// split-layout preview glyph, and progress as a thin bar on the TOP edge. Returns (click+drag
-/// response, close-clicked). `layout` = `Pane::miniature()` leaf rects (glyph shown when >1).
-/// `tab_id` seeds the interact id so drag-reorder tracking survives index swaps (ui.md).
+/// Tab geometry: shared with the tab bar so the row height / spacer math can't rot.
+pub(crate) const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (flush underline)
+pub(crate) const TAB_FIXED_W: f32 = 200.0; // fixed-mode standard width (Tabby-like)
+const TAB_MIN_W: f32 = 60.0; // fixed-mode floor when the bar overflows
+const TAB_PAD_X: f32 = 10.0;
+const TAB_SLOT_W: f32 = 18.0; // leading slot: CLI chip, swapped for the close-x on hover
+const TAB_GAP: f32 = 6.0;
+const TAB_MINI_W: f32 = 15.0; // split-layout preview glyph
+
+/// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline
+/// flush with the strip's bottom edge, a split-layout preview glyph, and progress as a thin bar
+/// on the TOP edge. The leading slot holds the CLI chip; hovering the tab swaps it for the
+/// close-x (hidden otherwise - even on the active tab), so the two can never overlap.
+/// `width` = `Some(px)` for fixed mode (title ellipsized to fit), `None` sizes to content.
+/// Returns (click+drag response, close-clicked). `layout` = `Pane::miniature()` leaf rects
+/// (glyph shown when >1). `tab_id` seeds the interact id so drag-reorder tracking survives
+/// index swaps (ui.md).
+#[allow(clippy::too_many_lines)] // one widget, mostly geometry + paint
 pub(crate) fn draw_tab(
     ui: &mut egui::Ui,
     idx: usize,
@@ -787,35 +817,53 @@ pub(crate) fn draw_tab(
     cmd: CmdState,
     layout: &[egui::Rect],
     cli: Option<crate::procwatch::Cli>,
+    width: Option<f32>,
 ) -> (egui::Response, bool) {
-    let (shown, truncated) = ellipsize(title, 14);
-    let fg = if active { colors::fg() } else { colors::dim() };
-    // trailing spaces reserve room for the close x
-    let mut rt = egui::RichText::new(format!("{idx}  {shown}   ")).color(fg).monospace();
+    let font = egui::FontId::monospace(12.0);
+    let char_w = ui.painter().layout_no_wrap("0".into(), font.clone(), colors::fg()).size().x;
+    let prefix = format!("{idx}  ");
+    let mini_w = if layout.len() > 1 { TAB_MINI_W + TAB_GAP } else { 0.0 };
+    let fixed_chrome = TAB_PAD_X * 2.0 + TAB_SLOT_W + TAB_GAP + mini_w;
+    let (shown, truncated, tab_w) = if let Some(w) = width {
+        // Ellipsize to whatever fits the fixed width (monospace: chars scale linearly).
+        let chars = ((w - fixed_chrome) / char_w) as usize;
+        let (shown, truncated) = ellipsize(title, chars.saturating_sub(prefix.len()).max(1));
+        (shown, truncated, w)
+    } else {
+        let (shown, truncated) = ellipsize(title, 14);
+        let text_w = (prefix.chars().count() + shown.chars().count()) as f32 * char_w;
+        (shown, truncated, fixed_chrome + text_w)
+    };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(tab_w, TAB_H), egui::Sense::hover());
+    let p = ui.painter();
     if active {
-        rt = rt.strong();
+        p.rect_filled(
+            rect,
+            egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, // top-rounded tab shape
+            colors::elevated(),
+        );
     }
-    let fill = if active { colors::elevated() } else { egui::Color32::TRANSPARENT };
-    let inner = egui::Frame::new()
-        .fill(fill)
-        .corner_radius(egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }) // top-rounded tab shape
-        .inner_margin(egui::Margin::symmetric(12, 8))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 7.0;
-                if layout.len() > 1 {
-                    draw_mini_layout(ui, layout, active);
-                }
-                let lbl = ui.add(egui::Label::new(rt).selectable(false));
-                if truncated {
-                    lbl.on_hover_text(title);
-                }
-                if let Some(cli) = cli {
-                    draw_cli_chip(ui, cli);
-                }
-            });
-        });
-    let rect = inner.response.rect;
+    let slot = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + TAB_PAD_X, rect.center().y - TAB_SLOT_W / 2.0),
+        egui::vec2(TAB_SLOT_W, TAB_SLOT_W),
+    );
+    let mut x = slot.right() + TAB_GAP;
+    if layout.len() > 1 {
+        let mini = egui::Rect::from_min_size(
+            egui::pos2(x, rect.center().y - TAB_MINI_W / 2.0),
+            egui::vec2(TAB_MINI_W, TAB_MINI_W),
+        );
+        paint_mini_layout(p, mini, layout, active);
+        x += TAB_MINI_W + TAB_GAP;
+    }
+    let fg = if active { colors::fg() } else { colors::dim() };
+    p.text(
+        egui::pos2(x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!("{prefix}{shown}"),
+        font,
+        fg,
+    );
     // A foreground-layer painter: the row layout's clip cuts off the tab's top/bottom edges,
     // so edge strokes (underline, progress) must be drawn on an unclipped layer.
     let dp =
@@ -832,7 +880,9 @@ pub(crate) fn draw_tab(
         );
         dp.rect_filled(track, 1.0, colors::red().gamma_multiply(0.8));
     }
-    // Per-tab color underline (bottom edge) - only when the user set a color.
+    // Per-tab color underline - only when the user set a color. The tab fills the strip's full
+    // height, so `rect.bottom()` IS the strip's bottom edge: the underline sits flush against
+    // the terminal area (Tabby-style), painted on the deco layer so it draws over the hairline.
     if let Some(color) = color {
         dp.rect_filled(
             egui::Rect::from_min_size(
@@ -863,25 +913,28 @@ pub(crate) fn draw_tab(
     // entirely when the topmost widget under the pointer senses only drags (hit_test.rs), which
     // is exactly the bug that killed all tab clicks in 0.2.2. Id comes from the stable tab id,
     // not the loop index, so egui keeps tracking the same drag across reorder swaps.
-    let tab_resp = ui.interact(rect, ui.id().with(("tab", tab_id)), egui::Sense::click_and_drag());
-    // Close x: shown on the active tab, or whenever the pointer is anywhere over the tab. Use
-    // `contains_pointer` (true across the whole tab rect, incl. the x) rather than `hovered` so
-    // moving onto the x doesn't drop the tab's hover state and make the x flicker.
+    let mut tab_resp =
+        ui.interact(rect, ui.id().with(("tab", tab_id)), egui::Sense::click_and_drag());
+    if truncated {
+        tab_resp = tab_resp.on_hover_text(title);
+    }
+    // Leading slot: the close-x only while the pointer is over the tab (replacing the CLI chip,
+    // so they can't overlap); the chip - or nothing - otherwise. Use `contains_pointer` (true
+    // across the whole tab rect, incl. the x) rather than `hovered` so moving onto the x
+    // doesn't drop the tab's hover state and make the x flicker.
     let mut close = false;
-    if active || tab_resp.contains_pointer() {
-        let x_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - 22.0, rect.center().y - 9.0),
-            egui::vec2(18.0, 18.0),
-        );
+    if tab_resp.contains_pointer() {
         let xr = ui
-            .interact(x_rect, ui.id().with(("close", idx)), egui::Sense::click())
+            .interact(slot, ui.id().with(("close", tab_id)), egui::Sense::click())
             .on_hover_text("Close (Cmd+W)");
         let xh = xr.hovered();
         if xh {
-            ui.painter().rect_filled(x_rect, 5.0, colors::hover());
+            // hover() reads on the bar fill, but vanishes over the active tab's elevated fill.
+            let fill = if active { colors::hover_elevated() } else { colors::hover() };
+            ui.painter().rect_filled(slot, 5.0, fill);
         }
         ui.painter().text(
-            x_rect.center(),
+            slot.center(),
             egui::Align2::CENTER_CENTER,
             icons::X,
             egui::FontId::proportional(13.0),
@@ -890,6 +943,12 @@ pub(crate) fn draw_tab(
         if xr.clicked() {
             close = true;
         }
+    } else if let Some(cli) = cli {
+        paint_cli_chip(
+            ui.painter(),
+            egui::Rect::from_center_size(slot.center(), egui::vec2(14.0, 14.0)),
+            cli,
+        );
     }
     (tab_resp, close)
 }
@@ -1368,6 +1427,28 @@ mod tests {
     }
 
     #[test]
+    fn tab_width_mode_parse() {
+        assert_eq!(tab_width_mode("fixed"), TabWidthMode::Fixed);
+        assert_eq!(tab_width_mode("Dynamic"), TabWidthMode::Dynamic);
+        assert_eq!(tab_width_mode("auto"), TabWidthMode::Dynamic);
+        assert_eq!(tab_width_mode("nonsense"), TabWidthMode::Fixed); // fallback = default
+        assert_eq!(tab_width_mode(""), TabWidthMode::Fixed);
+    }
+
+    #[test]
+    fn fixed_tab_width_shares_evenly_and_clamps() {
+        // Plenty of room: capped at the standard width.
+        assert_eq!(fixed_tab_width(1200.0, 3, 4.0), TAB_FIXED_W);
+        // Overflow: an even share of the bar, minus inter-tab spacing.
+        let w = fixed_tab_width(500.0, 4, 4.0);
+        assert!((w - (500.0 - 12.0) / 4.0).abs() < 1e-4);
+        // Severe overflow: floored so tabs stay clickable.
+        assert_eq!(fixed_tab_width(100.0, 10, 4.0), TAB_MIN_W);
+        // Degenerate inputs don't divide by zero.
+        assert_eq!(fixed_tab_width(300.0, 0, 4.0), TAB_FIXED_W);
+    }
+
+    #[test]
     fn toast_alpha_fades() {
         assert_eq!(toast_alpha(1.0, 0.35), 1.0); // still full
         assert_eq!(toast_alpha(0.35, 0.35), 1.0); // at the edge
@@ -1498,6 +1579,7 @@ mod tests {
                             CmdState::Idle,
                             &[],
                             None,
+                            None,
                         );
                         if close {
                             out.closed = Some(i);
@@ -1568,15 +1650,34 @@ mod tests {
     #[test]
     fn close_x_still_wins_its_click() {
         // The x is registered after the tab, so it stays on top for clicks (LEDGER fix).
+        // The x is hover-only now (it swaps into the leading slot), so the pointer must be
+        // over the tab BEFORE the click - exactly what a real mouse does.
         let ctx = egui::Context::default();
         let warm = tab_frame(&ctx, vec![]);
-        let r = warm.rects[0]; // active tab always shows its x
-        let x = egui::pos2(r.right() - 13.0, r.center().y);
+        let r = warm.rects[0];
+        let x = egui::pos2(r.left() + TAB_PAD_X + TAB_SLOT_W / 2.0, r.center().y);
         tab_frame(&ctx, vec![egui::Event::PointerMoved(x)]);
         tab_frame(&ctx, vec![press(x, true)]);
         let up = tab_frame(&ctx, vec![press(x, false)]);
         assert_eq!(up.closed, Some(0), "the close-x must win its own click");
         assert_eq!(up.clicked, None);
+    }
+
+    #[test]
+    fn close_slot_clicks_activate_when_not_hovered_prior() {
+        // Without the pointer over the tab, the leading slot is NOT a close button: a click
+        // that lands there after the pointer was elsewhere must still activate the tab on the
+        // press frame's hit test (the x only exists once contains_pointer is true, and the
+        // press frame itself establishes hover for the release).
+        let ctx = egui::Context::default();
+        let warm = tab_frame(&ctx, vec![]);
+        let r = warm.rects[1];
+        let mid = r.center();
+        tab_frame(&ctx, vec![egui::Event::PointerMoved(mid)]);
+        tab_frame(&ctx, vec![press(mid, true)]);
+        let up = tab_frame(&ctx, vec![press(mid, false)]);
+        assert_eq!(up.clicked, Some(1), "the tab body must still click-activate");
+        assert_eq!(up.closed, None);
     }
 
     #[test]

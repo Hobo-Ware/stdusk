@@ -9,6 +9,7 @@ font_size = 13.0
 follow_system = true      # switch theme with the macOS light/dark appearance
 theme_light = "one-half-light"  # theme when the OS is in light mode
 theme_dark = "one-half-dark"    # theme when the OS is in dark mode
+tab_width = "fixed"       # tab sizing: "fixed" (equal widths, Tabby-like) | "dynamic" (fit the title)
 
 [quake]
 hotkey = "Ctrl+Grave"     # e.g. "F13", "Cmd+Grave", "F12", "Ctrl+Shift+T"

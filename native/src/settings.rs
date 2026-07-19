@@ -667,6 +667,16 @@ fn appearance_section(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Sett
                 pct_slider(ui, &mut q.unfocused_opacity, 0.2..=1.0);
             },
         );
+        row(ui, "Tab width", "Fixed keeps every tab the same size", |ui| {
+            ui.horizontal(|ui| {
+                for (label, value) in [("Fixed", "fixed"), ("Dynamic", "dynamic")] {
+                    let selected = ui::tab_width_mode(&a.tab_width) == ui::tab_width_mode(value);
+                    if ui::chip(ui, label, selected).clicked() {
+                        a.tab_width = value.into();
+                    }
+                }
+            });
+        });
     });
 
     subheading(ui, "Text");
