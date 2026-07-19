@@ -534,6 +534,58 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.0.2 - "Answer the terminal": query reporting, stuck-tab heal, rename clearing
+Three user-reported bugs, root-caused against real-pty captures of the actual CLIs (gemini,
+copilot 1.0.71). 216 tests, clippy -D warnings, fmt, both screenshot harnesses verified.
+- **Bug 1 - CLIs render dark-theme colors on a light theme** (`terminal.rs`, `colors.rs`).
+  Root cause: `EventProxy` handled ONLY `Event::Bell`; alacritty answers OSC 10/11/12 + OSC 4;n
+  color queries by emitting `Event::ColorRequest(index, formatter)` and DA1/DA2/DSR/DECRQM/
+  CSI 18t reports as `Event::PtyWrite` - all dropped, so every query went silent. A real-pty
+  capture shows gemini sends `OSC 11;?` at startup (copilot sends OSC 10/11 + all 16 OSC 4
+  queries + `CSI ?u` + `DECRQM 12`); unanswered, these CLIs assume a DARK terminal and paint
+  light text on the light bg. Fix: `send_event` queues `PtyWrite`/`ColorRequest` into a
+  `Reply` vec (it runs inside the term lock - no IO there); the reader thread drains it right
+  after `parser.advance`, resolving colors as app-set `term.colors()[i]` override first, else
+  `colors::query_color(i)` from the LIVE theme (0-255 palette, 256/257/258 = fg/bg/cursor),
+  and writes the replies through the now-`Arc<Mutex<_>>`-shared pty writer. Belt-and-braces:
+  `COLORFGBG` ("0;15" light / "15;0" dark, `colors::colorfgbg()`) set at spawn. Deliberately
+  NOT answered: kitty `CSI ?u` (we don't encode CSI-u keys - staying silent makes apps
+  correctly fall back to legacy input; replying would advertise support we don't have) and
+  `TextAreaSizeRequest` (CSI 14t pixel size - we'd have to invent cell pixel metrics; the
+  chars variant CSI 18t IS answered via PtyWrite).
+- **Bug 2 - tab "stuck" after Ctrl+C kills copilot** (`terminal.rs`). Two real leaks found
+  (copilot 1.0.71 itself exits cleanly on double-^C - captured: full rmcup/cnorm/mouse-off
+  teardown; no orphan processes; procwatch clean):
+  1. *Stale title*: copilot sets its title via `OSC 0` but RESTORES it via the xterm title
+     stack (`CSI 22;0t` push / `CSI 23;0t` pop). Only alacritty's `Event::Title`/`ResetTitle`
+     see the stack; our OSC-scanner-only path left "GitHub Copilot" on the tab forever. Fix:
+     titles now flow through the Term's events (scanner's `OscEvent::Title` ignored - one
+     source of truth); pop restores the pre-app title.
+  2. *Abnormal-death mode leak* (the general "frozen pane" case: SIGKILL/crash skips
+     cleanup): leaked ALT_SCREEN + hidden cursor make the pane look dead. Heal trigger is
+     IN-BAND: the next OSC 133;A prompt mark proves the shell owns the pty again (ordering is
+     exact in the byte stream - no fg-pgrp polling race); if the term is still on the alt
+     screen -> `swap_alt()` back + send Ctrl-L so the shell repaints the prompt it may have
+     drawn on the abandoned alt grid; if the cursor is hidden -> `set_private_mode(ShowCursor)`.
+     Justified NOT reset: bracketed paste (zsh legitimately arms it at every prompt - a reset
+     would race it; leaks self-heal at the next zsh prompt), DECCKM/kitty/modifyOtherKeys
+     (`key_to_bytes` is a static table that never consults term modes - immune), mouse modes
+     (we send no reports). Bonus fix: `grid_snapshot` now honors SHOW_CURSOR (DECTCEM `?25l`)
+     - we used to paint a cursor over TUIs that hid theirs.
+- **Bug 3 - clearing a rename leaves a broken title** (`ui.rs`, `tabs.rs`, `main.rs`).
+  The rename dialog set `renamed = true` even for an empty/whitespace buffer, freezing the
+  old title forever; session restore trusted any persisted title the same way. Fix:
+  `ui::commit_rename` (trimmed; empty -> `None` = un-rename) shared by the dialog commit and
+  session restore, so auto-titling (OSC title > cwd basename) reasserts.
+- Tests: 11 new - `query_color` mapping (both themes) + `colorfgbg` (colors.rs);
+  `commit_rename` clearing (ui.rs); real-pty e2e for the OSC 11 reply (asserts the live-theme
+  bg goes over the wire; script uses `stty raw` - canonical mode holds the reply hostage),
+  DA1+DSR replies, title-stack pop, hidden-cursor snapshot, alt+cursor heal on prompt mark,
+  heal no-op on a healthy prompt, and vim + less enter/exit mode-cleanliness sweeps.
+- Gotcha (new): e2e scripts that READ a query reply must `stty raw -echo` first - the pty is
+  canonical by default, so `head -c N` blocks until a newline that never comes, and echo
+  feeds our own reply back through the parser.
+
 ## 1.0.1 - "Right-side relevance": tab trailing slot, real bold faces, pre-filtered theme dropdowns
 Three user-requested items. 205 tests, clippy -D warnings, fmt, screenshot harnesses verified.
 - **Tab trailing slot** (user: "things always on the left waste space, worse UX"): `draw_tab`'s

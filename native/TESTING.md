@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 1.0.1.
+Step-by-step verification for everything shipped through 1.0.2.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -268,3 +268,15 @@ HOME-override e2e); these are the interactions only a human can drive:
 | Settings > Appearance with `follow_system = true`: open "Light theme" | Dropdown opens pre-filtered to LIGHT schemes (All/Light/Dark chips inside the popup, Light pre-selected); "Dark theme" opens on Dark; chips override; search combines with the filter |
 | `follow_system = false`: open "Theme" | Opens unfiltered (All chip); re-opening any dropdown resets its chips to the slot default |
 | `STDUSK_SHOT_SETTLE_MS=700 SHELL=<script> cargo run -- --screenshot /tmp/s.png` | The demo shells' output lands in the capture (the settle delay beats the pass-2 race) - the bold pixel-proof harness |
+
+## 22. 1.0.2 - CLI color reporting, stuck-tab heal, rename clearing
+| Step | Expect |
+|---|---|
+| Set a LIGHT theme (`one-half-light`), run `gemini` | Gemini detects the light background (OSC 11 reply) and renders its light palette - dark, readable text (was: white-on-white) |
+| Same tab: `echo $COLORFGBG` | `0;15` on a light theme, `15;0` on a dark one (spawn-time snapshot) |
+| Run `copilot`, press Ctrl+C twice to exit | Prompt returns AND the tab title reverts (was: stuck on "GitHub Copilot" forever - the title-stack pop was dropped) |
+| Kill a full-screen TUI without cleanup: `vim`, then `kill -9 <vim pid>` from another tab | On the next prompt, the pane leaves the dead alt screen, the cursor comes back, and a Ctrl-L repaint restores the prompt (was: frozen-looking pane) |
+| Run `vim`, `:q`; run `seq 200 \| less`, `q` | Both leave a clean screen: no alt-screen leftovers, cursor visible (automated too) |
+| In `vim`, watch the cursor while it hides its own (e.g. some plugins/DECTCEM apps) | stdusk no longer paints a cursor an app explicitly hid (`?25l`) |
+| Rename a tab, clear the field entirely (or spaces only), commit | Tab is UN-renamed: auto title (OSC title > cwd basename) takes back over; restart stdusk - the empty rename must not resurrect from the session file |
+| Rename a tab to `  build  ` | Title commits trimmed (`build`) |

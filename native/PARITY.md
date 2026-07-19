@@ -78,6 +78,8 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Background: image / vibrancy / blur | ⬜ | opacity only |
 | Configurable scrollback lines (25k default) | ✅ | `scrollback_lines` (default 25000) |
 | Wide-char / Unicode 11 widths | ✅ | WIDE_CHAR/spacer flags honored; CJK/emoji span two cells (real-pty tested) |
+| Terminal query reporting (OSC 4/10/11/12 colors, DA1/DA2, DSR, DECRQM, CSI 18t) + COLORFGBG | ✅ | 1.0.2: `Event::ColorRequest`/`PtyWrite` answered with the LIVE theme (app-set OSC 4 overrides win); `COLORFGBG` set at spawn. How gemini/copilot detect light vs dark. Kitty keyboard stays deliberately silent (we don't encode CSI-u) |
+| Hidden cursor (DECTCEM `?25l`) honored | ✅ | 1.0.2: snapshot drops the cursor while an app hides it (was always painted) |
 
 ## Input / copy-paste
 | Feature | State | Notes |
@@ -161,8 +163,8 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Feature | State | Notes |
 |---|---|---|
 | Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ✅ | `[session] restore`; cwd/title/color, saved every 3s |
-| Behavior on session end (keep/close/restart) | ⬜ | **bug-grade**: shell exit leaves a dead frozen tab (reader thread breaks silently, nothing observes it). Tabby default auto-closes on clean exit |
-| Dynamic title from shell (OSC 0/2) + disable toggle | 🟡 | cwd title only; OSC 0/2 confirmed NOT parsed (`osc.rs` drops it; EventProxy handles Bell only) |
+| Behavior on session end (keep/close/restart) | ✅ | `terminal.on_exit` (0.3.0): close (default) / keep with overlay / restart + crash-loop guard |
+| Dynamic title from shell (OSC 0/2) + disable toggle | ✅ | `dynamic_title` (0.3.0); 1.0.2 moved parsing to the Term's Title events, adding the xterm title STACK (`CSI 22/23 t`) - a popped title restores instead of sticking |
 | Save/load terminal output & state (debug) | ⛔ | niche debug tooling |
 
 ## Distribution / packaging
