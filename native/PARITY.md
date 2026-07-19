@@ -67,7 +67,7 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 |---|---|---|
 | Truecolor/256/16 + cursor styles | ✅ | |
 | Cursor blink | ✅ | `cursor_blink` (default on); focused pane only, xterm cadence |
-| Font weight / bold weight | ⬜ | single weight (egui: one face per family; bold_bright stands) |
+| Font weight / bold weight | ✅ | real bold face (1.0.1): `build_fonts` registers a second `term-bold` family when the user's font resolves an upright Bold sibling (name-scored, core-text lies); BOLD cells switch family in `render_grid`, metrics stay regular-derived. Bundled default has no bold sibling - regular fallback there; `bold_bright` independent |
 | Font family + fallback font + line padding | ✅ | `appearance.font` via font-kit (Nerd Fonts work) + `line_padding`; bundled fallbacks kept behind |
 | Ligatures | 🟡 | `ligatures` (default off): symbol substitution (-> => != >= <= ...); true OpenType shaping still ⬜ (egui limit) |
 | Sixel / inline images | ⛔→FUTURE | alacritty grid has no image model |

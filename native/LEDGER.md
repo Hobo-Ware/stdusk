@@ -457,6 +457,9 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   for the combos `key_to_bytes` already reserves (the defaults are chosen that way); a rebind
   onto a terminal-bound chord (e.g. Ctrl+letter) fires the action AND the pty byte - by
   design, asserted in `rebound_terminal_chords_double_fire_by_design`. See the 0.5.0 entry.
+- **eframe's screenshot capture (cumulative pass 2) always beats the pty readers** - a shot
+  that needs real shell output in the grid captures blank. Set `STDUSK_SHOT_SETTLE_MS` (sleeps
+  in `Stdusk::new`, BEFORE the first pass, so the demo shells' output lands first).
 - **font-kit on macOS lies about faces**: `select_best_match("Menlo", regular)` returns Menlo
   *Italic*, and `Font::properties()` reports `Italic, w400` for EVERY Menlo face. Only
   `full_name()` (and the handle's bytes + `.ttc` face index) are trustworthy - pick faces by
@@ -531,7 +534,50 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
-## 1.0.0 - "Trusted daily driver": the v1 tag
+## 1.0.1 - "Right-side relevance": tab trailing slot, real bold faces, pre-filtered theme dropdowns
+Three user-requested items. 205 tests, clippy -D warnings, fmt, screenshot harnesses verified.
+- **Tab trailing slot** (user: "things always on the left waste space, worse UX"): `draw_tab`'s
+  LEADING slot is gone - no space is ever reserved by default and the title gets the full
+  width. A TRAILING (right-edge) slot exists only while relevant: the CLI brand badge while an
+  AI CLI runs in the tab, swapped for the close-x while the tab is hovered (close wins). The
+  pinned push-pin shifts just left of the slot when it's shown. Slot presence feeds the width
+  math via LAST frame's hover (stored in ctx temp data, `tab_iid.with("hovered")`) - this
+  frame's rect isn't allocated yet and a predicted rect oscillates in dynamic width mode; one
+  frame of lag, invisible (egui repaints on pointer movement). Fixed-mode tabs keep their
+  width (title just truncates a hair more while the slot shows); dynamic-mode tabs grow by the
+  slot while hovered/CLI-active - accepted per the ask (never permanently reserved).
+  Drag/reorder + context menu + tab-first-interact ordering (x registered after, wins its
+  clicks) all unchanged; headless tests updated for the trailing geometry + a new
+  `close_x_replaces_the_badge_while_hovered` (badge tab: hover swap, close beats focus).
+- **Real bold font faces** (the last unshipped V1 P1; 0.3.1 deferral closed): `build_fonts`
+  now takes a second `Option<ResolvedFont>` and, when the user's family resolves an upright
+  Bold sibling, registers `FontFamily::Name("term-bold")` = [bold face, then the whole
+  Monospace stack] so a glyph missing from the bold file degrades to regular, never tofu.
+  Resolution mirrors the regular face's name-scoring (`bold_face_name_score`: must say "bold",
+  slants disqualify, Semi/Extra/width variants rank behind plain Bold - core-text properties
+  still lie). `CellSnap.bold` carries the raw SGR BOLD flag (independent of `bold_bright`,
+  which stands unchanged); `render_grid` switches family per glyph when `bold_font` is passed
+  (workspace gates on `Stdusk.bold_font_ready`, kept in sync by startup + `reapply_font`, so
+  the settings live-apply path carries it). Cell metrics stay derived from the regular face
+  (a bold glyph may run a hair wider - Tabby-equivalent). The BUNDLED default has no bold
+  sibling in assets/ - the bold family only exists for user fonts that ship one. Pixel-proof:
+  temp HOME + `font="Menlo"` + `bold_bright=false` + a $SHELL script printing the same line
+  plain and under `\e[1m` - 2196 px differ, all inside the bold line's bbox (heavier strokes,
+  same columns). Needed a new harness knob: **`STDUSK_SHOT_SETTLE_MS`** sleeps in `Stdusk::new`
+  before the first pass, because eframe captures at cumulative pass 2 which always beats the
+  pty readers (an empty grid otherwise - the 0.3.1 "prompt glyphs" diff wouldn't reproduce).
+- **Appearance theme dropdowns pre-filter by slot brightness** (user ask): `scheme_dropdown`
+  takes its target `SchemeSlot`; the popup opens pre-filtered via pure `slot_bright_filter`
+  (Light slot -> light schemes, Dark -> dark, manual fixed Theme -> All) with an All/Light/
+  Dark chip row inside the popup as the escape hatch (`SettingsState.dropdown_bright`, reset
+  on every open); search combines with the filter. Same `theme_is_dark` + `bright_allows`
+  machinery as the scheme-browser chips. Screenshot plumbing: `STDUSK_SHOT_DROPDOWN=<id_salt>`
+  force-opens a dropdown in the settings shot (`theme_light`/`theme_dark` also flip
+  follow_system on with both slots pinned) - but the popup is an `egui::Area`, which the
+  2-frame harness never renders (known gotcha), so the open state is plumbed + the filter
+  logic is unit-tested rather than captured.
+
+
 Ships everything from the 1.0.0-rc prep section below plus the post-0.5.0 addenda
 (scheme-brightness filter chips + auto pre-filter, a11y dim-text 3:1 floor across all
 194 schemes). Released UNSIGNED: the signing/notarization scaffold is live in CI but

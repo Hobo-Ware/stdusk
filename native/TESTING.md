@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 0.5.0.
+Step-by-step verification for everything shipped through 1.0.1.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -253,3 +253,18 @@ HOME-override e2e); these are the interactions only a human can drive:
 | Clipboard | Cmd+C/V real pasteboard round-trip, OSC 52, middle-click paste, copy-on-select (§1, §2) |
 | CLI badges | run a real `claude` / `gemini` - brand mark appears within ~1s (§10, §15) |
 | Signed build | once signing secrets exist: `brew install` a signed release - launches with NO quarantine strip (cask has no postflight) |
+
+## 21. 1.0.1 - tab trailing slot, real bold faces, pre-filtered theme dropdowns
+| Step | Expect |
+|---|---|
+| Look at an idle, unhovered tab | NO reserved slot before or after the title - the title gets the full tab width; the number stays on the left |
+| Hover any tab | A close-x appears at the tab's RIGHT edge; clicking it closes; moving off hides it again |
+| Run `claude` in a tab, don't hover | The Anthropic brand badge sits at the tab's RIGHT edge (only while the CLI runs) |
+| Hover that same tab | The close-x REPLACES the badge (close wins while hovered); un-hover brings the badge back |
+| Pin a tab, then hover it | The push-pin sits just left of the trailing slot; alone at the right edge while unhovered |
+| Drag a tab starting over the trailing slot | Reorders as usual (no dead zone); a plain click on the x never reorders |
+| `font = "Menlo"` (any family with a Bold face), `printf 'plain \e[1mBOLD\e[0m\n'` | The bold run renders in the REAL bold face - visibly heavier strokes, same cell width; with `bold_bright = true` it also brightens (independent treatments) |
+| Same printf with the bundled default font (`font = ""`) | No bold face ships with the bundle - bold text keeps the regular face (bold_bright color still applies) |
+| Settings > Appearance with `follow_system = true`: open "Light theme" | Dropdown opens pre-filtered to LIGHT schemes (All/Light/Dark chips inside the popup, Light pre-selected); "Dark theme" opens on Dark; chips override; search combines with the filter |
+| `follow_system = false`: open "Theme" | Opens unfiltered (All chip); re-opening any dropdown resets its chips to the slot default |
+| `STDUSK_SHOT_SETTLE_MS=700 SHELL=<script> cargo run -- --screenshot /tmp/s.png` | The demo shells' output lands in the capture (the settle delay beats the pass-2 race) - the bold pixel-proof harness |
