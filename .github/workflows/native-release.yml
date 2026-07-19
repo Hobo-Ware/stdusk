@@ -42,7 +42,6 @@ jobs:
           cargo build --release --target x86_64-apple-darwin
 
       - name: Assemble stdusk.app (universal)
-        id: pkg
         working-directory: native
         run: |
           VERSION="${{ steps.v.outputs.version }}"
@@ -56,7 +55,64 @@ jobs:
           chmod +x "$APP/Contents/MacOS/stdusk"
           cp assets/stdusk.icns "$APP/Contents/Resources/stdusk.icns"
           sed "s/__VERSION__/${VERSION}/g" packaging/Info.plist > "$APP/Contents/Info.plist"
-          # Zip via ditto so the bundle (symlinks, resource forks) survives the round-trip.
+
+      # Developer ID signing + notarization, OPTIONAL: runs only when all five secrets are
+      # configured (see packaging/README.md for the one-time setup); otherwise the release
+      # ships ad-hoc signed exactly as before and the cask strips quarantine.
+      - name: Sign & notarize (optional)
+        id: sign
+        working-directory: native
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ] || [ -z "$MACOS_CERT_PASSWORD" ] || \
+             [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ] || [ -z "$NOTARY_KEY" ]; then
+            echo "Signing secrets not configured - shipping ad-hoc signed; the cask keeps its" \
+                 "quarantine-strip postflight. Setup: native/packaging/README.md."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          APP="dist/stdusk.app"
+          # Throwaway keychain holding the Developer ID Application cert for this run only.
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KC_PASS="$(uuidgen)"
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$MACOS_CERT_PASSWORD" \
+            -A -t cert -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" login.keychain
+          IDENTITY=$(security find-identity -v -p codesigning "$KC" \
+            | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          if [ -z "$IDENTITY" ]; then
+            echo "MACOS_CERT_P12 holds no 'Developer ID Application' identity" >&2
+            exit 1
+          fi
+          codesign --deep --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          # Notarize with an App Store Connect API key, then staple so Gatekeeper passes offline.
+          echo "$NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
+            --wait
+          xcrun stapler staple "$APP"
+          spctl --assess --type execute -v "$APP"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Package zip
+        id: pkg
+        working-directory: native
+        run: |
+          VERSION="${{ steps.v.outputs.version }}"
+          # Zip via ditto so the bundle (symlinks, resource forks, the notarization staple)
+          # survives the round-trip. Must run AFTER signing - the sha covers the final bits.
           ZIP="stdusk-${VERSION}-universal.app.zip"
           (cd dist && ditto -c -k --sequesterRsrc --keepParent stdusk.app "$ZIP")
           SHA=$(shasum -a 256 "dist/${ZIP}" | awk '{print $1}')
@@ -70,6 +126,20 @@ jobs:
           SHA="${{ steps.pkg.outputs.sha }}"
           ZIP="${{ steps.pkg.outputs.zip }}"
           TAG="${{ steps.v.outputs.tag }}"
+          # Unsigned builds need the quarantine-strip postflight (Gatekeeper hard-blocks an
+          # ad-hoc signature); a signed + notarized build must NOT carry it.
+          if [ "${{ steps.sign.outputs.signed }}" = "true" ]; then
+            POSTFLIGHT=""
+          else
+            POSTFLIGHT='
+            postflight do
+              # Ad-hoc signed, not notarized: strip quarantine so Gatekeeper does not hard-block
+              # the GUI launch. Signed releases omit this block (baked by the release workflow).
+              system_command "/usr/bin/xattr",
+                             args: ["-dr", "com.apple.quarantine", "#{appdir}/stdusk.app"]
+            end
+          '
+          fi
           # A cask (not a formula) so the .app lands in /Applications and Spotlight/Launchpad find
           # it; the `binary` stanza still puts `stdusk` on the PATH.
           cat > dist/stdusk.rb <<EOF
@@ -84,14 +154,7 @@ jobs:
 
             app "stdusk.app"
             binary "#{appdir}/stdusk.app/Contents/MacOS/stdusk"
-
-            postflight do
-              # Ad-hoc signed, not notarized: strip quarantine so Gatekeeper doesn't hard-block the
-              # GUI launch. Proper fix is Developer ID signing + notarization.
-              system_command "/usr/bin/xattr",
-                             args: ["-dr", "com.apple.quarantine", "#{appdir}/stdusk.app"]
-            end
-
+          ${POSTFLIGHT}
             zap trash: "~/.config/stdusk"
           end
           EOF

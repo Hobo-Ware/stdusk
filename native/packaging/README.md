@@ -32,12 +32,42 @@ brew install hobo-ware/tap/stdusk   # installs to /Applications + links the `std
 
 ## Signing / notarization
 
-The `.app` is **ad-hoc signed** (Rust's linker default), not Developer ID signed or notarized.
-On macOS the cask's `postflight` strips the `com.apple.quarantine` flag so Gatekeeper doesn't
-hard-block the GUI launch. That's a pragmatic stopgap, not the real fix.
+The release workflow signs + notarizes **automatically when the five GitHub secrets below are
+configured**, and skips both (with a log line) when they aren't. Unsigned builds ship ad-hoc
+signed (Rust's linker default) and the generated cask carries a `postflight` that strips
+`com.apple.quarantine` so Gatekeeper doesn't hard-block the GUI launch; signed + notarized
+builds get a cask **without** that postflight (the workflow bakes the difference in via the
+`sign` step's `signed` output). A manually-downloaded unsigned `.app` (not via brew) may still
+need System Settings -> Privacy & Security -> "Open Anyway".
 
-**Proper fix (later):** sign with a Developer ID cert + notarize with `notarytool` in CI. That
-needs an Apple Developer account ($99/yr) and these GitHub secrets: the signing cert (`.p12` +
-password) and an app-specific password / API key for notarization. Once notarized, drop the
-`postflight` quarantine-strip. Until then, a first Finder launch of a manually-downloaded `.app`
-(not via brew) may still need System Settings -> Privacy & Security -> "Open Anyway".
+### One-time setup (needs an Apple Developer account, $99/yr)
+
+1. **Developer ID Application certificate**
+   - <https://developer.apple.com/account/resources/certificates/add> -> type
+     "Developer ID Application". Create the CSR with Keychain Access (Certificate Assistant ->
+     Request a Certificate from a Certificate Authority -> Saved to disk), upload it, download
+     the issued `.cer`, and double-click to add it to your login keychain.
+   - Export it: Keychain Access -> My Certificates -> right-click the
+     "Developer ID Application: …" entry (expand it - the private key must be included) ->
+     Export -> `.p12`, and set an export password.
+   - Base64 the file for the secret: `base64 -i DeveloperID.p12 | pbcopy`.
+2. **App Store Connect API key** (for `notarytool`; app-specific passwords work too, but the
+   API key doesn't depend on your Apple ID password)
+   - <https://appstoreconnect.apple.com/access/integrations/api> -> Team Keys -> Generate. Role
+     "Developer" suffices for notarization.
+   - Note the **Key ID** and the page's **Issuer ID**, and download the `AuthKey_<ID>.p8`
+     (single download - keep it safe).
+3. **GitHub secrets** (repo Settings -> Secrets and variables -> Actions):
+
+   | Secret | Value |
+   |---|---|
+   | `MACOS_CERT_P12` | the `.p12`, base64-encoded |
+   | `MACOS_CERT_PASSWORD` | the `.p12` export password |
+   | `NOTARY_KEY_ID` | the API key's Key ID (e.g. `2X9R4HXF34`) |
+   | `NOTARY_ISSUER` | the Issuer ID (a UUID) |
+   | `NOTARY_KEY` | the full contents of `AuthKey_<ID>.p8` |
+
+With the secrets in place the next `stdusk-v*` tag produces a signed, notarized, stapled
+`.app` (`codesign --deep --options runtime`, `notarytool submit --wait`, `stapler staple`,
+verified with `spctl --assess`) and a cask with no quarantine postflight. Nothing else changes:
+same tag flow, same assets, same tap copy step.

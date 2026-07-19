@@ -15,9 +15,11 @@ cask "stdusk" do
   app "stdusk.app"
   binary "#{appdir}/stdusk.app/Contents/MacOS/stdusk"
 
+  # Only present on UNSIGNED builds: the workflow omits this block when the release was
+  # Developer ID signed + notarized (secrets configured - see packaging/README.md).
   postflight do
     # Ad-hoc signed, not notarized: strip quarantine so Gatekeeper doesn't hard-block the GUI
-    # launch. Proper fix is Developer ID signing + notarization (see packaging/README.md).
+    # launch.
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{appdir}/stdusk.app"]
   end
