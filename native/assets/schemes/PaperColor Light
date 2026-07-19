@@ -1,0 +1,40 @@
+!
+! PaperColor Light
+! Palette: NLKNguyen/papercolor-theme (MIT), terminal mapping as shipped in the
+! Gogh port. Vendored by hand for stdusk 1.0.3 (light-scheme expansion).
+!
+*.foreground:  #444444
+*.background:  #eeeeee
+*.cursorColor: #444444
+!
+! Black
+*.color0:      #eeeeee
+*.color8:      #bcbcbc
+!
+! Red
+*.color1:      #af0000
+*.color9:      #d70000
+!
+! Green
+*.color2:      #008700
+*.color10:     #d70087
+!
+! Yellow
+*.color3:      #5f8700
+*.color11:     #8700af
+!
+! Blue
+*.color4:      #0087af
+*.color12:     #d75f00
+!
+! Magenta
+*.color5:      #878787
+*.color13:     #d75f00
+!
+! Cyan
+*.color6:      #005f87
+*.color14:     #005faf
+!
+! White
+*.color7:      #444444
+*.color15:     #005f87

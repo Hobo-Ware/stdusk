@@ -392,6 +392,9 @@ pub(crate) fn by_name(name: &str) -> Theme {
         "dracula" => dracula(),
         "tokyo-night" | "tokyonight" => tokyo_night(),
         "one-half-light" | "onehalflight" | "light" => one_half_light(),
+        // Rename alias (1.0.3): the pack's "Parasio Dark" was an identical typo-dupe of
+        // "Paraiso Dark" and was dropped; saved configs must keep resolving.
+        "parasio-dark" => crate::themes::lookup("paraiso-dark").unwrap_or_else(one_half_dark),
         // Fall back to the community XRDB pack + user schemes, then the default.
         _ => crate::themes::lookup(&norm).unwrap_or_else(one_half_dark),
     }
@@ -428,6 +431,66 @@ mod tests {
         for t in [one_half_dark(), one_half_light(), dracula(), tokyo_night()] {
             assert!(contrast_ratio(legible_dim(&t), t.bg) >= 2.99);
         }
+    }
+
+    /// Find a scheme in the embedded pack + built-ins by normalized name.
+    fn scheme(name: &str) -> Theme {
+        crate::themes::all_schemes()
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("missing scheme {name}"))
+            .1
+    }
+
+    #[test]
+    fn audit_critical_schemes_were_patched_to_aa() {
+        // The 0.5.0 a11y audit's 4 broken-fg schemes (C64 2.26, Royal 2.34, Shaman 2.44,
+        // CrayonPonyFish 2.76): fg is patched in the scheme DATA (1.0.3) with a minimal
+        // ensure_contrast nudge to 4.5:1 instead of dropping the schemes.
+        for name in ["c64", "royal", "shaman", "crayonponyfish"] {
+            let t = scheme(name);
+            let r = contrast_ratio(t.fg, t.bg);
+            assert!(r >= 4.5, "{name}: fg/bg ratio {r}");
+        }
+    }
+
+    #[test]
+    fn vendored_light_schemes_classify_light_and_meet_aa() {
+        // The 1.0.3 light-scheme expansion: every hand-vendored scheme must read as light
+        // in the browser's brightness filter and pass WCAG AA for its base fg/bg pair.
+        for name in [
+            "alabaster",
+            "catppuccin-latte",
+            "dayfox",
+            "edge-light",
+            "everforest-light",
+            "flexoki-light",
+            "github-light",
+            "gruvbox-light",
+            "gruvbox-material-light",
+            "iceberg-light",
+            "papercolor-light",
+            "selenized-light",
+            "selenized-white",
+            "tango-light",
+            "zenbones-light",
+        ] {
+            let t = scheme(name);
+            assert!(!theme_is_dark(&t), "{name} must classify as light");
+            let r = contrast_ratio(t.fg, t.bg);
+            assert!(r >= 4.5, "{name}: fg/bg ratio {r}");
+        }
+    }
+
+    #[test]
+    fn parasio_dark_alias_resolves_to_paraiso() {
+        // Dropped typo-dupe keeps resolving for saved configs, and not via the fallback.
+        let a = by_name("Parasio Dark");
+        let b = scheme("paraiso-dark");
+        assert_eq!(a.bg, b.bg);
+        assert_eq!(a.fg, b.fg);
+        assert_eq!(a.ansi, b.ansi);
+        assert_ne!(a.bg, one_half_dark().bg); // would match if the alias fell through
     }
 
     #[test]

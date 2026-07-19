@@ -1,0 +1,40 @@
+!
+! Selenized White
+! Palette: jan-warchol/selenized (MIT). Vendored by hand for stdusk 1.0.3
+! (light-scheme expansion) from the repo's published color tables.
+!
+*.foreground:  #474747
+*.background:  #ffffff
+*.cursorColor: #474747
+!
+! Black
+*.color0:      #ebebeb
+*.color8:      #cdcdcd
+!
+! Red
+*.color1:      #d6000c
+*.color9:      #bf0000
+!
+! Green
+*.color2:      #1d9700
+*.color10:     #008400
+!
+! Yellow
+*.color3:      #c49700
+*.color11:     #af8500
+!
+! Blue
+*.color4:      #0064e4
+*.color12:     #0054cf
+!
+! Magenta
+*.color5:      #dd0f9d
+*.color13:     #c7008b
+!
+! Cyan
+*.color6:      #00ad9c
+*.color14:     #009a8a
+!
+! White
+*.color7:      #878787
+*.color15:     #282828

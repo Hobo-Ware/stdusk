@@ -1,5 +1,6 @@
-//! Community color schemes (XRDB/Xresources format): the 191 schemes vendored from Tabby's
-//! community pack (embedded at build time by build.rs) plus any user files in
+//! Community color schemes (XRDB/Xresources format): 204 embedded schemes - Tabby's
+//! community pack plus hand-vendored light schemes (embedded at build time by build.rs) -
+//! plus any user files in
 //! ~/.config/stdusk/schemes/. User files shadow the embedded pack.
 use crate::colors::Theme;
 use eframe::egui::Color32;

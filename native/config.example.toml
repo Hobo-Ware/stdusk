@@ -3,7 +3,7 @@
 
 [appearance]
 theme = "one-half-dark"   # used when follow_system = false. built-ins: one-half-dark | one-half-light | dracula | tokyo-night
-                          # plus 191 community schemes (e.g. "nord", "solarized-dark") and any XRDB files in ~/.config/stdusk/schemes/
+                          # plus 204 community schemes (e.g. "nord", "solarized-dark", "gruvbox-light") and any XRDB files in ~/.config/stdusk/schemes/
 opacity = 0.85            # window background opacity, 0.0-1.0
 font = ""                 # terminal font FAMILY name (e.g. "JetBrainsMono Nerd Font", "Menlo"); "" = bundled default
 font_size = 13.0
@@ -43,8 +43,9 @@ bold_bright = true        # draw bold text in the bright ANSI colors
 ligatures = false         # draw -> => != >= <= ... as single symbol glyphs (visual only)
 on_exit = "close"         # pane when its shell exits: "close" | "keep" (banner, Enter restarts) | "restart" (auto-respawn)
 dynamic_title = true      # tab titles follow the shell's OSC 0/2 title (cwd basename fallback)
-minimum_contrast = 1.0    # nudge text toward black/white to meet this WCAG ratio vs its background;
-                          # 1 = off (default, keeps your theme exact) .. 21; Tabby ships 4, WCAG AA is 4.5
+minimum_contrast = 4.0    # nudge text toward black/white to meet this WCAG ratio vs its background;
+                          # 4 = default (what Tabby ships; WCAG AA is 4.5) .. 21; set 1 to turn it
+                          # off and keep your theme's cell colors exact
 right_click = "menu"      # right-click on a pane: "menu" (context menu) | "paste" | "clipboard"
                           # (copy the selection, else paste); paste/clipboard hold >=250ms for the menu
 focus_follows_mouse = false # hovering a split pane focuses it without clicking

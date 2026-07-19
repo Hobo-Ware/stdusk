@@ -1,0 +1,41 @@
+!
+! Flexoki Light
+! Palette: kepano/flexoki (MIT). Vendored by hand for stdusk 1.0.3
+! (light-scheme expansion); normal colors are the 600 shades, brights the 400s,
+! per the spec's terminal mapping.
+!
+*.foreground:  #100f0f
+*.background:  #fffcf0
+*.cursorColor: #100f0f
+!
+! Black
+*.color0:      #100f0f
+*.color8:      #575653
+!
+! Red
+*.color1:      #af3029
+*.color9:      #d14d41
+!
+! Green
+*.color2:      #66800b
+*.color10:     #879a39
+!
+! Yellow
+*.color3:      #ad8301
+*.color11:     #d0a215
+!
+! Blue
+*.color4:      #205ea6
+*.color12:     #4385be
+!
+! Magenta
+*.color5:      #a02f6f
+*.color13:     #ce5d97
+!
+! Cyan
+*.color6:      #24837b
+*.color14:     #3aa99f
+!
+! White
+*.color7:      #6f6e69
+*.color15:     #cecdc3

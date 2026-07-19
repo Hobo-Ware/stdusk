@@ -55,7 +55,7 @@ and [LEDGER.md](./LEDGER.md) for the running build state.
 
 Shipped on top of that through 0.5.0: command palette (Cmd+Shift+P), drag-to-reorder tabs,
 symbol ligatures, named `[[profiles]]` (shell/args/cwd/env/tab color) with a full settings
-editor, a full settings view (Cmd+, - sidebar sections, searchable 193-scheme browser with
+editor, a full settings view (Cmd+, - sidebar sections, searchable 208-scheme browser with
 live preview + light/dark filter, live-apply + Save/Revert, unsaved-changes guard),
 shell-exit handling (`on_exit` close/keep/restart), OSC 0/2 dynamic titles, custom font
 family (Nerd Fonts) + line padding, wide-char correctness, minimum contrast, right-click

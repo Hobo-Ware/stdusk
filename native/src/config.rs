@@ -241,8 +241,9 @@ impl Default for Terminal {
             warn_on_close_running: true,
             on_exit: "close".into(),
             dynamic_title: true,
-            // Off, to not surprise existing users; Tabby ships 4. See config.example.toml.
-            minimum_contrast: 1.0,
+            // Tabby ships 4; serde fills only ABSENT fields, so a config that explicitly
+            // set 1.0 (off) keeps its exact-theme cells. See config.example.toml.
+            minimum_contrast: 4.0,
             right_click: "menu".into(),
             focus_follows_mouse: false,
         }
@@ -357,7 +358,7 @@ mod tests {
         assert!(c.terminal.warn_on_close_running);
         assert_eq!(c.terminal.on_exit, "close");
         assert!(c.terminal.dynamic_title);
-        assert_eq!(c.terminal.minimum_contrast, 1.0); // off (Tabby ships 4; opt-in here)
+        assert_eq!(c.terminal.minimum_contrast, 4.0); // Tabby's default; 1.0 = off
         assert_eq!(c.terminal.right_click, "menu"); // Tabby default
         assert!(!c.terminal.focus_follows_mouse); // Tabby default
     }
@@ -380,6 +381,16 @@ mod tests {
         assert_eq!(c.appearance.theme, "dracula");
         assert_eq!(c.appearance.opacity, 0.85); // default preserved
         assert_eq!(c.quake.hotkey, "Ctrl+Grave"); // default section
+    }
+
+    #[test]
+    fn explicit_minimum_contrast_survives_the_default_bump() {
+        // 1.0.3 changed the default 1.0 -> 4.0. `#[serde(default)]` fills only ABSENT
+        // fields, so a user who explicitly opted out at 1.0 keeps their exact theme.
+        let c: Config = toml::from_str("[terminal]\nminimum_contrast = 1.0\n").unwrap();
+        assert_eq!(c.terminal.minimum_contrast, 1.0);
+        let c: Config = toml::from_str("[terminal]\n").unwrap();
+        assert_eq!(c.terminal.minimum_contrast, 4.0);
     }
 
     #[test]

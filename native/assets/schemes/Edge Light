@@ -1,0 +1,40 @@
+!
+! Edge Light
+! Palette: sainnhe/edge (MIT). Vendored by hand for stdusk 1.0.3
+! (light-scheme expansion) from the theme's terminal ANSI colors.
+!
+*.foreground:  #4b505b
+*.background:  #fafafa
+*.cursorColor: #4b505b
+!
+! Black
+*.color0:      #fafafa
+*.color8:      #8790a0
+!
+! Red
+*.color1:      #d05858
+*.color9:      #d05858
+!
+! Green
+*.color2:      #608e32
+*.color10:     #608e32
+!
+! Yellow
+*.color3:      #be7e05
+*.color11:     #be7e05
+!
+! Blue
+*.color4:      #5079be
+*.color12:     #5079be
+!
+! Magenta
+*.color5:      #b05ccc
+*.color13:     #b05ccc
+!
+! Cyan
+*.color6:      #3a8b84
+*.color14:     #3a8b84
+!
+! White
+*.color7:      #4b505b
+*.color15:     #4b505b

@@ -2,7 +2,8 @@
 ! Generated with :
 ! XRDB2Xreources.py
 !
-*.foreground:  #514968
+! stdusk 1.0.3: fg #514968 nudged via ensure_contrast to 4.5:1 vs bg (was 2.34:1)
+*.foreground:  #7d778e
 *.background:  #100815
 *.cursorColor: #524966
 !
