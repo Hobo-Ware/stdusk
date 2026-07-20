@@ -18,7 +18,7 @@ jobs:
   release:
     runs-on: macos-14 # Apple silicon; we cross-build x86_64 and lipo into a universal binary
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve version
         id: v
