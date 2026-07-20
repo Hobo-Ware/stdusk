@@ -305,7 +305,11 @@ impl Stdusk {
                                     .min(cols.saturating_sub(1));
                                 let row = (((p.y - rect.top()) / ch) as usize)
                                     .min(rows.saturating_sub(1));
-                                term.send(&crate::terminal::wheel_sgr(lines, col, row));
+                                // Clamp the report count: unlike local scroll (which alacritty
+                                // caps to available history), the app has no backstop, so an
+                                // accelerated frame of many lines would over-scroll its TUI.
+                                let reports = crate::terminal::wheel_report_lines(lines);
+                                term.send(&crate::terminal::wheel_sgr(reports, col, row));
                             } else if mr.alternate_scroll && term.is_alt_screen() {
                                 // Alt-screen app without real mouse reporting (less/pager): wheel
                                 // emits arrow keys (xterm alternateScroll), since the alt grid has

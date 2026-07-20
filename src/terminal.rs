@@ -179,6 +179,17 @@ pub(crate) fn wheel_sgr(lines: i32, col: usize, row: usize) -> Vec<u8> {
     out
 }
 
+/// Clamp a frame's wheel delta to a physical-wheel-sized burst of MOUSE-REPORT ticks. `lines` is
+/// sized for LOCAL scrollback, where a big accelerated / high-res-trackpad flick is harmless -
+/// alacritty caps the scroll to the available history. An app that requested mouse reporting has
+/// no such backstop: every wheel report we forward scrolls its TUI another notch, so a frame of
+/// tens of lines flings its view (the alt-screen over-acceleration users hit in Claude Code's
+/// fullscreen UI). Cap the per-frame report count; a normal one-line notch passes through.
+pub(crate) fn wheel_report_lines(lines: i32) -> i32 {
+    const MAX_REPORTS: i32 = 3; // one deliberate wheel burst - never a whole accelerated flick
+    lines.clamp(-MAX_REPORTS, MAX_REPORTS)
+}
+
 /// Lines to auto-scroll the viewport per frame while a selection drag is held past a pane edge,
 /// so the selection can extend beyond what was visible when the drag began (standard terminal
 /// behavior). Sign matches `PtyTerm::scroll`: + past the TOP edge (reveal older history), - past
@@ -847,7 +858,7 @@ mod tests {
     use super::{
         CmdState, ExitAction, Flags, OnExit, PtyTerm, REPAINT_COALESCE_WINDOW, SpawnOpts,
         cmd_from_exit, drag_autoscroll_lines, exit_action, on_exit_mode, resolve_cwd,
-        resolve_shell, sgr_mouse, snap_glyph, wheel_button, wheel_sgr,
+        resolve_shell, sgr_mouse, snap_glyph, wheel_button, wheel_report_lines, wheel_sgr,
     };
     use crate::config::Profile;
 
@@ -1064,6 +1075,18 @@ mod tests {
         assert_eq!(sgr_mouse(0, 0, 0, true), b"\x1b[<0;1;1M".to_vec());
         assert_eq!(sgr_mouse(2, 4, 9, false), b"\x1b[<2;5;10m".to_vec()); // right-button release
         assert_eq!(sgr_mouse(64, 2, 4, true), b"\x1b[<64;3;5M".to_vec()); // wheel up
+    }
+
+    #[test]
+    fn wheel_report_lines_clamps_bursts_but_keeps_a_normal_notch() {
+        // A normal notch passes through unchanged; an accelerated / high-res flick clamps to a
+        // small burst so a mouse-reporting TUI (alt-screen) doesn't over-scroll. Sign preserved.
+        assert_eq!(wheel_report_lines(1), 1); // one-line notch untouched
+        assert_eq!(wheel_report_lines(-1), -1);
+        assert_eq!(wheel_report_lines(3), 3); // right at the cap
+        assert_eq!(wheel_report_lines(40), 3); // big accelerated delta -> small burst
+        assert_eq!(wheel_report_lines(-40), -3);
+        assert_eq!(wheel_report_lines(0), 0); // no delta -> no report
     }
 
     #[test]
