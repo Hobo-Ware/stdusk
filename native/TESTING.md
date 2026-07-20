@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 1.0.2.
+Step-by-step verification for everything shipped through 1.0.5.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -314,3 +314,13 @@ HOME-override e2e); these are the interactions only a human can drive:
 | Scheme browser: apply the pack `tokyonight` row (not built-in `tokyo-night`) | The PACK palette applies (different cursor color from the built-in); restart keeps it |
 | Apply pack `onehalflight` | Pack palette (different brights/cursor from built-in `one-half-light`) |
 | Config `theme = "light"` | Still the built-in one-half-light (bare alias unchanged) |
+
+## 26. 1.0.5 - settings as a tab
+| Step | Expect |
+|---|---|
+| Open settings (gear or Cmd+,), change a field, click a terminal tab | Workspace comes back instantly - NO unsaved-changes prompt; a "Settings" tab now sits right-pinned next to the gear |
+| Click the Settings tab (or the gear) | Settings view returns with the edit still staged; the dirty state is untouched |
+| While settings is showing, press Cmd+2 / Ctrl+Tab | Switches to that terminal tab (view hides, session stays); other binds (Cmd+W, Cmd+D...) stay inert |
+| Hover the Settings tab, click its close-x (or footer Close / Esc) with unsaved edits | The Save / Discard / Keep-editing guard appears; any resolution removes the Settings tab |
+| Close settings with no edits | Settings tab disappears; the bar returns to gear-only |
+| Save in settings, switch away and back | Still on the settings view with a clean (non-dirty) state |

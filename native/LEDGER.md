@@ -547,6 +547,31 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.0.5 - "Settings is a tab": switch away without losing staged edits
+User ask: switching from settings to a terminal tab and back should not lose changes. The
+settings view now behaves like a TAB instead of a modal takeover.
+- **The Settings tab** (`tabs.rs`, `ui.rs`): while a settings session exists, a right-pinned
+  fixed-width tab (SETTINGS_TAB_W, id u64::MAX - outside NEXT_TAB_ID's range) sits left of the
+  gear: active-styled while the view shows, click re-activates, its close-x runs the guarded
+  close. `draw_tab` grew `idx: Option<usize>` - `None` drops the number prefix (no Cmd+N
+  targets the Settings tab). Fixed-mode terminal tabs subtract the settings tab from their
+  width budget; the right-pin spacer accounts for it (one row, no nested layouts - ui.md).
+- **Switching hides, never closes** (`main.rs`, `settings.rs`): `settings_open` now means
+  "the view is SHOWING"; new `Stdusk.settings_tab` = the session exists. Tab clicks, the Tabs
+  menu, Cmd+1..9 and Ctrl+Tab (whitelisted through `hard_modal` via `settings_only` - every
+  other bind still suppressed, it would mutate a hidden workspace) hide the view; the session
+  + staged `cfg` edits + the unsaved-changes `baseline` stay. Re-activating does NOT
+  re-snapshot the baseline (that would bless staged edits as clean); only a FRESH session
+  does. The gear / Cmd+, toggles the VIEW (hide, not close). Explicit close (footer Close,
+  Esc, the tab's x) keeps the Save/Discard/Keep-editing guard and ends the session. A sync
+  pull rebaselines hidden sessions too (`settings_tab`, not `settings_open`).
+- Keyboard-capture predicates unchanged and correct by construction: `pty_input_captured` /
+  `hard_modal` key on `settings_open` (the view showing), so a hidden session never eats keys.
+- Tests: `settings_tab_clicks_activate_switch_and_close` (headless real-frame: activate
+  click, terminal-tab click beside it, hover -> close-x with no activate double-fire) +
+  `unnumbered_tab_drops_the_prefix`; both screenshot harnesses re-verified (settings shot now
+  shows the Settings tab; the plain shot's bar is unchanged - no session, no tab).
+
 ## 1.0.4 - pack-variant shadowing fix
 The 1.0.3 dupe audit's known quirk, fixed: `by_name`'s built-in arms matched the normalized
 variant spellings (`tokyonight`, `onehalflight`), so clicking the PACK TokyoNight/OneHalfLight
