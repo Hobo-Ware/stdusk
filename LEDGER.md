@@ -495,7 +495,15 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   `Paste("")`; empty is filtered). Not fixable from `workspace.rs`/`ui.rs`; needs an egui-winit
   patch (surface an image/empty-paste event) or a raw-winit `KeyboardInput` hook in `main.rs`
   before egui-winit consumes the key. Tabby only manages Cmd+V because it's Electron/xterm.js with
-  a DOM `paste` event carrying image data. Use Ctrl+V (or right/middle-click) meanwhile.
+  a DOM `paste` event carrying image data.
+  **SOLVED (1.2.0, macOS):** a native NSEvent LOCAL monitor (`NSEvent::addLocalMonitorForEventsMatchingMask`,
+  mask `KeyDown`, via objc2 + block2) installed once in `Stdusk::new` sees the key event alongside
+  egui-winit. On Cmd+V (`modifierFlags` has Command + `charactersIgnoringModifiers == "v"`) over an
+  image-only clipboard (`arboard::get_image`, no usable text) it bumps an `Arc<AtomicUsize>` +
+  `request_repaint` and returns nil to SWALLOW the event; the frame loop drains the counter and
+  injects raw `^V` (0x16) to the focused pane (same ingestion path as Ctrl+V). Non-image Cmd+V is
+  returned unchanged, so egui's normal text paste is untouched. Pure decision `decide_cmd_v_image_paste`
+  is unit-tested; the live swallow+inject needs a real window. Skipped under `--screenshot`.
 
 ## Decisions log
 - Splits (M8) + scrollback search (M7) are v1 must-haves (user).
@@ -564,6 +572,33 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   guard (Save/Discard/Keep editing); close-busy-tab confirm (`procwatch::busy_child`, opt-out
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
+
+## 1.2.0 (in progress) - macOS window/lifecycle fixes (main.rs, tabs.rs)
+Four macOS window-behavior fixes, all objc2/objc2-app-kit (no new src modules; touched
+`main.rs` + `tabs.rs` for the tab-strip inset):
+- **Unified titlebar in window mode.** Window mode stacked the standard title bar ABOVE the tab
+  strip (double bar). `set_unified_titlebar(true)` now sets `titlebarAppearsTransparent`, adds
+  `NSWindowStyleMask::FullSizeContentView` (+ `titleVisibility = Hidden`) so the tab strip fills
+  the top row and the red/yellow/green buttons float over it. The tab strip
+  reserves `WINDOW_TRAFFIC_INSET` (78px) of leading space in window mode only (`tabs.rs` tab_bar,
+  gated on `config::is_window_mode`); dropdown mode gets no inset (screenshot-verified unchanged).
+  Applied/reset per-frame via a `titlebar_unified: Option<bool>` reconcile (like `window_top`), and
+  reset to `None` on a live mode switch. APIs: `NSWindow::{setTitlebarAppearsTransparent,
+  setStyleMask, styleMask, setTitleVisibility}`. `movableByWindowBackground` was deliberately NOT
+  set: winit 0.30 doesn't override `mouseDownCanMoveWindow`, so it could hijack egui mouse-down
+  (breaking text selection / tab clicks) - drag-by-tab-bar dropped as too risky.
+- **Cmd+V image paste** (see the SOLVED note in Gotchas): NSEvent local KeyDown monitor swallows
+  Cmd+V over an image-only clipboard and injects `^V`.
+- **Quake hide leaves ZERO pixels.** The old hide parked the window 2px on-screen (a visible
+  sliver). `apply_visibility` now hides via native `NSWindow::orderOut:` (`set_native_hidden(true)`)
+  and shows via `makeKeyAndOrderFront:` - the "proper native hide" platform.md always earmarked as
+  the sliver's replacement. The hotkey thread's `request_repaint` + the 120ms hidden-frame tick
+  still drive the summon. NOTE: the App-Nap interaction the sliver guarded against needs live
+  re-summon verification (can't exercise it headless). Off macOS: still parks below-screen.
+- **Emoji/character picker no longer closes quake.** Hide-on-blur fired on winit `Focused(false)`,
+  which the emoji picker (Ctrl+Cmd+Space) trips even though it's a system panel that keeps the app
+  active. Hide is now additionally gated on `!app_is_active()` (`NSApplication::isActive` - still
+  true under the picker), so only a REAL app switch hides quake.
 
 ## 1.1.1 - Option+Enter inserts a newline instead of submitting
 `key_to_bytes` sent a bare CR for `Key::Enter` regardless of modifiers, so Option+Enter reached
