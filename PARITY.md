@@ -91,7 +91,8 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | `clear` (Cmd-K) | ✅ | wipes viewport + scrollback (`clear_all`) then Ctrl-L; palette "Clear Scrollback" drops history only |
 | Font zoom (`zoom-in/out/reset`) | ✅ | Cmd +/-/0 (runtime `zoom` multiplier) |
 | Copy-on-select | ✅ | `copy_on_select`; on selection finish, skips whitespace-only |
-| Middle-click paste | ✅ | `paste_on_middle_click` (default on, arboard clipboard read) |
+| Middle-click paste | ✅ | `paste_on_middle_click` (default on, arboard clipboard read); image-aware (see below) |
+| Image paste (screenshot -> Claude Code) | ✅* | Ctrl+V forwards `^V` (0x16) so an app that reads the clipboard on ^V (Claude Code) ingests the image - works today. Right-click "paste" / middle-click also send `^V` when the clipboard holds an image and no text. *Cmd+V for an image-only clipboard is NOT interceptable: egui-winit 0.35 (`lib.rs` ~1007-1015) folds Cmd+V into `Event::Paste`, reads clipboard TEXT only, emits nothing when empty, and swallows the key - no egui event fires. Fixing Cmd+V needs an egui-winit patch or a raw-winit key hook |
 | Copy-as-HTML (rich clipboard) | ⬜ | niche |
 | Right-click mode (menu vs paste vs clipboard) | ✅ | `terminal.right_click` (default menu); Tabby-exact 250ms tap-vs-hold rule, clipboard = copy-selection-else-paste |
 | Multiline-paste warning / paste protection | ✅ | `warn_on_multiline_paste`; modal w/ preview, suppressed on alt-screen (Tabby-exact) |
@@ -138,7 +139,10 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Feature | State | Notes |
 |---|---|---|
 | Top-edge drop, global hotkey, hide-on-blur, height % | ✅ | |
-| Accessory app (no Dock icon / tray, quake default) | ✅ | `quake.hide_from_dock`; ActivationPolicy::Accessory |
+| Quake shows on the active Space/desktop (Tabby's "on active space") | ✅ | `quake.follow_active_space` (default on, dropdown mode); NSWindow `collectionBehavior` = CanJoinAllSpaces \| FullScreenAuxiliary so summoning drops on the current desktop instead of yanking back to Desktop 1 |
+| Window mode (run as a normal resizable macOS window) | ✅ | `quake.mode = "window"` (default `"dropdown"`): decorated + resizable, always Regular activation, no global hotkey, never auto-hides, close = quit; geometry remembered in `session.toml`. Beyond Tabby |
+| Single instance (second launch opens a tab, no new window) | ✅ | Unix-socket lock (`instance.rs`); secondary sends `new-tab` + exits(0). Dock-icon reopen not wired (no clean winit hook) |
+| Accessory app (no Dock icon / tray, quake default) | ✅ | `quake.hide_from_dock`; ActivationPolicy::Accessory (dropdown mode) |
 | Dock icon + menu bar only while visible (opt-in) | ✅ | `quake.dock_when_visible`; runtime activation-policy flip |
 | Menu-bar (tray) icon + Show/Hide/Quit menu | ✅ | `quake.menu_bar_icon`; tray-icon crate (Tabby `hideTray` parity) |
 | Light/dark/tinted-adaptive app icon (macOS 26) | ⬜ | needs Icon Composer `.icon`; static .icns now |
@@ -148,7 +152,7 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Drop animation | ⬜ | deferred polish |
 | Tab-bar location (top/bottom/left/right) | ⬜ | top only |
 | Flex/fixed tab width | ⬜ | |
-| Native/thin/full window frame | 🟡 | borderless only |
+| Native/thin/full window frame | 🟡 | borderless in dropdown mode; native decorated frame in `quake.mode = "window"` |
 | Show tabs in fullscreen, hide index/close/options-button | ⬜ | cosmetic toggles |
 
 ## Settings GUI (M11)
@@ -162,7 +166,7 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 ## Session / lifecycle
 | Feature | State | Notes |
 |---|---|---|
-| Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ✅ | `[session] restore`; cwd/title/color, saved every 3s |
+| Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ✅ | `[session] restore`; cwd/title/color, saved every 3s; also window geometry in `quake.mode = "window"` |
 | Behavior on session end (keep/close/restart) | ✅ | `terminal.on_exit` (0.3.0): close (default) / keep with overlay / restart + crash-loop guard |
 | Dynamic title from shell (OSC 0/2) + disable toggle | ✅ | `dynamic_title` (0.3.0); 1.0.2 moved parsing to the Term's Title events, adding the xterm title STACK (`CSI 22/23 t`) - a popped title restores instead of sticking |
 | Save/load terminal output & state (debug) | ⛔ | niche debug tooling |

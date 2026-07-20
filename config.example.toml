@@ -14,12 +14,18 @@ theme_dark = "one-half-dark"    # theme when the OS is in dark mode
 tab_width = "fixed"       # tab sizing: "fixed" (equal widths, Tabby-like) | "dynamic" (fit the title)
 
 [quake]
-hotkey = "Ctrl+Grave"     # e.g. "F13", "Cmd+Grave", "F12", "Ctrl+Shift+T"
-height_pct = 0.5          # fraction of screen height when dropped down
-hide_on_focus_loss = true
-hide_from_dock = true     # accessory app: no Dock icon / app-switcher entry, just drops from the top
+mode = "dropdown"         # "dropdown" (drops from the top on the hotkey) | "window" (a normal
+                          # resizable macOS window). Window mode DISABLES the global hotkey and
+                          # ignores every focus/Dock option below - it's always a Dock app whose
+                          # close button quits. The window chrome (title bar) applies on restart.
+hotkey = "Ctrl+Grave"     # e.g. "F13", "Cmd+Grave", "F12", "Ctrl+Shift+T" (dropdown mode only)
+height_pct = 0.5          # fraction of screen height when dropped down (dropdown mode only)
+hide_on_focus_loss = true # (dropdown mode only)
+follow_active_space = true # (macOS, dropdown mode only) drop onto whichever Space/desktop is active
+                          # when summoned instead of jumping back to its origin Space; false pins it
+hide_from_dock = true     # accessory app: no Dock icon / app-switcher entry, just drops from the top (dropdown mode only)
 menu_bar_icon = true      # show a menu-bar (status) icon with a Show/Hide + Quit menu
-dock_when_visible = false # (macOS) show a Dock icon + real menu bar while visible, hide when parked
+dock_when_visible = false # (macOS, dropdown mode only) show a Dock icon + real menu bar while visible, hide when parked
 
 [terminal]
 detect_progress = true    # scrape N% from output into the tab progress bar (Tabby-style)

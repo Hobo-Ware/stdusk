@@ -87,6 +87,18 @@ history. **Verify before building:** alacritty may already do this on keypress; 
 just an *opt-out* toggle. If not, add `terminal.scroll_on_input` and force `display_offset = 0` on the
 input path in `workspace.rs`. **Size: S.**
 
+### 8. Cmd+V image paste (screenshot -> Claude Code)
+**What:** make `Cmd+V` paste a clipboard image the way Tabby did, matching mac muscle memory.
+`Ctrl+V` already works (forwards `^V`, which Claude Code reads to ingest the clipboard image), and
+right/middle-click paste are image-aware - but `Cmd+V` on an image-only clipboard is currently a
+no-op. **Why it stalls:** egui-winit 0.35 (`lib.rs` ~1007-1015) folds `Cmd+V` into `Event::Paste`,
+reads clipboard TEXT only, emits nothing when the text is empty, and swallows the key - so no egui
+event fires and there's nothing to intercept from `workspace.rs`/`ui.rs`. **Fix paths:** (a) a
+raw-winit `WindowEvent::KeyboardInput` hook that sees `Cmd+V` before egui-winit and injects `^V`
+when `arboard::get_image()` is Some - but eframe's `run_native` exposes no per-event hook, so this
+needs leaving eframe's loop or a custom integration; or (b) patch/vendor egui-winit to emit an
+event on an empty/image paste. **Size: M** (blocked on the eframe/egui-winit seam). PARITY *Paste*.
+
 ---
 
 ## Future ideas
@@ -114,7 +126,9 @@ docs/chat keeps colors. **Risk/unknown:** `arboard` has no first-class HTML flav
 ### toggle-fullscreen
 Tabby binds `Ctrl+Cmd+F`. Listed ⬜ in PARITY *Tabs*. **Risk/unknown:** semantically odd for a quake
 drop-down and collides with the height-% / monitor-sizing model; only meaningful in normal-dock mode.
-Small in winit terms (`set_fullscreen`) but low value - park it.
+Small in winit terms (`set_fullscreen`) but low value - park it. **LE (1.0.9):** `quake.mode = "window"`
+now ships that normal-window mode, so fullscreen would finally be coherent there - revisit as a
+window-mode-only bind if asked.
 
 ### Pane/tab reshaping: explode/combine tabs, rearrange-panes label mode, drag-tab-into-split
 Already in PARITY / V1 P2. Power-user layout surgery (`explode-tab`, `combine-tabs`, `rearrange-panes`

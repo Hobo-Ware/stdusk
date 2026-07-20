@@ -480,6 +480,22 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   `full_name()` (and the handle's bytes + `.ttc` face index) are trustworthy - pick faces by
   name (`face_name_score`), and carry `font_index` into `egui::FontData.index`. Its `matching`
   module is private, so the scoring is ours.
+- **Image paste = forward `^V` (0x16), don't encode.** Claude Code (and iTerm-style image
+  ingestion) reads the SYSTEM clipboard itself when it receives the raw Ctrl+V byte, so pasting a
+  screenshot just needs `0x16` to reach the pty - no temp file, no PNG encoder. Ctrl+V already
+  does this (`key_to_bytes` -> `ctrl_letter(V)` = 22). The right-click "paste" / middle-click
+  paths in `workspace.rs` now also send `^V` when the clipboard holds an image and no text
+  (`read_clipboard_paste` via `arboard::get_image`; `resolve_clipboard_paste` is the tested pure
+  decision). arboard's `image-data` feature is already on via eframe's egui-winit; we now request
+  it explicitly on our own `arboard` dep so `get_image` doesn't rely on feature unification.
+- **Cmd+V for an image-only clipboard is UN-hookable in egui/eframe.** egui-winit 0.35 (`lib.rs`
+  ~1007-1015) folds Cmd+V into `Event::Paste` by reading clipboard TEXT only: empty text -> it
+  pushes NO event, and it always `return`s so the `Key` event is swallowed too. An image-only
+  clipboard on Cmd+V therefore produces zero egui events - nothing to intercept (not even
+  `Paste("")`; empty is filtered). Not fixable from `workspace.rs`/`ui.rs`; needs an egui-winit
+  patch (surface an image/empty-paste event) or a raw-winit `KeyboardInput` hook in `main.rs`
+  before egui-winit consumes the key. Tabby only manages Cmd+V because it's Electron/xterm.js with
+  a DOM `paste` event carrying image data. Use Ctrl+V (or right/middle-click) meanwhile.
 
 ## Decisions log
 - Splits (M8) + scrollback search (M7) are v1 must-haves (user).
@@ -1325,6 +1341,84 @@ builder agent; implementation + integration here.
   is structurally impossible. Tab-first interaction ordering kept (x registered after, wins its
   clicks); x id now seeds from the stable tab id. Chip tooltip was dropped (a hovered tab always
   shows the x instead of the chip).
+
+## Quake follows the active Space (1.1.0 quake/window batch, uncommitted)
+- **The reported bug**: in dropdown mode the quake window was pinned to Desktop 1 / Space 1, so
+  summoning it from another macOS Space yanked you back to Desktop 1 instead of dropping on the
+  current desktop. Fixed via NSWindow `collectionBehavior`.
+- **Config**: `[quake] follow_active_space: bool` (default **true** - the expected quake behavior,
+  and the fix). Round-trip + default tested; documented in config.example.toml. Pure decision fn
+  `config::wants_all_spaces(&cfg)` = `follow_active_space && dropdown mode` (false in window mode -
+  a normal app window keeps its origin-Space default), table-tested.
+- **collectionBehavior flags**: when `wants_all_spaces`, the window gets
+  `NSWindowCollectionBehavior::CanJoinAllSpaces | FullScreenAuxiliary`. CanJoinAllSpaces is the
+  actual fix (the window is present on whatever Space you summon it on). FullScreenAuxiliary lets
+  the overlay drop *over* another app's full-screen Space too (genuine quake behavior). Skipped
+  `.Stationary` - it's for wallpaper/Exposé-fixed windows, not an overlay, and adds nothing here.
+  When false, behavior is reset to `.Default` (pinned to origin Space).
+- **Getting the NSWindow**: no raw-window-handle plumbing needed - the existing accessory-policy
+  code already talks to `NSApplication` via objc2. `set_space_behavior(all)` grabs
+  `NSApplication::sharedApplication(mtm).windows()` and calls `setCollectionBehavior` on each (the
+  app has one viewport). Needed the `NSWindow` feature added to the `objc2-app-kit` dep. `unsafe`
+  count stays zero (objc2 exposes these as safe fns).
+- **Live apply (both directions)**: reconciled per frame in `ui()` next to the WindowLevel/Dock
+  reconciles - `space_all: Option<bool>` tracks the last-applied value, so a settings toggle OR a
+  live dropdown<->window mode switch re-sends only on change. No restart hint needed (unlike the
+  title-bar chrome). Skipped in the screenshot harness (window management is).
+- **Settings UI**: "Follow active desktop" toggle in Quake > Focus & Dock, greyed out
+  (`add_enabled_ui`) in window mode like the other quake-only rows. Keyboard-operable + focus ring
+  come free from `ui::toggle_switch`. Screenshot-verified via `--screenshot-settings
+  STDUSK_SHOT_SECTION=quake`.
+- **Tests**: +2 (`follow_active_space_default_and_round_trips`, `wants_all_spaces_only_in_dropdown_
+  with_the_flag_on`); default assertion extended. Suite 241 -> 243 green; clippy -D + fmt clean.
+  The objc call itself is thin/isolated + not unit-tested (untestable).
+
+## Window mode + single-instance (1.0.9, uncommitted)
+- **`[quake] mode`** = `"dropdown"` (default - byte-for-byte the pre-existing quake behavior) |
+  `"window"` (a conventional resizable macOS window). The mode-dependent decisions are pure fns in
+  `config.rs` (`window_mode`, `is_window_mode`, `should_register_hotkey`, `forces_quake_geometry`,
+  `hides_on_blur`, `activation_is_regular`), table-tested to prove dropdown answers exactly as
+  before and window flips. The render loop stays dumb - it just branches on them.
+- **Window mode behavior**: decorated (`with_decorations(true)`) + resizable + no forced `[0,0]`
+  position / monitor-width sizing; activation policy ALWAYS Regular (Dock icon + app-switcher),
+  ignoring `hide_from_dock`/`dock_when_visible`; never auto-hides (ignores `hide_on_focus_loss` +
+  `unfocused_opacity`); no always-on-top. The launch `ActivationPolicy::Accessory` hook is gated
+  off in window mode.
+- **PRODUCT DECISION 1 - window mode disables the global hotkey.** A normal app window shouldn't
+  hijack a system-wide chord, so `[quake] hotkey` is NOT registered in window mode (skipped in
+  `new()`; unregistered live when switching to window, re-registered when switching back). The
+  in-app `[hotkeys]` binds (Cmd+T/W/...) are unaffected.
+- **PRODUCT DECISION 2 - in window mode, close = quit.** The red close button / last-window-close
+  quits via winit's default `CloseRequested` handling (no interception added - the tray/palette
+  Quit already relies on `ViewportCommand::Close`, so this is consistent). Dropdown mode is
+  unchanged (borderless, no reachable close button; you hide it with the hotkey).
+- **Geometry persistence**: window mode remembers outer position + inner size in `session.toml`
+  (`SavedSession.window: Option<WindowGeom>`, f32 - dropped `Eq`, kept `PartialEq`), restored via
+  the `ViewportBuilder` at launch. Dropdown never writes it (it uses the fixed top-edge geometry).
+  **Limitation**: capture rides the existing 3s session-save throttle, so it persists only when
+  `[session] restore` is on (default true); with restore off, window mode falls back to the OS's
+  default placement.
+- **Live apply vs restart**: hotkey (un)register, activation policy (via `sync_dock`), window
+  level, and stopping the quake geometry forcing all apply live on a settings mode switch
+  (`apply_quake_mode`). `set_decorations`/`Resizable` are sent live too but winit on macOS may not
+  reliably toggle the title bar at runtime, so the settings row hints "chrome applies on restart"
+  (same precedent as other window-chrome hints).
+- **Settings UI**: a MODE chip row (Dropdown | Window) at the top of the Quake section; window
+  mode greys out (`add_enabled_ui`) the quake-only rows - hotkey, height, hide-on-focus-loss,
+  hide-from-dock, dock-when-visible, and (in Appearance) unfocused-opacity - so the UI can't lie.
+  Menu-bar icon stays enabled (its Show brings a window-mode window to front).
+- **Single-instance (both modes)**: `instance.rs`. Only one stdusk runs; a second launch connects
+  to the primary over a Unix socket (`$XDG_RUNTIME_DIR/stdusk.sock`, else
+  `~/.config/stdusk/instance.sock`), sends `new-tab`, and `exit(0)`s without a window. The primary
+  binds the socket in `main()` (before the window) and spawns an accept thread that, per
+  connection, bumps an `AtomicUsize` + `request_repaint` - it never touches the pty lock. The UI
+  drains the counter each frame: surfaces the window (dropdown: drop down; window: `Focus`) and
+  opens a tab. Stale socket (crash) is detected by connect-fail and unlinked (`decide_startup`
+  pure + tested); the socket is removed on graceful exit. Skipped under `--screenshot*`.
+  **Dock-reopen limitation**: `open -a stdusk` on a running app just activates it (no new exec),
+  and winit/eframe 0.35 exposes no clean `applicationShouldHandleReopen` hook, so the Dock-icon
+  reopen path is NOT wired (would need raw objc) - the socket covers direct re-exec / duplicate
+  launches, which is the common case.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk

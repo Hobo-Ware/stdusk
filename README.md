@@ -36,7 +36,8 @@ Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk`
 - **Progress on tabs** - the crown jewel. apt, pip, npm, curl, your 3am migration script: if it prints `N%`, the tab wears a progress bar. You don't babysit it, you glance at it.
 - **Ambient CLI awareness** - got a `claude`, a `gemini`, a `codex` running somewhere in your seven tabs? Each tab tells you which, in its brand colors. Know which one is the one thinking.
 - **Real GUI tabs** - colored, renameable, reorderable, split-aware. Pixels, not ASCII art.
-- **Quake drop-down** - borderless, top-edge, global hotkey, hide-on-blur. There when you call, gone when you don't.
+- **Quake drop-down** - borderless, top-edge, global hotkey, hide-on-blur. There when you call, gone when you don't. Or flip `mode = "window"` and run it as a plain resizable macOS window instead.
+- **One instance** - launch it again and you get a fresh tab in the running window, not a second app.
 - **Splits** - panes, drag to resize, a tiny live map of the layout drawn right on the tab.
 - **Scrollback search** - Cmd+F, with regex, case, and whole-word toggles.
 - **Command palette** - Cmd+Shift+P, fuzzy-searched, every action two keystrokes away.
@@ -44,6 +45,8 @@ Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk`
 - **Profiles** - named launchers with their own shell, args, cwd, env, and tab color. One right-click away.
 - **Settings sync** - push your config to your own private git repo and pull it anywhere. Your credentials, your repo, no OAuth middleman.
 - **Supreme defaults** - truecolor, mouse selection and copy, cwd-aware new tabs, bracketed paste, OSC 52 clipboard, shell-integration exit signals, cursor styles, ligatures, session restore.
+- **Image paste** - `Ctrl+V` forwards `^V` so a tool that reads the clipboard on it (e.g. Claude Code) ingests a copied screenshot; right/middle-click paste do too when the clipboard holds an image.
+- **Window or quake** - runs as the signature top-edge drop-down, or set `[quake] mode = "window"` for a regular resizable macOS window (in the Dock, no global hotkey). Single instance either way - a second launch focuses the running one and opens a new tab.
 
 ## The name
 
