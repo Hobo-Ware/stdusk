@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="native/assets/stdusk-logo.png" alt="stdusk" width="132" height="132">
+  <img src="assets/stdusk-logo.png" alt="stdusk" width="132" height="132">
 </p>
 
 <h1 align="center">stdusk</h1>
@@ -51,20 +51,19 @@ Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk`
 
 ## Configure
 
-Hit **Cmd+,** for the settings view, or edit `~/.config/stdusk/config.toml` by hand - same thing, the GUI just saves it for you. Missing file, sane defaults. See [`native/config.example.toml`](./native/config.example.toml) for the full set (theme, opacity, hotkey, cursor, bell, profiles, progress detection, CLI badges, sync).
+Hit **Cmd+,** for the settings view, or edit `~/.config/stdusk/config.toml` by hand - same thing, the GUI just saves it for you. Missing file, sane defaults. See [`config.example.toml`](./config.example.toml) for the full set (theme, opacity, hotkey, cursor, bell, profiles, progress detection, CLI badges, sync).
 
 ## Build from source
 
 ```sh
-cd native
 cargo run
 ```
 
-Rust 2024 edition. Architecture and roadmap in [`native/PLAN.md`](./native/PLAN.md); current state in [`native/LEDGER.md`](./native/LEDGER.md).
+Rust 2024 edition. Architecture and roadmap in [`PLAN.md`](./PLAN.md); current state in [`LEDGER.md`](./LEDGER.md).
 
 ## Lineage
 
-stdusk is a hard fork of [Tabby](https://github.com/Eugeny/tabby) (MIT). The Rust rewrite lives in `native/` on the default `main` branch; the original Electron Tabby source stays in-tree (the `tabby-*` dirs) and upstream at [Eugeny/tabby](https://github.com/Eugeny/tabby) as a reference. Credit where it's due - Tabby nailed the vibe, we chased the efficiency.
+stdusk began as a hard fork of [Tabby](https://github.com/Eugeny/tabby) (MIT) and is now a full Rust rewrite - this repo is the native app at its root. The original Electron Tabby source has been removed from the tree; refer to upstream [Eugeny/tabby](https://github.com/Eugeny/tabby) for it. Credit where it's due - Tabby nailed the vibe, we chased the efficiency.
 
 ## License
 

@@ -33,16 +33,14 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native
+          workspaces: .
 
       - name: Build (both arches)
-        working-directory: native
         run: |
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
 
       - name: Assemble stdusk.app (universal)
-        working-directory: native
         run: |
           VERSION="${{ steps.v.outputs.version }}"
           mkdir -p dist
@@ -61,7 +59,6 @@ jobs:
       # ships ad-hoc signed exactly as before and the cask strips quarantine.
       - name: Sign & notarize (optional)
         id: sign
-        working-directory: native
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -72,7 +69,7 @@ jobs:
           if [ -z "$MACOS_CERT_P12" ] || [ -z "$MACOS_CERT_PASSWORD" ] || \
              [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ] || [ -z "$NOTARY_KEY" ]; then
             echo "Signing secrets not configured - shipping ad-hoc signed; the cask keeps its" \
-                 "quarantine-strip postflight. Setup: native/packaging/README.md."
+                 "quarantine-strip postflight. Setup: packaging/README.md."
             echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -108,7 +105,6 @@ jobs:
 
       - name: Package zip
         id: pkg
-        working-directory: native
         run: |
           VERSION="${{ steps.v.outputs.version }}"
           # Zip via ditto so the bundle (symlinks, resource forks, the notarization staple)
@@ -120,7 +116,6 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Generate Homebrew cask
-        working-directory: native
         run: |
           VERSION="${{ steps.v.outputs.version }}"
           SHA="${{ steps.pkg.outputs.sha }}"
@@ -161,7 +156,6 @@ jobs:
           cat dist/stdusk.rb
 
       - name: Publish release
-        working-directory: native
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

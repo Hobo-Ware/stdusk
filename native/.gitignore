@@ -1,8 +1,0 @@
-# Rust build artifacts
-/target
-
-# scratch build logs
-/build.log
-
-# scratch logs
-*.log

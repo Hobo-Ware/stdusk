@@ -3,13 +3,9 @@ name: native (rust)
 on:
   push:
     branches: [main]
-    paths: ['native/**', '.github/workflows/native.yml']
+    paths: ['src/**', 'Cargo.toml', 'Cargo.lock', 'build.rs', 'assets/**', 'packaging/**', '.github/workflows/native.yml']
   pull_request:
-    paths: ['native/**', '.github/workflows/native.yml']
-
-defaults:
-  run:
-    working-directory: native
+    paths: ['src/**', 'Cargo.toml', 'Cargo.lock', 'build.rs', 'assets/**', 'packaging/**', '.github/workflows/native.yml']
 
 jobs:
   check:
@@ -21,7 +17,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native
+          workspaces: .
       - name: fmt
         run: cargo fmt --check
       - name: clippy

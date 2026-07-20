@@ -1,7 +1,0 @@
-div(
-    [style.background]='model',
-    ngx-colors-trigger,
-    [(ngModel)]='model',
-    (ngModelChange)='modelChange.emit($event)',
-    [ngbTooltip]='hint'
-) {{ title }}
