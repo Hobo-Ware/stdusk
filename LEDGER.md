@@ -1436,6 +1436,61 @@ builder agent; implementation + integration here.
   reopen path is NOT wired (would need raw objc) - the socket covers direct re-exec / duplicate
   launches, which is the common case.
 
+## Claude Code auto-resume (uncommitted)
+- **What**: when you quit with Claude running in one or more tabs, next launch reattaches each of
+  those tabs to its prior conversation. Scope: CLAUDE tabs only (the `procwatch` CLI detection
+  already tells us which tabs run claude). QoL on top of session restore.
+- **Confirmed real CLI flags** (`claude --help` on this machine): `-r, --resume [value]` "Resume a
+  conversation by session ID, or open interactive picker"; `-c, --continue` "Continue the most
+  recent conversation in the current directory". We use `--resume <uuid>`.
+- **Real `~/.claude` format**: sessions live at `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`.
+  The filename stem IS the session uuid (verified: matches the in-record `sessionId`). CWD encoding
+  is **every non-alphanumeric char -> `-`** (slash, dot AND underscore all collapse; verified 46/46
+  clean dirs, the 3 misses are cd/worktree artifacts). The transcript also stores a name in two
+  record types (`custom-title`/`customTitle` = user `/rename`; `ai-title`/`aiTitle` = auto summary),
+  but we do NOT depend on those - see below.
+- **TIER SHIPPED: argv-parse is the PRIMARY mechanism** (title-independent, per-process, exact).
+  Observed running procs on this machine: `claude --permission-mode bypassPermissions --resume
+  <uuid>`, one per session; a fresh session is bare `claude` (no `--resume`). So the session id is
+  simply read from the process's own argv - no jsonl name-matching, no OSC-title fragility, and it
+  is naturally collision-free for parallel tabs. `procwatch::parse_resume_id(cmd)` (pure, handles
+  `--resume <uuid>`, `--resume=<uuid>`, `-r <uuid>`, with a strict 8-4-4-4-12 hex UUID guard so a
+  bare `--resume` picker / search-term isn't mistaken for an id) + `procwatch::claude_resume_id`
+  (walks the shell's descendants, returns the claude proc's id). Captured into `Tab.claude_resume`
+  on the existing ~1 Hz CLI scan and persisted at save as `SavedTab.claude:
+  Option<ClaudeState{resume_id}>` (presence = was a claude tab).
+- **Restore decision** - pure `session::resume_commands(&[ResumeTab{cwd,resume_id}], projects_dir)
+  -> Vec<String>`:
+  1. each tab's own captured `resume_id` -> `claude --resume <uuid>` (deduped: an id already
+     claimed by an earlier tab can't be resumed twice).
+  2. fallback when a tab has NO captured id (fresh bare claude): `session::most_recent_session`
+     (newest `*.jsonl` mtime in the cwd's project dir), but ONLY when that cwd holds exactly one
+     claude tab - otherwise we can't tell which tab owns which session, so we don't guess.
+  3. else bare `claude`. **Never `--continue`** (it'd collide across same-cwd tabs).
+  **Parallel same-cwd correctness**: two claude tabs in one project each carry their own argv id,
+  so they resume their two distinct sessions - the exact case a cwd-based `--continue` gets wrong.
+  All branches table-tested against a synthetic temp projects dir (+ argv-parse unit tests in
+  `procwatch`).
+- **Injection timing**: send-on-spawn. Right after `spawn_tab`, write `"<cmd>\r"` into the pane's
+  pty via the existing `PtyTerm::send` (the writer lock, grab-copy-drop). The shell buffers stdin,
+  so the command lands at its first interactive prompt - no dependency on OSC 133 shell-integration
+  being enabled, and no reader->UI prompt-mark signalling to add. `\r` = Enter (bare CR submits;
+  matches `ui::key_to_bytes`). Chose robust-and-simple over the prompt-mark variant.
+- **No new deps**: argv comes from the sysinfo table already snapshotted for the CLI badge; the
+  fallback only reads dir mtimes (no jsonl parsing needed anymore).
+- **Config**: `[session] resume_claude: bool` default **true**, but only acts inside the existing
+  `restore && !screenshot` block - meaningless without tab restore. Settings > Session toggle
+  ("Resume Claude sessions"), greyed via `add_enabled_ui(restore)`; screenshot-verified
+  (`STDUSK_SHOT_SECTION=session`). Documented in config.example.toml.
+- **Safety**: never injects under `--screenshot`/`--screenshot-settings` (guarded by the restore
+  block, which is `screenshot.is_none()`); only touches claude tabs; id comes from the process
+  argv, never from a manual stdusk tab rename.
+- **Files**: `session.rs` (`ClaudeState`/`ResumeTab` + `resume_commands`/`most_recent_session`/
+  `encode_cwd` + tests), `procwatch.rs` (`parse_resume_id`/`claude_resume_id`/`looks_like_uuid` +
+  tests), `tabs.rs` (`Tab.claude_resume` field + inits), `main.rs` (capture in scan, save the
+  field, inject on restore), `config.rs` (`resume_claude` + default assert), `settings.rs`
+  (toggle), `config.example.toml`, `PARITY.md`. Version NOT bumped, NOT committed.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
