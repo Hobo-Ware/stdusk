@@ -565,6 +565,22 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.1.1 - Option+Enter inserts a newline instead of submitting
+`key_to_bytes` sent a bare CR for `Key::Enter` regardless of modifiers, so Option+Enter reached
+the app as a plain Enter and tools like Claude Code submitted instead of inserting a newline
+(no multiline prompts). Added `Key::Enter if mods.alt => ESC+CR` (meta+Return) - unconditional
+on alt since Enter has no composed glyph; Cmd+Alt+Enter still returns None (pane-maximize
+binding) via the earlier arm. Tested both. 243 tests.
+
+## 1.1.0 - window mode, single instance, quake-follows-Space, image paste
+Shipped together (full details in the batch sections lower in this file: "Window mode +
+single-instance" and "Quake follows the active Space", plus the image-paste PARITY row):
+`[quake] mode = "dropdown"|"window"` (window = decorated/movable/Dock app, hotkey off, close
+quits, restores geometry); single-instance Unix-socket guard (second launch focuses + opens a
+tab); `[quake] follow_active_space` (default true, CanJoinAllSpaces so the drop lands on the
+current desktop); and image/screenshot paste via `^V` on right/middle-click (Ctrl+V already
+worked; Cmd+V blocked at the egui-winit seam, tracked in FUTURE). 3 logical commits, 243 tests.
+
 ## 1.0.9 - delete the Tabby codebase, promote the Rust crate to the repo root
 The Electron Tabby source is gone and native/ is now the whole repo (Cargo.toml + src/ at
 the top level). Before deletion, a read-only feature pass mined the Tabby source one last time

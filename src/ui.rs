@@ -127,6 +127,10 @@ pub(crate) fn key_to_bytes(
         }
         // Cmd+Shift+arrows are app tab bindings (move tab) - don't forward either.
         Key::ArrowLeft | Key::ArrowRight if mods.command && mods.shift => return None,
+        // Option+Enter sends meta+Return (ESC+CR); apps like Claude Code read this as "insert
+        // newline" vs a bare CR "submit". Enter has no composed glyph, so this is unconditional
+        // on alt (not gated on alt_is_meta). Cmd+Alt+Enter already returned None above.
+        Key::Enter if mods.alt => b"\x1b\r".to_vec(),
         Key::Enter => vec![b'\r'],
         Key::Backspace if mods.alt => b"\x1b\x7f".to_vec(), // delete previous word
         Key::Backspace if mods.command => vec![0x15],       // Ctrl-U: delete to line start
@@ -1790,6 +1794,13 @@ mod tests {
         assert_eq!(key_to_bytes(Key::C, mods(true, false, false), false), Some(vec![3])); // Ctrl-C SIGINT
         assert_eq!(key_to_bytes(Key::Enter, mods(true, false, false), false), None); // Ctrl+non-letter
         assert_eq!(key_to_bytes(Key::F5, mods(false, false, false), false), None); // unmapped
+        // Option+Enter -> meta+Return (ESC+CR): apps read it as "insert newline", not "submit".
+        assert_eq!(
+            key_to_bytes(Key::Enter, mods(false, true, false), false),
+            Some(vec![0x1b, b'\r'])
+        );
+        // Cmd+Alt+Enter stays an app pane binding (maximize), not forwarded.
+        assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true), false), None);
     }
 
     #[test]
