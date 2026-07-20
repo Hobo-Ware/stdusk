@@ -105,6 +105,7 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Feature | State | Notes |
 |---|---|---|
 | Wheel scroll + scrollbar | ✅ | |
+| Wheel -> SGR mouse reports (alt-screen TUIs) | ✅ | wheel forwarded as SGR 1006 when the app enables mouse reporting; report count clamped (`wheel_report_lines`, cap 3) so an accelerated frame doesn't over-scroll (Claude Code fullscreen). Local scroll stays uncapped |
 | Scroll hotkeys | ✅ | Shift+PageUp/Down (page) + Shift+Home/End (top/bottom) + Ctrl+Shift+Up/Down (line, Tabby's default bind) |
 
 ## Links

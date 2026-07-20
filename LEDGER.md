@@ -395,6 +395,15 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
 - Icon glyphs optically centered with a +1px y nudge (Phosphor ink sits high in the line box).
 
 ## Gotchas / facts learned (don't rediscover these)
+- **Wheel-report count must be CLAMPED, local scroll must not.** The workspace wheel handler
+  turns `smooth_scroll_delta.y` into a line count `lines`. `term.scroll(lines)` (LOCAL scrollback)
+  is self-limiting - alacritty caps the scroll to available history, so a big accelerated /
+  high-res-trackpad flick is harmless. The SGR mouse-report branch (`wheel_sgr`, 1.3.0) has NO
+  backstop: every report forwarded scrolls the app's TUI another notch, so forwarding all `lines`
+  over-scrolled Claude Code's alt-screen UI ("VERY fast"). Fix: the report branch sends
+  `wheel_report_lines(lines)` = `lines.clamp(-3, 3)` so a normal notch passes through but an
+  accelerated frame caps to a physical-wheel-sized burst. Do NOT clamp the local `term.scroll`
+  path or alt-scroll (arrows) - those feel right as-is. Pure test: `wheel_report_lines_*`.
 - **Design system in `ui.rs`**: surfaces/inputs/buttons come from shared primitives -
   `overlay_frame()`, `text_field()`, `action_button()`, `icon_button`/`icon_toggle`,
   `color_swatch`, `style_menu`. Never hand-roll `Frame`/`TextEdit`/`Button` styling; two call
@@ -572,6 +581,20 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   guard (Save/Discard/Keep editing); close-busy-tab confirm (`procwatch::busy_child`, opt-out
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
+
+## 1.4.0 - restore splits, graceful Claude resume, scroll speed, window-mode polish
+Bundled batch (details in the sections below / agent notes lower in this file):
+- **Split restore**: SavedTab gains an optional pane tree (serde-default; old sessions load as
+  one pane); splits come back on reopen, each leaf respawned in its cwd.
+- **Claude resume degrades gracefully**: `claude --resume <id>` is CWD-SCOPED (not global), so a
+  moved repo broke resume. `locate_session` resumes in-cwd, else `cd`s to the session's original
+  cwd (read from the jsonl) when the file is found under another project dir, else injects a
+  "could not resume ... starting fresh" notice + bare claude. No more raw error in the pane.
+- **Fullscreen scroll speed**: the SGR wheel-report branch forwarded the raw accelerated line
+  count 1:1; clamped to <=3 reports/frame (local scroll self-limits, hence felt fine).
+- **Window-mode traffic-light centering**: WINDOW_TAB_H_EXTRA (10px, macOS) grows + centers the
+  tab strip in window mode only; dropdown unchanged.
+270 tests. (§ key hotkey registration still lib-blocked - separate follow-up.)
 
 ## 1.3.2 - HOTFIX: quake never reshowed after hide
 Regression from 1.3.0's sliver fix: hide switched to native `orderOut:`, which fully removes
@@ -1547,6 +1570,37 @@ builder agent; implementation + integration here.
   tests), `tabs.rs` (`Tab.claude_resume` field + inits), `main.rs` (capture in scan, save the
   field, inject on restore), `config.rs` (`resume_claude` + default assert), `settings.rs`
   (toggle), `config.example.toml`, `PARITY.md`. Version NOT bumped, NOT committed.
+
+## Claude auto-resume hardening + split restore + window-mode tab centering (uncommitted)
+- **GOTCHA (verified on this machine, contradicts an easy assumption): `claude --resume <uuid>` is
+  CWD-SCOPED, not a global by-id lookup.** Resuming the same uuid from `/tmp` errors `No conversation
+  found with session ID: <uuid>`; from the transcript's original cwd it resumes fine. So a MOVED repo
+  (session jsonl under the OLD `~/.claude/projects/<encoded-OLD-cwd>/`) can't be resumed by id from
+  the new cwd - that was the "ugly claude error on some sessions" bug. The transcript stores the
+  original cwd on every message line (`"cwd":"..."`), and `encode_cwd(that) == the dir name`, so we
+  can `cd` back and resume there.
+- **Issue A fix (graceful + smart scan)**: `session::resume_commands` now VERIFIES the transcript
+  exists before emitting a resume. Pure resolver `locate_session(id, cwd, projects_dir) -> Resume`:
+  `InCwd` (in the tab's cwd dir -> `claude --resume <id>`), `Moved(dir)` (found by smart-scanning all
+  `projects/*/` -> `cd '<orig-cwd-from-jsonl>' && claude --resume <id>`, when that cwd still exists),
+  `Missing` (nowhere -> inject a `# stdusk: could not resume ... - starting fresh` comment line then
+  bare `claude`, never the ugly error). `session_cwd()` reads the orig cwd from the jsonl. Table-
+  tested (in-cwd / moved / missing). The most-recent-mtime fallback ids are always InCwd, so no notice.
+- **Issue B fix (split restore)**: `SavedTab.pane: Option<SavedPane>` persists the whole pane tree
+  (`Leaf{cwd,claude}` | `Split{dir,ratio,a,b}`), serde-default so old session files still load as a
+  single pane. `SavedPane::from_tree`/`rebuild`/`flat_leaves` are generic + pure (round-trip tested
+  with `T`=cwd through TOML - the `toml` crate DOES handle the externally-tagged nested enum). Save
+  builds the tree tagging each leaf claude via a `procwatch::snapshot(&self.sys)` reuse; restore
+  spawns one shell per leaf (`tabs::spawn_saved_tab`) and injects per-leaf resume by aligning
+  `flat_leaves()` with the rebuilt tree's `leaf_paths()` (both A-before-B). Per-leaf title NOT stored
+  (an OSC title churns every command and would defeat the skip-identical-write guard).
+- **Issue C fix (window-mode traffic-light centering)**: `ui::WINDOW_TAB_H_EXTRA` (10px on macOS,
+  0 elsewhere) grows the tab strip ONLY in window mode and the tab row is centered (margins 8/8);
+  dropdown stays byte-for-byte (`TAB_H+6`, top 6 / bottom 0). Screenshot-verified dropdown unchanged;
+  the OS-drawn traffic lights don't render in the headless capture, so the extra is eyeball-tunable.
+- **Files**: `session.rs`, `main.rs` (restore + save), `tabs.rs` (`spawn_saved_tab`/`spawn_saved_tree`
+  + strip height), `pane.rs` (untouched - reused), `ui.rs` (`WINDOW_TAB_H_EXTRA`). 270 tests green.
+  Version NOT bumped, NOT committed.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
