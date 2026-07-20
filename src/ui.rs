@@ -1198,6 +1198,14 @@ fn paint_cli_chip(p: &egui::Painter, rect: egui::Rect, cli: crate::procwatch::Cl
 
 /// Tab geometry: shared with the tab bar so the row height / spacer math can't rot.
 pub(crate) const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (flush underline)
+/// Extra tab-strip height in macOS window mode so the OS traffic-light cluster (pinned near the
+/// window top over the `FullSizeContentView` titlebar) centers against the tab row. Zero in
+/// dropdown mode and off macOS, so those strips are unchanged. Tunable if the buttons still look
+/// off-centre (headless capture can't render the OS-drawn lights, so this is eyeball-calibrated).
+#[cfg(target_os = "macos")]
+pub(crate) const WINDOW_TAB_H_EXTRA: f32 = 10.0;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const WINDOW_TAB_H_EXTRA: f32 = 0.0;
 pub(crate) const TAB_FIXED_W: f32 = 200.0; // fixed-mode standard width (Tabby-like)
 pub(crate) const SETTINGS_TAB_W: f32 = 110.0; // right-pinned Settings tab (fixed, spacer math)
 const TAB_MIN_W: f32 = 60.0; // fixed-mode floor when the bar overflows

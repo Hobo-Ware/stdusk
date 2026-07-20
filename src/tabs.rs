@@ -636,23 +636,41 @@ impl Stdusk {
         let mut action: Option<TabAction> = None;
         // Rebuilt every frame from the Color menu's hovered swatch (None once the hover ends).
         let mut color_preview: Option<(u64, Option<egui::Color32>)> = None;
+        let window_mode = crate::config::is_window_mode(&self.cfg);
+        // Window mode (macOS): grow the strip so the OS traffic-light cluster - pinned near the
+        // window top over the `FullSizeContentView` titlebar - has room, and center the tab row in
+        // the taller strip so it lines up with the buttons. Zero elsewhere (dropdown untouched).
+        let extra_h = if window_mode { ui::WINDOW_TAB_H_EXTRA } else { 0.0 };
+        // Center the TAB_H-tall row when there's extra height; otherwise keep the flush-bottom
+        // margins (top 6 / bottom 0) exactly, so dropdown mode is byte-for-byte unchanged.
+        let (top_margin, bottom_margin) = if extra_h > 0.0 {
+            let pad = f32::midpoint(6.0, extra_h).round() as i8;
+            (pad, (6.0 + extra_h).round() as i8 - pad)
+        } else {
+            (6, 0)
+        };
         let bar = egui::Panel::top("tabbar")
             // Exact height: the panel's own estimate paints its fill/clip at margin +
             // interact_size (24px) while the content is 40px tall - the fill stopping short
             // was the "dead band" between the tabs and the terminal. Pinning the height makes
             // fill, clip, and content agree, so the tabs (and their colored underlines, drawn
             // flush at the tab bottom) reach the strip's true bottom edge.
-            .exact_size(ui::TAB_H + 6.0)
+            .exact_size(ui::TAB_H + 6.0 + extra_h)
             .frame(
                 egui::Frame::new()
                     // Distinct darker strip with rounded top corners, so the bar reads
                     // separately from the terminal body.
                     .fill(tint(colors::titlebar(), opacity))
                     .corner_radius(egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
-                    // No bottom margin: tabs fill the row height, so their bottom edge (and the
-                    // colored underline) sits flush against the terminal area (Tabby-style)
-                    // instead of floating above a strip of dead bar.
-                    .inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 0 }),
+                    // No bottom margin (dropdown): tabs fill the row height, so their bottom edge
+                    // (and the colored underline) sits flush against the terminal area (Tabby-
+                    // style). Window mode splits the extra height above/below to center the row.
+                    .inner_margin(egui::Margin {
+                        left: 8,
+                        right: 8,
+                        top: top_margin,
+                        bottom: bottom_margin,
+                    }),
             )
             .show(ui, |ui| {
                 // ONE left-to-right, center-aligned row for every control (tabs + icons). Nesting
@@ -666,7 +684,7 @@ impl Stdusk {
                     // traffic-light buttons, which float over the unified titlebar. Dropdown
                     // mode is borderless - no inset. (Sampled before the fixed-tab-width math
                     // below, which reads the now-reduced available width.)
-                    if crate::config::is_window_mode(&self.cfg) {
+                    if window_mode {
                         ui.add_space(crate::WINDOW_TRAFFIC_INSET);
                     }
                     // Right-edge settings control: the gear (BAR_CONTROLS_W already reserves
