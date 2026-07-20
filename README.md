@@ -61,6 +61,65 @@ cargo run
 
 Rust 2024 edition. Architecture and roadmap in [`PLAN.md`](./PLAN.md); current state in [`LEDGER.md`](./LEDGER.md).
 
+## Local signing (until notarized releases land)
+
+Releases ship **ad-hoc signed** for now (Developer ID notarization is coming). An ad-hoc
+binary has no stable code identity, so macOS won't remember the permission grants you give it
+(Accessibility, Screen Recording, etc.) - you get re-prompted after upgrades. Signing the
+installed app with your own self-signed cert gives it a stable identity so those grants stick.
+This is local-only (the cert isn't trusted on anyone else's Mac) and needs **no Apple account**.
+
+One-time - create a code-signing cert and sign the app:
+
+```sh
+# 1. self-signed code-signing cert (OpenSSL 3; drop -legacy on LibreSSL)
+cat > /tmp/cs.cnf <<'CNF'
+[req]
+distinguished_name = dn
+x509_extensions = v3
+prompt = no
+[dn]
+CN = stdusk-local
+[v3]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+CNF
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config /tmp/cs.cnf -extensions v3 \
+  -keyout /tmp/stdusk-key.pem -out /tmp/stdusk-cert.pem
+openssl pkcs12 -export -legacy -name stdusk-local -passout pass:stdusklocal \
+  -inkey /tmp/stdusk-key.pem -in /tmp/stdusk-cert.pem -out /tmp/stdusk-local.p12
+
+# 2. import into the login keychain (lets codesign use the key)
+security import /tmp/stdusk-local.p12 -k "$HOME/Library/Keychains/login.keychain-db" \
+  -P stdusklocal -T /usr/bin/codesign -A
+
+# 3. sign the installed app + clear the stale grants
+codesign --force --deep --sign "stdusk-local" /Applications/stdusk.app
+tccutil reset All dev.hoboware.stdusk
+
+# 4. tidy up the loose key material (the identity now lives in your keychain)
+rm -f /tmp/stdusk-key.pem /tmp/stdusk-local.p12 /tmp/cs.cnf
+```
+
+Relaunch stdusk and approve the prompt once - it persists from then on. The
+`CSSMERR_TP_NOT_TRUSTED` / "unidentified developer" notes are expected for a self-signed cert
+and don't matter locally; macOS only needs the identity to be *stable*.
+
+Every `brew upgrade` replaces the app with a fresh ad-hoc build, so re-sign after upgrades.
+Add this to your shell profile:
+
+```sh
+stdusk-resign() {
+  codesign --force --deep --sign "stdusk-local" /Applications/stdusk.app \
+    && echo "re-signed stdusk (stable identity restored)"
+}
+```
+
+Same cert -> same Designated Requirement -> your grants keep persisting, no re-approval. Once
+notarized releases ship (see [`packaging/README.md`](./packaging/README.md)) this is obsolete -
+those work everywhere, not just your machine.
+
 ## Lineage
 
 stdusk began as a hard fork of [Tabby](https://github.com/Eugeny/tabby) (MIT) and is now a full Rust rewrite - this repo is the native app at its root. The original Electron Tabby source has been removed from the tree; refer to upstream [Eugeny/tabby](https://github.com/Eugeny/tabby) for it. Credit where it's due - Tabby nailed the vibe, we chased the efficiency.
