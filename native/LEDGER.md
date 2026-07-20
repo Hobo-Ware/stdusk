@@ -547,6 +547,15 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.0.7 - Hobo-Ware bundle namespace + signing notes
+`CFBundleIdentifier` is `dev.hoboware.stdusk` (hoboware.dev reverse-DNS). Single location -
+`packaging/Info.plist:11`; the id appears nowhere in Rust/config/workflow/cask, and config
+lives at name-based `~/.config/stdusk/`. macOS TCC grants are keyed to the app's signed code
+identity, so a stable Developer ID (not the ad-hoc linker default) is what makes "allow once"
+persist across launches. Signing runs under Hobo-Ware's own Apple Developer account once the
+five release secrets are added (see `packaging/README.md`); pair the first signed build with
+any identity change so users re-grant permissions exactly once.
+
 ## 1.0.6 - Settings tab REPLACES the gear
 Follow-up to the user: showing both the gear and the Settings tab was redundant. They're now
 mutually exclusive (`tabs.rs`) - the gear shows only until a session exists (its click opens
