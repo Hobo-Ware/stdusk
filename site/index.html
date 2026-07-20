@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>stdusk - the machine speaks back</title>
+<meta name="description" content="A quake-style terminal with a real GUI tab bar. Native Rust, no Chromium. Progress on tabs, ambient AI-CLI awareness, drops from the top edge on a keystroke.">
+<link rel="icon" href="stdusk-logo.png">
+<meta property="og:title" content="stdusk - the machine speaks back">
+<meta property="og:description" content="A quake-style terminal with a real GUI tab bar. Native Rust, no Chromium.">
+<meta property="og:image" content="stdusk-icon.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root{
+    --bg:#0d0d11; --bg2:#141419; --panel:#17171d; --line:#26262f;
+    --fg:#eceded; --muted:#9a9aa6; --dim:#6b6b78;
+    --red:#e5484d; --red2:#ff6b5e; --sun:#ff8a5b; --white:#f6f7f8;
+    --accent:#e5484d;
+    --mono:ui-monospace,"SF Mono",Menlo,"JetBrains Mono",Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--fg); font-family:var(--sans);
+    line-height:1.6; -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+
+  /* ambient dusk glow */
+  body::before{
+    content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:
+      radial-gradient(60vw 40vh at 80% -5%, rgba(229,72,77,.18), transparent 60%),
+      radial-gradient(50vw 35vh at 15% 8%, rgba(255,138,91,.10), transparent 60%),
+      linear-gradient(180deg,#0e0e13,#0a0a0d 60%);
+  }
+
+  /* nav */
+  nav{
+    position:sticky;top:0;z-index:20;backdrop-filter:blur(12px);
+    background:rgba(13,13,17,.72);border-bottom:1px solid var(--line);
+  }
+  nav .wrap{display:flex;align-items:center;gap:14px;height:60px}
+  nav img{width:30px;height:30px;border-radius:8px}
+  nav .brand{font-weight:700;letter-spacing:-.02em;font-size:18px}
+  nav .spacer{flex:1}
+  nav .navlink{color:var(--muted);font-size:14px;font-weight:500;transition:color .15s}
+  nav .navlink:hover{color:var(--fg)}
+  @media(max-width:620px){nav .navlink.hideable{display:none}}
+
+  /* hero */
+  header{padding:76px 0 40px;text-align:center}
+  .logo-lg{width:104px;height:104px;border-radius:24px;box-shadow:0 20px 60px -18px rgba(229,72,77,.5);margin-bottom:26px}
+  h1{font-size:clamp(48px,9vw,88px);font-weight:800;letter-spacing:-.045em;line-height:.98}
+  .tagline{font-family:var(--mono);color:var(--red2);font-size:clamp(14px,2.4vw,19px);margin-top:14px;letter-spacing:.02em}
+  .tagline .cur{display:inline-block;width:.6ch;height:1.05em;background:var(--red);vertical-align:-.16em;margin-left:2px;animation:blink 1.05s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .sub{max-width:600px;margin:22px auto 0;color:var(--muted);font-size:clamp(16px,2.2vw,19px)}
+  .sub b{color:var(--fg);font-weight:600}
+
+  /* install */
+  .cta{display:flex;gap:14px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:34px}
+  .cmd{
+    display:inline-flex;align-items:center;gap:14px;font-family:var(--mono);font-size:15px;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 16px;
+    color:var(--fg);cursor:pointer;transition:border-color .15s, transform .06s;
+  }
+  .cmd:hover{border-color:#3a3a46}
+  .cmd:active{transform:translateY(1px)}
+  .cmd .prompt{color:var(--red)}
+  .cmd .copy{color:var(--dim);font-size:12px;border-left:1px solid var(--line);padding-left:12px;font-family:var(--sans)}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;
+    padding:13px 22px;border-radius:12px;border:1px solid var(--line);color:var(--fg);
+    background:linear-gradient(180deg,#1c1c23,#141419);transition:border-color .15s,transform .06s;
+  }
+  .btn:hover{border-color:#3a3a46}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{background:linear-gradient(180deg,var(--red2),var(--red));border-color:transparent;color:#fff;box-shadow:0 10px 30px -10px rgba(229,72,77,.6)}
+
+  /* terminal demo */
+  .stage{padding:44px 0 20px}
+  .term{
+    max-width:860px;margin:0 auto;border:1px solid var(--line);border-radius:14px;overflow:hidden;
+    background:var(--bg2);box-shadow:0 40px 90px -40px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.02) inset;
+  }
+  .tabbar{display:flex;align-items:stretch;background:#101015;border-bottom:1px solid var(--line);height:40px;font-family:var(--mono);font-size:12.5px}
+  .tab{display:flex;align-items:center;gap:8px;padding:0 14px;color:var(--muted);border-right:1px solid var(--line);position:relative;white-space:nowrap}
+  .tab .n{color:var(--dim)}
+  .tab.active{background:var(--bg2);color:var(--fg)}
+  .tab.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--red)}
+  .tab .prog{position:absolute;left:0;bottom:0;height:2px;background:linear-gradient(90deg,var(--sun),var(--red));width:0;transition:width .3s linear}
+  .badge{font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;letter-spacing:.03em}
+  .badge.ai{background:rgba(229,72,77,.16);color:var(--red2)}
+  .badge.g{background:rgba(96,165,250,.16);color:#7aa2f7}
+  .dot{width:9px;height:9px;border-radius:50%}
+  .plus{color:var(--dim);padding:0 12px;display:flex;align-items:center}
+  .screen{padding:18px 20px;font-family:var(--mono);font-size:13.5px;line-height:1.7;min-height:230px;color:#d7d7de}
+  .screen .g{color:#3fb950}.screen .r{color:var(--red2)}.screen .b{color:#7aa2f7}.screen .y{color:#e3b341}.screen .m{color:var(--muted)}
+  .screen .p{color:var(--red)}
+  .bar{display:inline-block;color:var(--sun)}
+  .cursorblk{display:inline-block;width:8px;height:16px;background:var(--red);vertical-align:-3px;animation:blink 1.05s steps(1) infinite}
+
+  /* sections */
+  section{padding:60px 0}
+  .eyebrow{font-family:var(--mono);color:var(--red);font-size:13px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:12px}
+  h2{font-size:clamp(28px,4.5vw,40px);font-weight:800;letter-spacing:-.03em;line-height:1.1}
+  .lead{color:var(--muted);font-size:18px;max-width:680px;margin-top:16px}
+  .lead b{color:var(--fg);font-weight:600}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:38px}
+  @media(max-width:820px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:520px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;transition:border-color .2s,transform .2s}
+  .card:hover{border-color:#38323a;transform:translateY(-3px)}
+  .card .ic{font-size:22px;margin-bottom:12px}
+  .card h3{font-size:16px;font-weight:700;letter-spacing:-.01em}
+  .card p{color:var(--muted);font-size:14.5px;margin-top:7px}
+
+  .case{background:linear-gradient(180deg,rgba(229,72,77,.05),transparent);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .case p{font-size:18px;color:var(--muted);max-width:720px;margin-top:16px}
+  .case p b{color:var(--fg);font-weight:600}
+
+  footer{padding:56px 0 72px;border-top:1px solid var(--line);color:var(--dim);font-size:14px}
+  footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
+  footer a{color:var(--muted)}footer a:hover{color:var(--fg)}
+  footer .spacer{flex:1}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--red);color:#fff;padding:10px 18px;border-radius:10px;font-size:14px;font-weight:600;opacity:0;pointer-events:none;transition:.25s;z-index:50}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <img src="stdusk-logo.png" alt="stdusk logo">
+  <span class="brand">stdusk</span>
+  <span class="spacer"></span>
+  <a class="navlink hideable" href="#features">Features</a>
+  <a class="navlink hideable" href="#why">Why</a>
+  <a class="navlink" href="https://github.com/Hobo-Ware/stdusk">GitHub</a>
+</div></nav>
+
+<header><div class="wrap">
+  <img class="logo-lg" src="stdusk-logo.png" alt="stdusk">
+  <h1>stdusk</h1>
+  <div class="tagline">the machine speaks back<span class="cur"></span></div>
+  <p class="sub">A quake-style terminal with a <b>real GUI tab bar</b>. Native Rust, no Chromium, no apologies. It drops from the top edge on a keystroke, shows you what your machine is actually doing, and gets out of the way.</p>
+  <div class="cta">
+    <div class="cmd" id="cmd" title="Click to copy">
+      <span><span class="prompt">$</span> brew install hobo-ware/tap/stdusk</span>
+      <span class="copy" id="copylbl">copy</span>
+    </div>
+    <a class="btn primary" href="https://github.com/Hobo-Ware/stdusk/releases/latest">Download</a>
+    <a class="btn" href="https://github.com/Hobo-Ware/stdusk">★ GitHub</a>
+  </div>
+</div></header>
+
+<div class="stage"><div class="wrap">
+  <div class="term">
+    <div class="tabbar">
+      <div class="tab"><span class="n">1</span> server<span class="prog" style="width:100%"></span></div>
+      <div class="tab active"><span class="n">2</span> deploy.sh <span class="badge ai">AI</span><span class="prog" id="ptab" style="width:0"></span></div>
+      <div class="tab"><span class="n">3</span> <span class="dot" style="background:#7aa2f7"></span> agent <span class="badge g">✦</span></div>
+      <span class="plus">+</span>
+    </div>
+    <div class="screen" id="screen"></div>
+  </div>
+</div></div>
+
+<section id="features"><div class="wrap">
+  <div class="eyebrow">What it does</div>
+  <h2>Glance, don't babysit.</h2>
+  <p class="lead">Everything a local-shell terminal should be, plus the three things that make stdusk worth summoning.</p>
+  <div class="grid">
+    <div class="card"><div class="ic">📊</div><h3>Progress on tabs</h3><p>apt, pip, npm, curl, your 3am migration - if it prints <b>N%</b>, the tab wears a progress bar. You glance, you don't watch.</p></div>
+    <div class="card"><div class="ic">🤖</div><h3>Ambient CLI awareness</h3><p>a <b>claude</b>, a <b>gemini</b>, a <b>codex</b> running across your tabs? Each tab tells you which, in its brand colors.</p></div>
+    <div class="card"><div class="ic">⚡</div><h3>Quake drop-down</h3><p>Borderless, top-edge, global hotkey, hide-on-blur. There when you call, gone when you don't. No Dock clutter.</p></div>
+    <div class="card"><div class="ic">🎨</div><h3>Real GUI tabs</h3><p>Colored, renameable, reorderable, split-aware. Pixels, not ASCII art - painted by <b>egui</b>.</p></div>
+    <div class="card"><div class="ic">🔍</div><h3>Search &amp; palette</h3><p>Cmd+F scrollback search with regex; Cmd+Shift+P command palette, every action two keystrokes away.</p></div>
+    <div class="card"><div class="ic">🖼️</div><h3>A real settings GUI</h3><p>Browse 200+ color schemes with live preview, keyboard-navigable, apply before you save.</p></div>
+    <div class="card"><div class="ic">🚀</div><h3>Profiles</h3><p>Named launchers with their own shell, args, cwd, env and tab color. One right-click away.</p></div>
+    <div class="card"><div class="ic">☁️</div><h3>Settings sync</h3><p>Push your config to your own private git repo, pull it anywhere. Your credentials, no OAuth middleman.</p></div>
+    <div class="card"><div class="ic">✅</div><h3>Supreme defaults</h3><p>Truecolor, mouse copy, cwd-aware tabs, bracketed paste, OSC 52 clipboard, session restore. It just works.</p></div>
+  </div>
+</div></section>
+
+<section class="case" id="why"><div class="wrap">
+  <div class="eyebrow">The case</div>
+  <h2>Refuse the tradeoff.</h2>
+  <p>Text-grid terminals (tmux, kitty, ghostty) are efficient, but they render tabs as <b>text</b> - they can never look like a GUI. Electron terminals look gorgeous but bill you a few hundred megabytes of RAM for the privilege.</p>
+  <p>stdusk refuses the tradeoff. <b>egui</b> paints real pixel-perfect tabs. <b>alacritty_terminal</b> drives the grid on the GPU. The whole thing is one native binary that starts instantly and sits quiet until you summon it.</p>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">The name</div>
+  <h2>std* meets dusk.</h2>
+  <p class="lead"><span style="font-family:var(--mono)">stdin</span>, <span style="font-family:var(--mono)">stdout</span>, <span style="font-family:var(--mono)">stderr</span> - meets <em>dusk</em>. A terminal stream at the faded end of the day. The machine speaks back.</p>
+</div></section>
+
+<footer><div class="wrap">
+  <img src="stdusk-logo.png" alt="" style="width:26px;height:26px;border-radius:7px">
+  <span>stdusk by <a href="https://github.com/Hobo-Ware">Hobo-Ware</a></span>
+  <span class="spacer"></span>
+  <a href="https://github.com/Hobo-Ware/stdusk">GitHub</a>
+  <a href="https://github.com/Hobo-Ware/stdusk/releases">Releases</a>
+  <a href="https://github.com/Eugeny/tabby">Forked from Tabby (MIT)</a>
+  <span>MIT</span>
+</div></footer>
+
+<div class="toast" id="toast">Copied to clipboard</div>
+
+<script>
+// copy install command
+const cmd=document.getElementById('cmd'),toast=document.getElementById('toast'),copylbl=document.getElementById('copylbl');
+cmd.addEventListener('click',()=>{
+  navigator.clipboard.writeText('brew install hobo-ware/tap/stdusk').then(()=>{
+    copylbl.textContent='copied';toast.classList.add('show');
+    setTimeout(()=>{copylbl.textContent='copy';toast.classList.remove('show')},1600);
+  });
+});
+
+// terminal demo: type a command, run it, fill the active tab's progress bar
+const screen=document.getElementById('screen'),ptab=document.getElementById('ptab');
+const lines=[
+  {h:'<span class="p">~/app</span> <span class="m">$</span> ',t:'./deploy.sh --prod',d:34},
+  {h:'',t:''},
+  {h:'<span class="b">→</span> building release artifacts',t:'',d:0},
+];
+const post=[
+  '<span class="g">✓</span> compiled in 4.2s',
+  '<span class="y">↑</span> uploading  <span class="bar" id="ascii"></span> <span id="pct">0%</span>',
+  '',
+  '<span class="g">✓</span> deployed to prod <span class="m">· https://stdusk.hoboware.dev</span>',
+  '<span class="p">~/app</span> <span class="m">$</span> <span class="cursorblk"></span>',
+];
+function esc(s){return s}
+let html='';
+function typeLine(i){
+  if(i>=lines.length){runProgress();return;}
+  const ln=lines[i];
+  if(!ln.t){html+=ln.h+'\n';screen.innerHTML=html;setTimeout(()=>typeLine(i+1),ln.d?ln.d*10:260);return;}
+  let j=0;const base=html+ln.h;
+  (function ch(){
+    screen.innerHTML=base+ln.t.slice(0,j)+'<span class="cursorblk"></span>';
+    if(j++<ln.t.length){setTimeout(ch,ln.d);}
+    else{html=base+ln.t+'\n';screen.innerHTML=html;setTimeout(()=>typeLine(i+1),420);}
+  })();
+}
+function runProgress(){
+  let p=0;const asciiFor=v=>{const n=Math.round(v/5);return '█'.repeat(n)+'░'.repeat(20-n)};
+  html+=post[0]+'\n'+post[1]+'\n';screen.innerHTML=html;
+  const ascii=document.getElementById('ascii'),pct=document.getElementById('pct');
+  const iv=setInterval(()=>{
+    p=Math.min(100,p+Math.random()*9+3);
+    ascii.textContent=asciiFor(p);pct.textContent=Math.round(p)+'%';
+    ptab.style.width=p+'%';
+    if(p>=100){clearInterval(iv);ascii.textContent=asciiFor(100);pct.textContent='100%';
+      setTimeout(()=>{html+=post[2]+'\n'+post[3]+'\n'+post[4];screen.innerHTML=html;},400);}
+  },160);
+}
+setTimeout(()=>typeLine(0),500);
+</script>
+</body>
+</html>
