@@ -42,6 +42,10 @@ need System Settings -> Privacy & Security -> "Open Anyway".
 
 ### One-time setup (needs an Apple Developer account, $99/yr)
 
+Sign under **Hobo-Ware's own Apple Developer team** - it matches the app's
+`dev.hoboware.stdusk` bundle id (Info.plist). The cert's Team ID becomes the app's stable
+identity that macOS anchors permission grants to.
+
 1. **Developer ID Application certificate**
    - <https://developer.apple.com/account/resources/certificates/add> -> type
      "Developer ID Application". Create the CSR with Keychain Access (Certificate Assistant ->
