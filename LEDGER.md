@@ -573,6 +573,18 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.3.1 - kill the TUI redraw flicker (repaint coalescing)
+git:work / fzf-style list TUIs flashed on every arrow-key nav. Measured with a real pty: a
+clear+redraw frame (ESC[2J + rows) arrives as ~28 separate read() chunks over ~152us, and the
+reader thread called `ctx.request_repaint()` PER CHUNK - so the UI could wake and snapshot the
+grid mid-burst (after the clear blanked it, before the redraw landed) = a blank flash. Fix
+(terminal.rs only): reader now calls `request_repaint_after(REPAINT_COALESCE_WINDOW = 4ms)`, so
+a burst collapses into one paint of the settled grid (egui's shortest-pending-duration wins);
+imperceptible (<1/4 of a 60Hz frame), no per-chunk render race. Parser still advances per chunk
+(no added parse latency); idle still idles; EOF keeps its immediate repaint. Test
+`repaint_coalesce_window_is_imperceptible_but_nonzero` guards 0 < window <= 16ms. 261 tests.
+Closes the rendering half of the git:work report (the wheel-scroll half shipped in 1.3.0).
+
 ## 1.2.0 (in progress) - macOS window/lifecycle fixes (main.rs, tabs.rs)
 Four macOS window-behavior fixes, all objc2/objc2-app-kit (no new src modules; touched
 `main.rs` + `tabs.rs` for the tab-strip inset):
