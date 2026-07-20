@@ -344,6 +344,29 @@ impl Stdusk {
                 tabs.push(tab);
             }
             active = saved.active.min(tabs.len().saturating_sub(1));
+            // Auto-resume Claude Code tabs: inject a resume command into each claude tab's pty.
+            // The shell buffers stdin, so the command lands at its first prompt (no shell-
+            // integration dependency). Never runs under --screenshot (guarded by the block).
+            if cfg.session.resume_claude {
+                let claude_idx: Vec<usize> = saved
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, st)| st.claude.as_ref().map(|_| i))
+                    .collect();
+                let inputs: Vec<session::ResumeTab> = claude_idx
+                    .iter()
+                    .map(|&i| session::ResumeTab {
+                        cwd: saved.tabs[i].cwd.clone().unwrap_or_default(),
+                        resume_id: saved.tabs[i].claude.as_ref().and_then(|c| c.resume_id.clone()),
+                    })
+                    .collect();
+                let cmds = session::resume_commands(&inputs, &session::claude_projects_dir());
+                for (&i, cmd) in claude_idx.iter().zip(cmds) {
+                    // `\r` = Enter (a bare CR submits; matches ui::key_to_bytes for Enter).
+                    tabs[i].focused_term_mut().send(format!("{cmd}\r").as_bytes());
+                }
+            }
         }
         if tabs.is_empty() {
             tabs.push(spawn_tab(&cfg, &cc.egui_ctx, None));
@@ -953,6 +976,11 @@ impl eframe::App for Stdusk {
                             color: t.color.map(session::color_to_hex),
                             cwd: t.focused_term().cwd(),
                             pinned: t.pinned,
+                            // Mark claude tabs and stash the session id parsed from the claude
+                            // process's argv (~1 Hz scan) so restore resumes the exact session.
+                            claude: (t.cli == Some(procwatch::Cli::Claude)).then(|| {
+                                session::ClaudeState { resume_id: t.claude_resume.clone() }
+                            }),
                         })
                         .collect(),
                     active: self.active,
@@ -1021,6 +1049,12 @@ impl eframe::App for Stdusk {
                     let pids: Vec<u32> =
                         tab.root().leaves().iter().filter_map(|t| t.shell_pid()).collect();
                     tab.cli = pids.iter().find_map(|&pid| procwatch::detect(&procs, pid));
+                    // For claude tabs, capture the session id from its argv (auto-resume source).
+                    tab.claude_resume = (tab.cli == Some(procwatch::Cli::Claude))
+                        .then(|| {
+                            pids.iter().find_map(|&pid| procwatch::claude_resume_id(&procs, pid))
+                        })
+                        .flatten();
                     tab.proc = pids.iter().find_map(|&pid| procwatch::busy_child(&procs, pid));
                 }
                 // Keep the cadence ticking even when the window is otherwise idle.

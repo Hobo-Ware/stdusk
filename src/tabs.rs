@@ -30,6 +30,7 @@ pub(crate) struct Tab {
     pub(crate) root: Option<pane::Pane<PtyTerm>>, // Option so whole-tree transforms can `take()` it
     pub(crate) focused: Vec<pane::Side>,     // path to the focused leaf (its identity)
     pub(crate) cli: Option<procwatch::Cli>,  // a known AI CLI detected running in the tab (badge)
+    pub(crate) claude_resume: Option<String>, // claude session id from its argv (~1 Hz; auto-resume)
     pub(crate) proc: Option<String>, // running child's name (~1 Hz cache; menu "Running:" row)
     pub(crate) maximized: bool,      // zoom the focused pane to fill the tab (hide the other panes)
     pub(crate) pinned: bool,         // pinned tabs sort first, guard close, persist in session.toml
@@ -77,6 +78,7 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
         root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
         cli: None,
+        claude_resume: None,
         proc: None,
         maximized: false,
         pinned: false,
@@ -113,6 +115,7 @@ pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Pro
         root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
         cli: None,
+        claude_resume: None,
         proc: None,
         maximized: false,
         pinned: false,

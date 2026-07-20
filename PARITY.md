@@ -167,6 +167,7 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Feature | State | Notes |
 |---|---|---|
 | Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ✅ | `[session] restore`; cwd/title/color, saved every 3s; also window geometry in `quake.mode = "window"` |
+| Auto-resume Claude Code tabs | ✅ | `[session] resume_claude` (default on, needs `restore`). Beyond Tabby: on restore, each claude tab reattaches to its prior conversation. The session id is captured from the running claude process's argv (`--resume <uuid>`, per-process) at save time and replayed as `claude --resume <uuid>` - so parallel same-cwd tabs resume their OWN distinct sessions (never `--continue`, which would collide). Fallback (fresh bare claude): the cwd's most-recent transcript, only for a lone claude tab there; else bare `claude` |
 | Behavior on session end (keep/close/restart) | ✅ | `terminal.on_exit` (0.3.0): close (default) / keep with overlay / restart + crash-loop guard |
 | Dynamic title from shell (OSC 0/2) + disable toggle | ✅ | `dynamic_title` (0.3.0); 1.0.2 moved parsing to the Term's Title events, adding the xterm title STACK (`CSI 22/23 t`) - a popped title restores instead of sticking |
 | Save/load terminal output & state (debug) | ⛔ | niche debug tooling |
