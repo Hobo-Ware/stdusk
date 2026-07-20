@@ -68,6 +68,14 @@ pub(crate) fn on_exit_mode(s: &str) -> OnExit {
 /// An exit within this many seconds of spawn counts as a crash (restart-mode loop guard).
 pub(crate) const RAPID_EXIT_SECS: f32 = 2.0;
 
+/// Coalesce output-driven repaints: the reader `read()`s the pty in tiny pieces (the macOS pty
+/// hands back <=1KB chunks, so a TUI's single-write clear+redraw frame arrives as ~28 reads in
+/// ~150us - measured). Requesting an immediate repaint per read lets the UI snapshot a grid
+/// mid-burst (blank right after the ESC[2J clear, or half-repainted) - the arrow-key nav flicker.
+/// Deferring the repaint by a sub-frame window collapses the whole burst into one paint of the
+/// settled grid; a long stream still paints every window (progressive, not stalled).
+const REPAINT_COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(4);
+
 /// What the UI applies to an exited pane.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ExitAction {
@@ -510,7 +518,9 @@ impl PtyTerm {
                             }
                             let _ = w.flush();
                         }
-                        ctx.request_repaint();
+                        // Defer (don't paint per read): coalesce the burst so a clear+redraw
+                        // lands atomically before the UI snapshots. See REPAINT_COALESCE_WINDOW.
+                        ctx.request_repaint_after(REPAINT_COALESCE_WINDOW);
                     }
                 }
             }
@@ -835,9 +845,9 @@ impl PtyTerm {
 #[cfg(test)]
 mod tests {
     use super::{
-        CmdState, ExitAction, Flags, OnExit, PtyTerm, SpawnOpts, cmd_from_exit,
-        drag_autoscroll_lines, exit_action, on_exit_mode, resolve_cwd, resolve_shell, sgr_mouse,
-        snap_glyph, wheel_button, wheel_sgr,
+        CmdState, ExitAction, Flags, OnExit, PtyTerm, REPAINT_COALESCE_WINDOW, SpawnOpts,
+        cmd_from_exit, drag_autoscroll_lines, exit_action, on_exit_mode, resolve_cwd,
+        resolve_shell, sgr_mouse, snap_glyph, wheel_button, wheel_sgr,
     };
     use crate::config::Profile;
 
@@ -1275,5 +1285,16 @@ mod tests {
         })
         .expect("wide glyphs never hit the grid");
         assert_eq!(got, (true, '\0', '\u{597d}', true, true, '\0'));
+    }
+
+    #[test]
+    fn repaint_coalesce_window_is_imperceptible_but_nonzero() {
+        // A zero window reintroduces the per-chunk mid-burst flicker; a large one adds
+        // perceptible input->paint lag. Keep it inside one 60Hz frame.
+        assert!(!REPAINT_COALESCE_WINDOW.is_zero(), "zero disables burst coalescing");
+        assert!(
+            REPAINT_COALESCE_WINDOW <= std::time::Duration::from_millis(16),
+            "window must stay under a 60Hz frame to be imperceptible"
+        );
     }
 }
