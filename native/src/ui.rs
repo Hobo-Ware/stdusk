@@ -1189,6 +1189,7 @@ fn paint_cli_chip(p: &egui::Painter, rect: egui::Rect, cli: crate::procwatch::Cl
 /// Tab geometry: shared with the tab bar so the row height / spacer math can't rot.
 pub(crate) const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (flush underline)
 pub(crate) const TAB_FIXED_W: f32 = 200.0; // fixed-mode standard width (Tabby-like)
+pub(crate) const SETTINGS_TAB_W: f32 = 110.0; // right-pinned Settings tab (fixed, spacer math)
 const TAB_MIN_W: f32 = 60.0; // fixed-mode floor when the bar overflows
 const TAB_PAD_X: f32 = 10.0;
 const TAB_SLOT_W: f32 = 18.0; // trailing slot: close-x on hover, CLI badge while one runs
@@ -1204,11 +1205,12 @@ const TAB_MINI_W: f32 = 15.0; // split-layout preview glyph
 /// `width` = `Some(px)` for fixed mode (title ellipsized to fit), `None` sizes to content.
 /// Returns (click+drag response, close-clicked). `layout` = `Pane::miniature()` leaf rects
 /// (glyph shown when >1). `tab_id` seeds the interact id so drag-reorder tracking survives
-/// index swaps (ui.md).
+/// index swaps (ui.md). `idx = None` drops the number prefix (the Settings tab - it has no
+/// Cmd+N binding to advertise).
 #[allow(clippy::too_many_lines)] // one widget, mostly geometry + paint
 pub(crate) fn draw_tab(
     ui: &mut egui::Ui,
-    idx: usize,
+    idx: Option<usize>,
     tab_id: u64,
     title: &str,
     active: bool,
@@ -1222,7 +1224,7 @@ pub(crate) fn draw_tab(
 ) -> (egui::Response, bool) {
     let font = egui::FontId::monospace(12.0);
     let char_w = ui.painter().layout_no_wrap("0".into(), font.clone(), colors::fg()).size().x;
-    let prefix = format!("{idx}  ");
+    let prefix = idx.map_or_else(String::new, |i| format!("{i}  "));
     let mini_w = if layout.len() > 1 { TAB_MINI_W + TAB_GAP } else { 0.0 };
     let pin_w = if pinned { 14.0 } else { 0.0 };
     // Trailing-slot presence: hover state comes from LAST frame's response (stored below) -
@@ -2323,7 +2325,7 @@ mod tests {
                     for (i, cli) in clis.into_iter().enumerate() {
                         let (resp, close) = draw_tab(
                             ui,
-                            i + 1,
+                            Some(i + 1),
                             i as u64, // stable id
                             "tab",
                             i == 0,
@@ -2641,5 +2643,157 @@ mod tests {
             }],
         );
         assert_eq!(out.keys, vec![0x7f]);
+    }
+
+    // ---- the right-pinned Settings tab (settings-as-a-tab, 1.0.4) ----
+
+    struct SettingsBarOut {
+        term_rect: egui::Rect,
+        settings_rect: egui::Rect,
+        term_clicked: bool,
+        settings_clicked: bool,
+        settings_closed: bool,
+    }
+
+    /// One frame of the tab-bar row while a settings session exists: a terminal tab, the
+    /// right-pinning spacer, and the Settings tab (`idx = None`, fixed width) - the exact
+    /// structure `tab_bar` builds.
+    fn settings_bar_frame(ctx: &egui::Context, events: Vec<egui::Event>) -> SettingsBarOut {
+        let mut out = SettingsBarOut {
+            term_rect: egui::Rect::NOTHING,
+            settings_rect: egui::Rect::NOTHING,
+            term_clicked: false,
+            settings_clicked: false,
+            settings_closed: false,
+        };
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            focused: true,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| {
+            egui::Panel::top("tabbar").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (t, _) = draw_tab(
+                        ui,
+                        Some(1),
+                        1,
+                        "zsh",
+                        false,
+                        false,
+                        None,
+                        Progress::None,
+                        CmdState::Idle,
+                        &[],
+                        None,
+                        None,
+                    );
+                    out.term_clicked = t.clicked();
+                    out.term_rect = t.rect;
+                    ui.add_space((ui.available_width() - SETTINGS_TAB_W - ICON_TOGGLE_W).max(0.0));
+                    let (s, s_close) = draw_tab(
+                        ui,
+                        None,
+                        u64::MAX,
+                        "Settings",
+                        true,
+                        false,
+                        None,
+                        Progress::None,
+                        CmdState::Idle,
+                        &[],
+                        None,
+                        Some(SETTINGS_TAB_W),
+                    );
+                    out.settings_rect = s.rect;
+                    out.settings_clicked = s.clicked();
+                    out.settings_closed = s_close;
+                });
+            });
+        });
+        out
+    }
+
+    #[test]
+    fn settings_tab_clicks_activate_switch_and_close() {
+        // The settings-as-a-tab contract: clicking the Settings tab re-activates the view,
+        // a terminal tab beside it still takes clicks (the switch that HIDES settings while
+        // keeping the staged edits), and the trailing close-x reports the guarded close.
+        let ctx = egui::Context::default();
+        let warm = settings_bar_frame(&ctx, vec![]);
+        let s = warm.settings_rect.center();
+        settings_bar_frame(&ctx, vec![egui::Event::PointerMoved(s)]);
+        settings_bar_frame(&ctx, vec![press(s, true)]);
+        let up = settings_bar_frame(&ctx, vec![press(s, false)]);
+        assert!(up.settings_clicked, "click must activate the settings tab");
+        let t = warm.term_rect.center();
+        settings_bar_frame(&ctx, vec![egui::Event::PointerMoved(t)]);
+        settings_bar_frame(&ctx, vec![press(t, true)]);
+        let up = settings_bar_frame(&ctx, vec![press(t, false)]);
+        assert!(up.term_clicked, "terminal tabs must stay clickable next to the settings tab");
+        // Close-x: hover the settings tab, settle a frame (the trailing slot appears from
+        // LAST frame's hover), then click the slot.
+        settings_bar_frame(&ctx, vec![egui::Event::PointerMoved(s)]);
+        let settled = settings_bar_frame(&ctx, vec![]);
+        let x = slot_pos(settled.settings_rect);
+        settings_bar_frame(&ctx, vec![egui::Event::PointerMoved(x)]);
+        settings_bar_frame(&ctx, vec![press(x, true)]);
+        let up = settings_bar_frame(&ctx, vec![press(x, false)]);
+        assert!(up.settings_closed, "the settings tab close-x must report the close");
+        assert!(!up.settings_clicked, "a close-x click must not double as an activate");
+    }
+
+    #[test]
+    fn unnumbered_tab_drops_the_prefix() {
+        // `idx = None` (the Settings tab) renders without the "N  " number prefix: with the
+        // same title and dynamic sizing it must come out strictly narrower than a numbered
+        // twin (the prefix is the only width difference).
+        let ctx = egui::Context::default();
+        let mut widths = (0.0_f32, 0.0_f32);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| {
+            ui.horizontal(|ui| {
+                let (a, _) = draw_tab(
+                    ui,
+                    Some(1),
+                    10,
+                    "Settings",
+                    false,
+                    false,
+                    None,
+                    Progress::None,
+                    CmdState::Idle,
+                    &[],
+                    None,
+                    None,
+                );
+                let (b, _) = draw_tab(
+                    ui,
+                    None,
+                    11,
+                    "Settings",
+                    false,
+                    false,
+                    None,
+                    Progress::None,
+                    CmdState::Idle,
+                    &[],
+                    None,
+                    None,
+                );
+                widths = (a.rect.width(), b.rect.width());
+            });
+        });
+        assert!(widths.1 < widths.0, "unnumbered tab must be narrower (no prefix): {widths:?}");
     }
 }

@@ -1727,18 +1727,25 @@ fn about_section(ui: &mut egui::Ui) {
 // ---- the view ----
 
 impl Stdusk {
-    /// Open the settings view: snapshot the config as the unsaved-changes baseline and dismiss
-    /// the find bar (the workspace it searches is being swapped out).
+    /// Open (or re-activate) the settings view and dismiss the find bar (the workspace it
+    /// searches is being swapped out). Only a FRESH session snapshots the unsaved-changes
+    /// baseline - re-activating the existing Settings tab must not bless staged edits as
+    /// clean.
     pub(crate) fn open_settings(&mut self) {
         if self.search.take().is_some() {
             self.tabs[self.active].focused_term().clear_selection();
         }
-        self.settings.baseline = Some(self.cfg.clone());
+        if !self.settings_tab {
+            self.settings.baseline = Some(self.cfg.clone());
+        }
+        self.settings_tab = true;
         self.settings.confirm_close = false;
         self.settings_open = true;
     }
 
-    /// Close the settings view - or, with unsaved changes, show the confirm modal instead.
+    /// CLOSE the settings session (footer Close / Esc / the Settings tab's x) - or, with
+    /// unsaved changes, show the confirm modal instead. Ends the Settings tab; a mere tab
+    /// switch away never comes through here.
     pub(crate) fn request_close_settings(&mut self) {
         let dirty =
             self.settings.baseline.as_ref().is_some_and(|b| config::config_dirty(b, &self.cfg));
@@ -1746,13 +1753,15 @@ impl Stdusk {
             self.settings.confirm_close = true;
         } else {
             self.settings_open = false;
+            self.settings_tab = false;
         }
     }
 
-    /// Gear / Cmd+, toggle.
+    /// Gear / Cmd+, : toggle the settings VIEW. Hiding is a tab-switch away - the Settings
+    /// tab and its staged edits stay; the unsaved-changes guard runs only on explicit close.
     pub(crate) fn toggle_settings(&mut self) {
         if self.settings_open {
-            self.request_close_settings();
+            self.settings_open = false;
         } else {
             self.open_settings();
         }
@@ -2206,6 +2215,7 @@ impl Stdusk {
             self.save_settings(ctx);
             self.settings.confirm_close = false;
             self.settings_open = false;
+            self.settings_tab = false;
         } else if discard {
             if let Some(b) = self.settings.baseline.take() {
                 self.cfg = b;
@@ -2216,6 +2226,7 @@ impl Stdusk {
             self.reapply_font(ctx);
             self.settings.confirm_close = false;
             self.settings_open = false;
+            self.settings_tab = false;
         } else if keep {
             self.settings.confirm_close = false;
         }

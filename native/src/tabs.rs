@@ -18,6 +18,9 @@ const BAR_CONTROLS_W: f32 = 6.0 + ui::ICON_BTN_W * 2.0 + ui::ICON_TOGGLE_W + 3.0
 /// Monotonic tab identity - stable across reorders/closes (used to target deferred actions).
 static NEXT_TAB_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Interact id of the right-pinned Settings tab - out of NEXT_TAB_ID's monotonic range.
+const SETTINGS_TAB_ID: u64 = u64::MAX;
+
 #[allow(clippy::struct_excessive_bools)] // independent per-tab flags, not a mode
 pub(crate) struct Tab {
     pub(crate) id: u64,
@@ -616,12 +619,15 @@ impl Stdusk {
                 ui.horizontal(|ui| {
                     ui.set_min_height(ui::TAB_H);
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    // The Settings tab (right-pinned, fixed width) reserves its slice of the
+                    // bar whenever its session exists (visible or hidden behind a tab switch).
+                    let settings_w = if self.settings_tab { ui::SETTINGS_TAB_W + 4.0 } else { 0.0 };
                     // Fixed mode (the default): every tab gets the same width, shrinking evenly
                     // once the bar fills up. Dynamic sizes each tab to its title.
                     let tab_width = match ui::tab_width_mode(&self.cfg.appearance.tab_width) {
                         ui::TabWidthMode::Dynamic => None,
                         ui::TabWidthMode::Fixed => Some(ui::fixed_tab_width(
-                            ui.available_width() - BAR_CONTROLS_W,
+                            ui.available_width() - BAR_CONTROLS_W - settings_w,
                             self.tabs.len(),
                             4.0,
                         )),
@@ -656,7 +662,7 @@ impl Stdusk {
                         );
                         let (resp, close) = draw_tab(
                             ui,
-                            i + 1,
+                            Some(i + 1),
                             tab.id,
                             &tab.title,
                             active,
@@ -759,9 +765,33 @@ impl Stdusk {
                             action = Some(TabAction::OpenPalette);
                         }
                     });
-                    // Gear pinned to the right edge (spacer, not a nested layout); lit while
-                    // the settings view is open.
-                    ui.add_space((ui.available_width() - ui::ICON_TOGGLE_W).max(0.0));
+                    // Settings tab + gear pinned to the right edge (spacer, not a nested
+                    // layout). The Settings TAB exists while a settings session does (even
+                    // hidden behind a terminal tab - staged edits live on): clicking it
+                    // re-activates the view, its close-x runs the guarded close. The gear
+                    // toggles the VIEW (a tab-switch away, never a close).
+                    ui.add_space((ui.available_width() - settings_w - ui::ICON_TOGGLE_W).max(0.0));
+                    if self.settings_tab {
+                        let (s_resp, s_close) = draw_tab(
+                            ui,
+                            None, // no number - Cmd+N never targets the Settings tab
+                            SETTINGS_TAB_ID,
+                            "Settings",
+                            self.settings_open,
+                            false,
+                            None,
+                            Progress::None,
+                            terminal::CmdState::Idle,
+                            &[],
+                            None,
+                            Some(ui::SETTINGS_TAB_W),
+                        );
+                        if s_close {
+                            self.request_close_settings();
+                        } else if s_resp.clicked() {
+                            self.open_settings();
+                        }
+                    }
                     let gear_tip = ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings);
                     if ui::icon_toggle(ui, icons::GEAR, self.settings_open, &gear_tip).clicked() {
                         self.toggle_settings();

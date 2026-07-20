@@ -239,7 +239,8 @@ struct Stdusk {
     renaming: Option<(usize, String, bool)>, // (tab index, edit buffer, request-focus-once)
     search: Option<Search>, // scrollback-search overlay (Cmd+F), None when closed
     palette: Option<palette::PaletteState>, // command palette (Cmd+Shift+P), None when closed
-    settings_open: bool, // settings view (tab-bar gear) replaces the workspace, edits cfg live
+    settings_open: bool, // settings view is SHOWING (replaces the workspace; edits cfg live)
+    settings_tab: bool, // a settings session exists: the right-pinned Settings tab + staged edits survive tab switches
     settings: settings::SettingsState, // selected section + scheme search/hover state
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     pending_pastes: std::collections::VecDeque<(u64, String)>, // multiline pastes awaiting confirm (tab id, text)
@@ -467,6 +468,7 @@ impl Stdusk {
             search: None,
             palette: None,
             settings_open: settings_shot,
+            settings_tab: settings_shot,
             settings,
             closed: Vec::new(),
             pending_pastes: std::collections::VecDeque::new(),
@@ -727,8 +729,8 @@ impl eframe::App for Stdusk {
                     self.reapply_appearance(&ctx);
                     self.reregister_hotkey();
                     self.reapply_font(&ctx);
-                    if self.settings_open {
-                        self.rebaseline_settings();
+                    if self.settings_tab {
+                        self.rebaseline_settings(); // hidden settings sessions rebaseline too
                     }
                     self.toast = Some(("Settings pulled".into(), now + 1.8));
                 }
@@ -895,7 +897,8 @@ impl eframe::App for Stdusk {
         // A hard modal (rename / paste confirm / close confirm / palette) owns the keyboard
         // entirely: tab switching or Cmd+W while a confirm shows would retarget/kill the tab
         // under it. The settings view suppresses them too - tab/pane mutations under a hidden
-        // workspace would be invisible.
+        // workspace would be invisible - EXCEPT tab switching (settings behaves like a tab;
+        // see `settings_only` below).
         let text_modal = self.renaming.is_some()
             || !self.pending_pastes.is_empty()
             || self.pending_close.is_some();
@@ -952,13 +955,31 @@ impl eframe::App for Stdusk {
                     kb_zoom = Some(0);
                 }
             }
+            // Tab SWITCHING stays live while only the settings view is up: settings behaves
+            // like a tab, so Cmd+1..9 / Ctrl+Tab must reach the terminal tabs (the switch
+            // hides the view; the settings session + staged edits stay). Every other bind
+            // below still obeys hard_modal - it would mutate a hidden workspace.
+            let settings_only = self.settings_open && !text_modal && self.palette.is_none();
+            if !hard_modal || settings_only {
+                if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
+                    kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
+                }
+                if i.modifiers.command {
+                    use egui::Key::{Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9};
+                    for (n, k) in [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        if i.key_pressed(k) {
+                            kb_switch = Some(n);
+                        }
+                    }
+                }
+            }
             if hard_modal {
                 return;
             }
             // Fixed (non-remappable) binds from here down.
-            if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
-                kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
-            }
             // Ctrl+Shift+Up/Down: line-step scroll (Tabby's scroll-up/scroll-down binding).
             // The ctrl branch of key_to_bytes maps arrows to None, so nothing leaks to the pty.
             if i.modifiers.ctrl && i.modifiers.shift && !i.modifiers.command {
@@ -992,10 +1013,7 @@ impl eframe::App for Stdusk {
                 }
             }
             if i.modifiers.command {
-                use egui::Key::{
-                    ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Enter, Num1, Num2, Num3, Num4, Num5,
-                    Num6, Num7, Num8, Num9,
-                };
+                use egui::Key::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Enter};
                 // Cmd+Alt: pane navigation / maximize (kept separate from the terminal's own
                 // Cmd/Alt+arrow line/word motion, which key_to_bytes reserves against Cmd+Alt).
                 if i.modifiers.alt {
@@ -1031,13 +1049,6 @@ impl eframe::App for Stdusk {
                         kb_resize = Some((pane::SplitDir::Column, -STEP));
                     }
                 }
-                for (n, k) in
-                    [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9].into_iter().enumerate()
-                {
-                    if i.key_pressed(k) {
-                        kb_switch = Some(n);
-                    }
-                }
             }
         });
 
@@ -1064,6 +1075,15 @@ impl eframe::App for Stdusk {
         }
         if kb_toggle_last {
             self.active = ui::toggle_last_target(self.prev_active, self.tabs.len());
+        }
+        // A switch to a terminal tab hides the settings VIEW like any tab switch would; the
+        // settings TAB (and the staged edits behind it) stays until explicitly closed.
+        if self.settings_open
+            && (clicked.is_some()
+                || kb_tab_cycle.is_some()
+                || kb_switch.is_some_and(|n| n < self.tabs.len()))
+        {
+            self.settings_open = false;
         }
         if let Some(d) = kb_move_tab {
             self.move_tab(self.active, d);
