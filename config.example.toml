@@ -18,7 +18,10 @@ mode = "dropdown"         # "dropdown" (drops from the top on the hotkey) | "win
                           # resizable macOS window). Window mode DISABLES the global hotkey and
                           # ignores every focus/Dock option below - it's always a Dock app whose
                           # close button quits. The window chrome (title bar) applies on restart.
-hotkey = "Ctrl+Grave"     # e.g. "F13", "Cmd+Grave", "F12", "Ctrl+Shift+T" (dropdown mode only)
+hotkey = "Ctrl+Grave"     # e.g. "F13", "Cmd+Grave", "F12", "Ctrl+Shift+T" (dropdown mode only).
+                          # The §/± key (Mac ISO, left of "1") is "Section" / "§" / "IntlBackslash"
+                          # (NOTE: recognized, but the current global-hotkey lib can't register
+                          # this physical key as an OS hotkey yet - it won't fire. Tracked.)
 height_pct = 0.5          # fraction of screen height when dropped down (dropdown mode only)
 hide_on_focus_loss = true # (dropdown mode only)
 follow_active_space = true # (macOS, dropdown mode only) drop onto whichever Space/desktop is active

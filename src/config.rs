@@ -333,6 +333,11 @@ fn parse_code(k: &str) -> Option<Code> {
     let lower = k.to_ascii_lowercase();
     let w3c = match lower.as_str() {
         "`" | "grave" | "backquote" => "Backquote".to_string(),
+        // The §/± key left of "1" / above Tab on Mac ISO keyboards. macOS reports it as
+        // kVK_ISO_Section, which maps to W3C `IntlBackslash`. NOTE: global-hotkey 0.8's macOS
+        // keycode table has no IntlBackslash entry, so registering it is a no-op until that's
+        // addressed in main.rs (see the LEDGER 1.2.0 entry) - the parse is correct regardless.
+        "§" | "±" | "section" | "paragraph" | "intlbackslash" => "IntlBackslash".to_string(),
         "space" => "Space".to_string(),
         "enter" | "return" => "Enter".to_string(),
         "tab" => "Tab".to_string(),
@@ -535,6 +540,17 @@ mod tests {
             parse_hotkey("Ctrl+Shift+T"),
             (Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyT)
         );
+    }
+
+    #[test]
+    fn section_key_names_parse_to_intl_backslash() {
+        // The §/± key (Mac ISO, left of "1") - accept the glyphs and friendly names. Bare
+        // (no modifier) works too, like the F-keys.
+        for name in ["§", "±", "Section", "paragraph", "IntlBackslash"] {
+            assert_eq!(parse_hotkey(name), (None, Code::IntlBackslash), "name={name}");
+        }
+        // Still composes with modifiers.
+        assert_eq!(parse_hotkey("Ctrl+Section"), (Some(Modifiers::CONTROL), Code::IntlBackslash));
     }
 
     #[test]

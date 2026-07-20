@@ -131,6 +131,12 @@ pub(crate) fn key_to_bytes(
         // newline" vs a bare CR "submit". Enter has no composed glyph, so this is unconditional
         // on alt (not gated on alt_is_meta). Cmd+Alt+Enter already returned None above.
         Key::Enter if mods.alt => b"\x1b\r".to_vec(),
+        // Shift+Enter sends a bare LF; apps like Claude Code read this as "insert newline" vs a
+        // bare CR "submit" (the byte its `/terminal-setup` maps Shift+Enter to). LF, not the
+        // CSI-u form `ESC[13;2u`, because `key_to_bytes` never negotiates the kitty keyboard
+        // protocol (see terminal.rs) so an un-negotiated CSI-u would be misread. If an app wants
+        // the CSI-u form, that's a kitty-protocol project, not a byte swap here.
+        Key::Enter if mods.shift => vec![b'\n'],
         Key::Enter => vec![b'\r'],
         Key::Backspace if mods.alt => b"\x1b\x7f".to_vec(), // delete previous word
         Key::Backspace if mods.command => vec![0x15],       // Ctrl-U: delete to line start
@@ -1801,6 +1807,11 @@ mod tests {
         );
         // Cmd+Alt+Enter stays an app pane binding (maximize), not forwarded.
         assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true), false), None);
+        // Shift+Enter -> bare LF ("insert newline"); distinct from plain Enter's CR ("submit")
+        // and Option+Enter's ESC+CR. All three coexist.
+        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        assert_eq!(key_to_bytes(Key::Enter, shift, false), Some(vec![b'\n']));
+        assert_eq!(key_to_bytes(Key::Enter, Modifiers::default(), false), Some(vec![b'\r']));
     }
 
     #[test]
