@@ -547,12 +547,22 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.0.6 - Settings tab REPLACES the gear
+Follow-up to the user: showing both the gear and the Settings tab was redundant. They're now
+mutually exclusive (`tabs.rs`) - the gear shows only until a session exists (its click opens
+one), and once open the Settings tab takes the gear's right-edge slot instead. The fixed-tab
+width budget reserves the gear's `ICON_TOGGLE_W` by default (via `BAR_CONTROLS_W`) and, when
+the tab is up, only the DELTA the wider tab adds beyond it (`settings_extra`), so tabs shrink
+by exactly the swap. `settings_tab_clicks_...`'s harness spacer updated to the gear-less pin;
+both screenshot harnesses re-verified (gear alone with no session; Settings tab alone, no
+gear, once open).
+
 ## 1.0.5 - "Settings is a tab": switch away without losing staged edits
 User ask: switching from settings to a terminal tab and back should not lose changes. The
 settings view now behaves like a TAB instead of a modal takeover.
 - **The Settings tab** (`tabs.rs`, `ui.rs`): while a settings session exists, a right-pinned
-  fixed-width tab (SETTINGS_TAB_W, id u64::MAX - outside NEXT_TAB_ID's range) sits left of the
-  gear: active-styled while the view shows, click re-activates, its close-x runs the guarded
+  fixed-width tab (SETTINGS_TAB_W, id u64::MAX - outside NEXT_TAB_ID's range) pins to the
+  right edge: active-styled while the view shows, click re-activates, its close-x runs the guarded
   close. `draw_tab` grew `idx: Option<usize>` - `None` drops the number prefix (no Cmd+N
   targets the Settings tab). Fixed-mode terminal tabs subtract the settings tab from their
   width budget; the right-pin spacer accounts for it (one row, no nested layouts - ui.md).

@@ -1,6 +1,6 @@
 # stdusk - manual test guide
 
-Step-by-step verification for everything shipped through 1.0.5.
+Step-by-step verification for everything shipped through 1.0.6.
 Automated coverage: `cargo test` (unit + parser suites), `cargo clippy -- -D warnings`,
 `--screenshot` render harness, and end-to-end theme/config checks (see LEDGER). Everything
 below is the *human* pass - interactions the harness can't drive.
@@ -324,3 +324,11 @@ HOME-override e2e); these are the interactions only a human can drive:
 | Hover the Settings tab, click its close-x (or footer Close / Esc) with unsaved edits | The Save / Discard / Keep-editing guard appears; any resolution removes the Settings tab |
 | Close settings with no edits | Settings tab disappears; the bar returns to gear-only |
 | Save in settings, switch away and back | Still on the settings view with a clean (non-dirty) state |
+
+## 27. 1.0.6 - Settings tab replaces the gear
+| Step | Expect |
+|---|---|
+| No settings open | The right edge shows the gear icon, as before |
+| Click the gear (or Cmd+,) | Settings opens AND the gear is replaced by the "Settings" tab - only one shows, never both |
+| Close settings (tab x / footer Close / discard) | The Settings tab disappears and the gear returns |
+| Fixed tab-width mode, open settings | Terminal tabs shrink only by the tab-minus-gear delta, not by a whole extra control |
