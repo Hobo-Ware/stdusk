@@ -12,7 +12,7 @@ It drops from the top edge on a keystroke, shows you what your machine is actual
 </p>
 
 <p align="center">
-By <a href="https://github.com/Hobo-Ware">Hobo-Ware</a> - tools for the discerning degenerate.
+By <a href="https://github.com/Hobo-Ware">HoboWare</a> - tools for the discerning degenerate.
 </p>
 
 ---
