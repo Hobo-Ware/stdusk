@@ -307,3 +307,10 @@ HOME-override e2e); these are the interactions only a human can drive:
 | Set `theme = "Parasio Dark"` (old saved config), restart | Resolves to Paraiso Dark, not the one-half-dark fallback |
 | Scheme browser > Light chip | 39 light schemes incl. Gruvbox Light, Catppuccin Latte, Flexoki Light, Dayfox, GitHub Light |
 | Apply each new light scheme | Chrome derives light (pale tab strip, dark text), terminal preview matches upstream palette |
+
+## 25. 1.0.4 - pack-variant scheme rows
+| Step | Expect |
+|---|---|
+| Scheme browser: apply the pack `tokyonight` row (not built-in `tokyo-night`) | The PACK palette applies (different cursor color from the built-in); restart keeps it |
+| Apply pack `onehalflight` | Pack palette (different brights/cursor from built-in `one-half-light`) |
+| Config `theme = "light"` | Still the built-in one-half-light (bare alias unchanged) |

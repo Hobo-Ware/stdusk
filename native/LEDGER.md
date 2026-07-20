@@ -547,6 +547,16 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.0.4 - pack-variant shadowing fix
+The 1.0.3 dupe audit's known quirk, fixed: `by_name`'s built-in arms matched the normalized
+variant spellings (`tokyonight`, `onehalflight`), so clicking the PACK TokyoNight/OneHalfLight
+browser rows applied the built-in namesake instead. The arms now keep only the canonical
+spellings (`tokyo-night`, `one-half-light`, plus the bare `light` alias); variant spellings
+fall through to the pack lookup. `pack_variant_spellings_apply_the_pack_not_the_builtin`
+compares every palette field (the pack TokyoNight differs from the built-in only in cursor
+color). Pack `Dracula` stays shadowed by design - all_schemes skips it, so no browser row
+exists. 230 tests green.
+
 ## 1.0.3 - "Operable & readable": keyboard a11y + theming pass
 
 ### Keyboard a11y - settings fully keyboard-operable
@@ -608,7 +618,7 @@ dropdown popups had zero keyboard support, (c) `num_field` ignored arrows. Files
   but DIFFERENT palettes kept as variants: one-half-dark/OneHalfDark,
   one-half-light/OneHalfLight, tokyo-night/TokyoNight, dracula/pack-Dracula. Known quirk: the
   by_name built-in arms shadow pack `onehalflight`/`tokyonight`, so those two rows apply the
-  built-in - pre-existing, tracked for a follow-up.
+  built-in - fixed in 1.0.4.
 - **15 hand-vendored light schemes** (no network; pack XRDB format, upstream+license header
   per file, all MIT except Tango = public domain): Gruvbox Light, Gruvbox Material Light,
   Catppuccin Latte, Everforest Light, PaperColor Light, Selenized Light, Selenized White,
