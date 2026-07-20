@@ -118,6 +118,75 @@ pub(crate) fn snap_glyph(c: char, flags: Flags) -> (char, bool) {
     }
 }
 
+/// The mouse-reporting an app switched on, snapshotted from the alacritty `Term` modes. `stdusk`
+/// sends NO reports unless the app asked (DECSET 1000/1002/1003 + SGR 1006); before this, TUIs
+/// that enabled tracking (Claude Code's fullscreen UI, `git` list pickers) never received
+/// wheel/click events and so couldn't scroll or repaint efficiently.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // independent DECSET flags, not a state machine
+pub(crate) struct MouseReporting {
+    pub(crate) report_click: bool,     // ?1000 - button press + release
+    pub(crate) drag: bool, // ?1002 - button-event tracking (motion while a button is down)
+    pub(crate) motion: bool, // ?1003 - any-motion tracking (every move)
+    pub(crate) sgr: bool,  // ?1006 - SGR extended coordinates
+    pub(crate) alternate_scroll: bool, // ?1007 - wheel emits arrow keys on the alt screen
+}
+
+impl MouseReporting {
+    /// A button/motion tracking mode is on, so pointer events belong to the app (not to local
+    /// scroll/selection). Encoding still gates on `sgr` - we only speak SGR 1006.
+    pub(crate) fn reports_buttons(self) -> bool {
+        self.report_click || self.drag || self.motion
+    }
+}
+
+/// SGR mouse button code for a wheel tick: 64 = up, 65 = down; `None` for a zero delta.
+pub(crate) fn wheel_button(delta_lines: i32) -> Option<u8> {
+    match delta_lines.signum() {
+        1 => Some(64),
+        -1 => Some(65),
+        _ => None,
+    }
+}
+
+/// Encode one pointer event in SGR 1006 form: `ESC [ < button ; col ; row (M|m)`. `col`/`row`
+/// are 0-based grid cells; the wire format is 1-based, so they're bumped here. `pressed = false`
+/// emits the release terminator `m`; presses, wheel ticks and motion use `M`.
+pub(crate) fn sgr_mouse(button: u8, col: usize, row: usize, pressed: bool) -> Vec<u8> {
+    let terminator = if pressed { 'M' } else { 'm' };
+    format!("\x1b[<{button};{};{}{terminator}", col + 1, row + 1).into_bytes()
+}
+
+/// SGR 1006 reports for a wheel scroll of `lines` at cell `(col, row)`: one report per line, as a
+/// physical mouse sends one event per notch. Positive = wheel up (64), negative = down (65);
+/// empty for a zero delta. Wheel events are always the `M` (pressed) form.
+pub(crate) fn wheel_sgr(lines: i32, col: usize, row: usize) -> Vec<u8> {
+    let Some(button) = wheel_button(lines) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for _ in 0..lines.unsigned_abs() {
+        out.extend_from_slice(&sgr_mouse(button, col, row, true));
+    }
+    out
+}
+
+/// Lines to auto-scroll the viewport per frame while a selection drag is held past a pane edge,
+/// so the selection can extend beyond what was visible when the drag began (standard terminal
+/// behavior). Sign matches `PtyTerm::scroll`: + past the TOP edge (reveal older history), - past
+/// the BOTTOM. Ramps 1..=MAX with how far past the edge the pointer sits; 0 inside the viewport.
+pub(crate) fn drag_autoscroll_lines(pointer_y: f32, top: f32, bottom: f32, cell_h: f32) -> i32 {
+    const MAX: i32 = 4;
+    let step = |past: f32| (1 + (past / cell_h.max(1.0)) as i32).min(MAX);
+    if pointer_y < top {
+        step(top - pointer_y)
+    } else if pointer_y > bottom {
+        -step(pointer_y - bottom)
+    } else {
+        0
+    }
+}
+
 /// A frame's worth of visible grid, ready to paint.
 pub(crate) struct GridSnap {
     pub(crate) cols: usize,
@@ -655,6 +724,20 @@ impl PtyTerm {
         self.term.lock().mode().contains(TermMode::ALT_SCREEN)
     }
 
+    /// The mouse-reporting modes the app has enabled, snapshotted from the `Term`, so the UI can
+    /// route wheel/pointer events to the pty instead of scrolling/selecting locally.
+    pub(crate) fn mouse_reporting(&self) -> MouseReporting {
+        let term = self.term.lock();
+        let mode = term.mode();
+        MouseReporting {
+            report_click: mode.contains(TermMode::MOUSE_REPORT_CLICK),
+            drag: mode.contains(TermMode::MOUSE_DRAG),
+            motion: mode.contains(TermMode::MOUSE_MOTION),
+            sgr: mode.contains(TermMode::SGR_MOUSE),
+            alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
+        }
+    }
+
     /// Begin a text selection anchored at a grid point (mapped from mouse coords).
     pub(crate) fn start_selection(&self, line: i32, col: usize, right: bool) {
         let point = Point::new(Line(line), Column(col));
@@ -752,8 +835,9 @@ impl PtyTerm {
 #[cfg(test)]
 mod tests {
     use super::{
-        CmdState, ExitAction, Flags, OnExit, PtyTerm, SpawnOpts, cmd_from_exit, exit_action,
-        on_exit_mode, resolve_cwd, resolve_shell, snap_glyph,
+        CmdState, ExitAction, Flags, OnExit, PtyTerm, SpawnOpts, cmd_from_exit,
+        drag_autoscroll_lines, exit_action, on_exit_mode, resolve_cwd, resolve_shell, sgr_mouse,
+        snap_glyph, wheel_button, wheel_sgr,
     };
     use crate::config::Profile;
 
@@ -953,6 +1037,66 @@ mod tests {
         let term = e2e_term("printf 'hello'; sleep 5");
         poll_term(&term, |t| t.take_activity().then_some(())).expect("activity never flagged");
         assert!(!term.take_activity(), "take_activity must consume the flag");
+    }
+
+    #[test]
+    fn wheel_button_maps_direction() {
+        assert_eq!(wheel_button(1), Some(64)); // wheel up
+        assert_eq!(wheel_button(5), Some(64)); // magnitude ignored, sign only
+        assert_eq!(wheel_button(-1), Some(65)); // wheel down
+        assert_eq!(wheel_button(-3), Some(65));
+        assert_eq!(wheel_button(0), None);
+    }
+
+    #[test]
+    fn sgr_mouse_encodes_1based_cells_and_terminator() {
+        // 0-based (col, row) -> 1-based on the wire; press = `M`, release = `m`.
+        assert_eq!(sgr_mouse(0, 0, 0, true), b"\x1b[<0;1;1M".to_vec());
+        assert_eq!(sgr_mouse(2, 4, 9, false), b"\x1b[<2;5;10m".to_vec()); // right-button release
+        assert_eq!(sgr_mouse(64, 2, 4, true), b"\x1b[<64;3;5M".to_vec()); // wheel up
+    }
+
+    #[test]
+    fn wheel_sgr_emits_one_report_per_line() {
+        assert_eq!(wheel_sgr(1, 2, 4), b"\x1b[<64;3;5M".to_vec());
+        assert_eq!(wheel_sgr(-1, 0, 0), b"\x1b[<65;1;1M".to_vec());
+        assert_eq!(wheel_sgr(2, 0, 0), b"\x1b[<64;1;1M\x1b[<64;1;1M".to_vec());
+        assert!(wheel_sgr(0, 3, 3).is_empty());
+    }
+
+    #[test]
+    fn drag_autoscroll_ramps_and_signs() {
+        // Inside the viewport: no scroll.
+        assert_eq!(drag_autoscroll_lines(50.0, 10.0, 100.0, 10.0), 0);
+        assert_eq!(drag_autoscroll_lines(10.0, 10.0, 100.0, 10.0), 0); // exactly at the top edge
+        // Past the TOP edge -> positive (reveal older history), ramps with distance, capped at 4.
+        assert_eq!(drag_autoscroll_lines(5.0, 10.0, 100.0, 10.0), 1); // <1 cell over
+        assert_eq!(drag_autoscroll_lines(-100.0, 10.0, 100.0, 10.0), 4); // far over -> cap
+        // Past the BOTTOM edge -> negative (reveal newer content).
+        assert_eq!(drag_autoscroll_lines(105.0, 10.0, 100.0, 10.0), -1);
+        assert_eq!(drag_autoscroll_lines(1000.0, 10.0, 100.0, 10.0), -4);
+    }
+
+    #[test]
+    fn real_pty_tracks_mouse_modes_and_wheel_sgr_round_trips() {
+        // The app enables normal mouse tracking (?1000h) + SGR extended coords (?1006h): both
+        // must show up in `mouse_reporting()`. Then a wheel-up SGR report we send must survive
+        // the pty round-trip - `head` echoes it back with ESC mapped to 'E' so it lands in the
+        // grid (raw ESC would be parsed as a control sequence, see the OSC 11 test). `head -c`
+        // is sized to the exact report length (10 bytes) so head EOFs and flushes its stdio
+        // buffer - a larger count would block-buffer forever on a short reply.
+        let mut term = e2e_term(
+            "stty raw -echo; printf '\\033[?1000h\\033[?1006h'; head -c 10 | tr '\\033' 'E'; \
+             sleep 5",
+        );
+        poll_term(&term, |t| t.mouse_reporting().report_click.then_some(()))
+            .expect("mouse reporting mode never tracked");
+        let mr = term.mouse_reporting();
+        assert!(mr.report_click && mr.sgr, "?1000 + ?1006 must both be tracked: {mr:?}");
+        assert!(mr.reports_buttons());
+        term.send(&wheel_sgr(1, 2, 4)); // wheel up at cell (2,4) -> ESC[<64;3;5M
+        poll_term(&term, |t| grid_text(t).contains("E[<64;3;5M").then_some(()))
+            .expect("wheel SGR report never reached the app");
     }
 
     #[test]

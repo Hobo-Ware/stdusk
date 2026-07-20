@@ -284,14 +284,32 @@ impl Stdusk {
                         let rows = (rect.height() / ch).floor().max(1.0) as usize;
                         term.resize(cols, rows);
                         // Wheel scroll goes to the pane under the pointer.
-                        if scroll_y != 0.0 && pointer.is_some_and(|p| rect.contains(p)) {
+                        if scroll_y != 0.0
+                            && let Some(p) = pointer.filter(|p| rect.contains(*p))
+                        {
                             let mut lines = (scroll_y / ch).round() as i32;
                             if lines == 0 {
                                 lines = scroll_y.signum() as i32;
                             }
+                            let mr = term.mouse_reporting();
                             if alt_wheel {
                                 // Alt+wheel sends arrow keys instead of scrolling, one per line
-                                // (Tabby's mousewheel handler - gated on Alt alone).
+                                // (Tabby's mousewheel handler - gated on Alt alone). An explicit
+                                // user override, so it wins even over app mouse reporting.
+                                term.send(&ui::alt_scroll_bytes(lines));
+                            } else if mr.reports_buttons() && mr.sgr {
+                                // The app asked for real mouse reporting: wheel -> SGR 1006 events
+                                // at the pointer's cell, so its fullscreen TUI scrolls (Claude
+                                // Code, git list pickers) instead of doing nothing.
+                                let col = (((p.x - rect.left()) / cw) as usize)
+                                    .min(cols.saturating_sub(1));
+                                let row = (((p.y - rect.top()) / ch) as usize)
+                                    .min(rows.saturating_sub(1));
+                                term.send(&crate::terminal::wheel_sgr(lines, col, row));
+                            } else if mr.alternate_scroll && term.is_alt_screen() {
+                                // Alt-screen app without real mouse reporting (less/pager): wheel
+                                // emits arrow keys (xterm alternateScroll), since the alt grid has
+                                // no scrollback to move.
                                 term.send(&ui::alt_scroll_bytes(lines));
                             } else {
                                 term.scroll(lines);
@@ -336,6 +354,27 @@ impl Stdusk {
                             egui::Stroke::new(1.5, colors::accent()),
                             egui::StrokeKind::Inside,
                         );
+                    }
+                    // A selection drag held past the pane's top/bottom edge auto-scrolls the
+                    // viewport, so the selection extends beyond what was visible when the drag
+                    // began (standard terminal behavior). render_grid re-extends the selection to
+                    // the clamped edge cell every frame; nudging the offset here feeds it fresh
+                    // lines, and the repaint keeps frames coming while held. Skipped when the app
+                    // owns the mouse (its own drag reporting handles scrolling).
+                    if resp.dragged()
+                        && !term.mouse_reporting().reports_buttons()
+                        && let Some(p) = resp.interact_pointer_pos()
+                    {
+                        let lines = crate::terminal::drag_autoscroll_lines(
+                            p.y,
+                            rect.top(),
+                            rect.bottom(),
+                            ch,
+                        );
+                        if lines != 0 {
+                            term.scroll(lines);
+                            ctx.request_repaint();
+                        }
                     }
                     if bell_on && term.take_bell() {
                         bell_rang = true;
