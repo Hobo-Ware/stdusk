@@ -1,0 +1,17 @@
+.terminal-toolbar-spacer
+.content(#content, [style.opacity]='frontendIsReady ? 1 : 0')
+search-panel(
+    *ngIf='showSearchPanel && hasFocus && frontend',
+    @toolbarSlide,
+    [@.disabled]='!config.store.accessibility.animations',
+    [frontend]='frontend',
+    (close)='showSearchPanel = false; frontend.cancelSearch()'
+)
+
+button.btn.btn-sm.btn-link.toolbar-pin-button(
+    *ngIf='enableToolbar && !pinToolbar',
+    (click)='togglePinToolbar()',
+    (mouseenter)='showToolbar()',
+    (mouseleave)='hideToolbar()'
+)
+    i.fas.fa-wrench

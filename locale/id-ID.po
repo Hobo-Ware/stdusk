@@ -1,0 +1,2574 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"X-Crowdin-Project: tabby\n"
+"X-Crowdin-Project-ID: 493349\n"
+"X-Crowdin-Language: id\n"
+"X-Crowdin-File: /locale/app.pot\n"
+"X-Crowdin-File-ID: 75\n"
+"Project-Id-Version: tabby\n"
+"Language-Team: Indonesian\n"
+"Language: id_ID\n"
+"PO-Revision-Date: 2025-01-22 22:02\n"
+
+#: tabby-local/src/components/terminalTab.component.ts:113
+msgid "\"{command}\" is still running. Close?"
+msgstr "\"{command}\" masih berjalan. Tutup?"
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:78
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:88
+msgid "{name} copy"
+msgstr "{name} salin"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:77
+msgid "A second font family used to display characters missing in the main font"
+msgstr "Keluarga huruf kedua digunakan untuk menampilkan karakter yang hilang di huruf utama"
+
+#: tabby-core/src/components/transfersMenu.component.ts:49
+msgid "Abort all"
+msgstr "Batalkan semua"
+
+#: locale/tmp-html/tabby-ssh/src/components/hostKeyPromptModal.component.html:24
+msgid "Accept and remember key"
+msgstr "Terima dan ingat kunci"
+
+#: locale/tmp-html/tabby-ssh/src/components/hostKeyPromptModal.component.html:25
+msgid "Accept just this once"
+msgstr "Terima kali ini saja"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:84
+msgid "Accessibility"
+msgstr "Aksesbilitas"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:27
+msgid "Acrylic background"
+msgstr "Latar belakang akrilik"
+
+#: locale/tmp-html/tabby-local/src/components/commandLineEditor.component.html:24
+#: locale/tmp-html/tabby-local/src/components/environmentEditor.component.html:11
+msgid "Add"
+msgstr "Tambah"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:16
+msgid "Add a port forward"
+msgstr "Tambah port forward"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:115
+msgid "Add a private key"
+msgstr "Tambah kunci pribadi"
+
+#: locale/tmp-html/tabby-settings/src/components/multiHotkeyInput.component.html:8
+msgid "Add..."
+msgstr "Tambah..."
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:84
+msgid "Additional space between lines"
+msgstr "Ruang tambahan antar baris"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:22
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:61
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:64
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:124
+msgid "Advanced"
+msgstr "Lanjutan"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:90
+msgid "Agent"
+msgstr "Agen"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:134
+msgid "Agent forwarding"
+msgstr "Penerusan agen"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:35
+msgid "Agent pipe path"
+msgstr "Jalur pipa agen"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:24
+msgid "Agent type"
+msgstr "Jenis agen"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:169
+msgid "Allows opening .bat files in tabs, but breaks some shells"
+msgstr "Izinkan membuka berkas .bat di tab, tapi memecahkan beberapa shell"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:60
+msgid "Allows quickly opening a terminal in the selected folder"
+msgstr "Izinkan buka dengan cepat terminal di direktori terpilih"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:25
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsTab.component.html:11
+msgid "Always dark"
+msgstr "Selalu gelap"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:27
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsTab.component.html:13
+msgid "Always light"
+msgstr "Selalu terang"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:2
+#: tabby-terminal/src/settings.ts:14
+msgid "Appearance"
+msgstr "Tampilan"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:4
+msgid "Application"
+msgstr "Aplikasi"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:47
+msgid "Application settings"
+msgstr "Pengaturan aplikasi"
+
+#: tabby-web/src/services/hostWindow.service.ts:19
+msgid "Are you sure you want to close Tabby? You can disable this prompt in Settings -> Window."
+msgstr "Anda yakin ingin menutup Tabby? Anda bisa menonaktifkan prompt ini di Pengaturan -> Jendela."
+
+#: tabby-core/src/services/config.service.ts:440
+msgid "Are you sure?"
+msgstr "Anda yakin?"
+
+#: locale/tmp-html/tabby-local/src/components/commandLineEditor.component.html:18
+msgid "Arguments"
+msgstr "Argumen"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:26
+msgid "Ask a question"
+msgstr "Berikan pertanyaan"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:20
+msgid "Ask before closing the browser tab"
+msgstr "Tanya sebelum tutup tab peramban"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:141
+msgid "Audible"
+msgstr "Terdengar"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:74
+msgid "Authentication method"
+msgstr "Metode otentikasi"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:79
+msgid "Author"
+msgstr "Pencipta"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:50
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:78
+msgid "Auto"
+msgstr "Otomatis"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:153
+msgid "Auto-open a terminal on app start"
+msgstr "Otomatis buka terminal saat memulai aplikasi"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:13
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:53
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:28
+msgid "Automatic"
+msgstr "Otomatis"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:73
+msgid "Automatic Updates"
+msgstr "Pembaruan Otomatis"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:54
+msgid "Automatically upload changes and check for updates every minute"
+msgstr "Otomatis unggah perubahan dan cek pembaruan setiap menit"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:10
+msgid "Available"
+msgstr "Tersedia"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:35
+msgid "Background type"
+msgstr "Jenis latar belakang"
+
+#: locale/tmp-html/tabby-terminal/src/components/inputProcessingSettings.component.html:4
+msgid "Backspace key mode"
+msgstr ""
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:14
+#: tabby-serial/src/components/serialTab.component.ts:93
+#: tabby-serial/src/profiles.ts:88
+msgid "Baud rate"
+msgstr "Baud rate"
+
+#: tabby-terminal/src/hotkeys.ts:22
+msgid "Beginning of the line"
+msgstr "Awal baris"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:64
+msgid "Blink cursor"
+msgstr "Kursor berkedip"
+
+#: tabby-core/src/utils.ts:60
+msgid "Blue"
+msgstr "Biru"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:39
+msgid "Blur"
+msgstr "Buram"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:28
+msgid "Bold font weight"
+msgstr "Ukuran ketebalan huruf"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:132
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:80
+msgid "Bottom"
+msgstr "Bawah"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:109
+msgid "Bracketed paste (requires shell support)"
+msgstr "Tempel tanda kurung (butuh dukungan shell)"
+
+#: tabby-terminal/src/services/multifocus.service.ts:19
+msgid "Broadcast mode. Click anywhere to cancel."
+msgstr ""
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:50
+#: tabby-core/src/services/profiles.service.ts:411
+msgid "Built-in"
+msgstr "Bawaan"
+
+#: locale/tmp-html/tabby-core/src/components/renameTabModal.component.html:7
+#: locale/tmp-html/tabby-settings/src/components/editProfileGroupModal.component.html:28
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:71
+#: locale/tmp-html/tabby-settings/src/components/hotkeyInputModal.component.html:14
+#: locale/tmp-html/tabby-settings/src/components/setVaultPassphraseModal.component.html:12
+#: locale/tmp-html/tabby-ssh/src/components/sftpCreateDirectoryModal.component.html:10
+#: locale/tmp-html/tabby-ssh/src/components/sftpDeleteModal.component.html:7
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsForMode.component.html:31
+#: tabby-electron/src/services/updater.service.ts:134
+#: tabby-local/src/components/terminalTab.component.ts:118
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:117
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:79
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:99
+#: tabby-ssh/src/sftpContextMenu.ts:40
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:522
+msgid "Cancel"
+msgstr "Batal"
+
+#: locale/tmp-html/tabby-serial/src/components/serialTab.component.html:4
+msgid "Change baud rate"
+msgstr "Ubah baud rate"
+
+#: tabby-core/src/tabContextMenu.ts:133
+msgid "Change tab color"
+msgstr "Rubah warna label"
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:12
+msgid "Change the master passphrase"
+msgstr "Ubah frasa sandi utama"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:13
+msgid "Check for updates"
+msgstr "Cek pembaruan"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:172
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:176
+msgid "Ciphers"
+msgstr "Sandi"
+
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSelector.component.html:5
+msgid "Clear"
+msgstr "Bersihkan"
+
+#: tabby-core/src/services/profiles.service.ts:248
+msgid "Clear recent profiles"
+msgstr "Bersihkan profil terbaru"
+
+#: tabby-terminal/src/hotkeys.ts:50
+msgid "Clear terminal"
+msgstr "Bersihkan terminal"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:58
+msgid "Clear terminal after connection"
+msgstr "Bershikan terminal setelah koneksi"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:94
+msgid "Clipboard"
+msgstr "Papan clip"
+
+#: locale/tmp-html/tabby-core/src/components/safeModeModal.component.html:7
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:53
+#: locale/tmp-html/tabby-settings/src/components/showSecretModal.component.html:10
+#: tabby-core/src/tabContextMenu.ts:33
+msgid "Close"
+msgstr "Tutup"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:45
+msgid "Close and never show again"
+msgstr "Tutup dan jangan tampilkan lagi"
+
+#: tabby-core/src/hotkeys.ts:240
+msgid "Close focused pane"
+msgstr "Tutup panel fokus"
+
+#: tabby-core/src/tabContextMenu.ts:48
+msgid "Close other tabs"
+msgstr "Tutup tab lain"
+
+#: tabby-core/src/hotkeys.ts:28
+#: tabby-core/src/tabContextMenu.ts:34
+msgid "Close tab"
+msgstr "Tutup tab"
+
+#: tabby-core/src/tabContextMenu.ts:64
+msgid "Close tabs to the left"
+msgstr "Tutup tab ke kiri"
+
+#: tabby-core/src/tabContextMenu.ts:56
+msgid "Close tabs to the right"
+msgstr "Tutup tab ke kanan"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:182
+msgid "Close the window after closing the last tab"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:33
+#: tabby-core/src/tabContextMenu.ts:132
+msgid "Color"
+msgstr "Warna"
+
+#: tabby-terminal/src/settings.ts:29
+msgid "Color scheme"
+msgstr "Skema warna"
+
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsTab.component.html:2
+msgid "Color schemes"
+msgstr "Warna Skema"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:81
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:216
+msgid "Colors"
+msgstr "Warna-warna"
+
+#: tabby-core/src/hotkeys.ts:72
+msgid "Combine all tabs into the current tab"
+msgstr "Gabungkan semua tab ke tab saat ini"
+
+#: locale/tmp-html/tabby-local/src/components/commandLineEditor.component.html:4
+msgid "Command line"
+msgstr "Baris perintah"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:13
+msgid "Command's stdin/stdout is used instead of a network connection"
+msgstr "Perintah stdin/stdout digunakan sebagai pengganti koneksi jaringan"
+
+#: tabby-core/src/services/commands.service.ts:105
+msgid "Commands"
+msgstr "Perintah-perintah"
+
+#: tabby-core/src/theme.ts:16
+msgid "Compact (legacy)"
+msgstr "Padat (tua)"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:126
+msgid "Config deleted"
+msgstr "Konfigurasi telah dihapus"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:108
+msgid "Config downloaded"
+msgstr "Konfigurasi diunduh"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:115
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:120
+msgid "Config file"
+msgstr "Berkas konfigurasi"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:2
+#: tabby-settings/src/settings.ts:73
+msgid "Config sync"
+msgstr "Sinkronisasi konfigurasi"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:90
+msgid "Config uploaded"
+msgstr "Konfigurasi diunggah"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:31
+msgid "Configs"
+msgstr "Konfigurasi"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:21
+msgid "Connect through a proxy server"
+msgstr "Terhubung melalui server proxy"
+
+#: tabby-core/src/index.ts:220
+#: tabby-core/src/services/profiles.service.ts:296
+msgid "Connect to \"%s\"..."
+msgstr "Hubungkan ke \"%s\"..."
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:17
+msgid "Connect to a different host first and use it as a proxy"
+msgstr "Hubungkan ke host yang berbeda terlebih dahulu dan gunakan sebagai proxy"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpPanel.component.html:19
+#: tabby-serial/src/components/serialTab.component.ts:60
+#: tabby-ssh/src/components/sshTab.component.ts:130
+#: tabby-telnet/src/components/telnetTab.component.ts:54
+msgid "Connecting"
+msgstr "Menghubungkan"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:7
+msgid "Connection"
+msgstr "Koneksi"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:26
+msgid "Connection failed: {error}"
+msgstr "Koneksi gagal: {error}"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:40
+msgid "Connection name will be used instead"
+msgstr "Nama koneksi akan digunakan sebagai gantinya"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:61
+msgid "Context menu"
+msgstr "Menu konteks"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:14
+msgid "Controls the amount of space between elements"
+msgstr ""
+
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:240
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:248
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:591
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:811
+#: tabby-terminal/src/tabContextMenu.ts:34
+msgid "Copied"
+msgstr "Disalin"
+
+#: tabby-terminal/src/tabContextMenu.ts:30
+msgid "Copy"
+msgstr "Salin"
+
+#: tabby-terminal/src/hotkeys.ts:70
+#: tabby-terminal/src/tabContextMenu.ts:70
+msgid "Copy current path"
+msgstr "Salin jalur saat ini"
+
+#: tabby-electron/src/sftpContextMenu.ts:29
+msgid "Copy full path"
+msgstr "Salin alamat lengkap"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:97
+msgid "Copy on select"
+msgstr "Salin pada saat pilih"
+
+#: tabby-terminal/src/hotkeys.ts:10
+msgid "Copy to clipboard"
+msgstr "Salin ke papan klip"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:103
+msgid "Copy with formatting"
+msgstr "Salin dengan formatting"
+
+#: tabby-core/src/services/config.service.ts:425
+msgid "Could not decrypt config"
+msgstr "Tidak bisa mendekripsi konfigurasi"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpCreateDirectoryModal.component.html:9
+msgid "Create"
+msgstr "Buat"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpPanel.component.html:7
+#: tabby-ssh/src/sftpContextMenu.ts:29
+msgid "Create directory"
+msgstr "Buat direktori"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:90
+msgid "Current"
+msgstr "Saat ini"
+
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsForMode.component.html:3
+msgid "Current color scheme"
+msgstr "Skema warna saat ini"
+
+#: locale/tmp-html/tabby-ssh/src/components/hostKeyPromptModal.component.html:17
+msgid "Current host key fingerprint"
+msgstr "Sidik jari kunci host saat ini"
+
+#: tabby-core/src/tabContextMenu.ts:184
+msgid "Current process: {name}"
+msgstr "Proses saat ini: {name}"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:51
+msgid "Cursor shape"
+msgstr "Bentuk kursor"
+
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsForMode.component.html:46
+msgid "Custom"
+msgstr "Kustom"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:90
+msgid "Custom CSS"
+msgstr "CSS khusus"
+
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsTab.component.html:17
+msgid "Dark mode"
+msgstr ""
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:26
+msgid "Data bits"
+msgstr "Data bits"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:80
+msgid "Debugging"
+msgstr "Men-debug"
+
+#: tabby-core/src/hotkeys.ts:256
+msgid "Decrease horizontal split size"
+msgstr "Kurangi ukuran pemisahan horizontal"
+
+#: tabby-core/src/hotkeys.ts:248
+msgid "Decrease vertical split size"
+msgstr "Kurangi ukuran pemisahan vertical"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:92
+msgid "Default \"Connect to\" type"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:93
+msgid "Default connection type used by quick connect feature (ex. SSH, Telnet)"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:8
+msgid "Default profile for new tabs"
+msgstr "Profil bawaan untuk tab baru"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileGroupModal.component.html:16
+msgid "Default profile group settings"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:101
+msgid "Default profile settings"
+msgstr "Pengaturan profil bawaan"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:124
+msgid "Defaults"
+msgstr "Bawaan"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:6
+msgid "Defaults for {type}"
+msgstr "Bawaan untuk {type}"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:44
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:51
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:29
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsForMode.component.html:8
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:116
+#: tabby-settings/src/components/editProfileGroupModal.component.ts:38
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:130
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:215
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:229
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:318
+#: tabby-settings/src/components/vaultSettingsTab.component.ts:52
+#: tabby-ssh/src/sftpContextMenu.ts:39
+#: tabby-ssh/src/sftpContextMenu.ts:47
+#: tabby-terminal/src/components/colorSchemeSettingsForMode.component.ts:92
+#: tabby-terminal/src/components/loginScriptsSettings.component.ts:32
+msgid "Delete"
+msgstr "Hapus"
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:128
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:213
+#: tabby-terminal/src/components/colorSchemeSettingsForMode.component.ts:90
+msgid "Delete \"{name}\"?"
+msgstr "Hapus \"{name}\"?"
+
+#: tabby-ssh/src/sftpContextMenu.ts:35
+msgid "Delete {fullPath}?"
+msgstr "Hapus {fullPath}?"
+
+#: tabby-terminal/src/hotkeys.ts:42
+msgid "Delete entire line"
+msgstr "Hapus seluruh baris"
+
+#: tabby-terminal/src/hotkeys.ts:46
+msgid "Delete next word"
+msgstr "Hapus kata selanjutnya"
+
+#: tabby-terminal/src/hotkeys.ts:38
+msgid "Delete previous word"
+msgstr "Hapus kata sebelumnya"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:114
+msgid "Delete the config on the remote side?"
+msgstr ""
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:226
+msgid "Delete the group's profiles?"
+msgstr "Hapus profil grup?"
+
+#: tabby-terminal/src/components/loginScriptsSettings.component.ts:29
+msgid "Delete this script?"
+msgstr "Hapus skrip ini?"
+
+#: tabby-settings/src/components/vaultSettingsTab.component.ts:50
+msgid "Delete vault contents?"
+msgstr "Hapus konten vault?"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpDeleteModal.component.html:3
+msgid "Deleting"
+msgstr "Menghapus"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:8
+msgid "Device"
+msgstr "Perangkat"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:10
+msgid "Direct"
+msgstr "Langsung"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:57
+msgid "Disable"
+msgstr "Matikan"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:39
+msgid "Disable dynamic tab title"
+msgstr "Matikan judul tab dinamis"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:218
+msgid "Disable fluent background while dragging"
+msgstr "Nonaktifkan latar belakang yang lancar saat menyeret"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:204
+msgid "Disable GPU acceleration"
+msgstr "Matikan akselerasi GPU"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:50
+msgid "Disabled"
+msgstr "Dinonaktifkan"
+
+#: locale/tmp-html/tabby-ssh/src/components/hostKeyPromptModal.component.html:26
+#: tabby-ssh/src/components/sshTab.component.ts:200
+#: tabby-telnet/src/components/telnetTab.component.ts:83
+#: tabby-terminal/src/api/connectableTerminalTab.component.ts:36
+#: tabby-terminal/src/tabContextMenu.ts:106
+#: tabby-terminal/src/tabContextMenu.ts:110
+msgid "Disconnect"
+msgstr "Putuskan"
+
+#: tabby-terminal/src/hotkeys.ts:106
+msgid "Disconnect current tab (Serial/Telnet/SSH)"
+msgstr ""
+
+#: tabby-ssh/src/components/sshTab.component.ts:198
+#: tabby-telnet/src/components/telnetTab.component.ts:81
+msgid "Disconnect from {host}?"
+msgstr "Putuskan dari {host}?"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:30
+msgid "Display images via Sixel escape sequences"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:85
+msgid "Display on"
+msgstr "Tampil pada"
+
+#: tabby-core/src/components/transfersMenu.component.ts:50
+msgid "Do not abort"
+msgstr "Jangan dibatalkan"
+
+#: tabby-ssh/src/components/sshTab.component.ts:201
+#: tabby-telnet/src/components/telnetTab.component.ts:84
+msgid "Do not close"
+msgstr "Jangan tutup"
+
+#: locale/tmp-html/tabby-core/src/components/unlockVaultModal.component.html:6
+#: locale/tmp-html/tabby-core/src/components/unlockVaultModal.component.html:8
+msgid "Do not remember"
+msgstr "Jangan ingat"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:97
+msgid "Dock always on top"
+msgstr "Kait selalu diatas"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:67
+msgid "Dock the terminal"
+msgstr "Kaitkan terminal"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:104
+msgid "Docked terminal size"
+msgstr "Kaitkan ukuran terminal"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:111
+msgid "Docked terminal space"
+msgstr "Kaitkan ruang terminal"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:64
+msgid "Docking"
+msgstr "Mengaitkan"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:75
+msgid "Double-click selection will stop at these characters"
+msgstr "Pilihan klik dua kali akan berhenti di karakter ini"
+
+#: tabby-core/src/tabContextMenu.ts:79
+msgid "Down"
+msgstr "Turun"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:43
+msgid "Download"
+msgstr "Unduh"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:23
+msgid "Draw bold text in bright colors"
+msgstr "Menampilkan teks tebal dalam warna cerah"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:48
+#: tabby-core/src/tabContextMenu.ts:127
+msgid "Duplicate"
+msgstr "Duplikasi"
+
+#: tabby-local/src/tabContextMenu.ts:72
+msgid "Duplicate as administrator"
+msgstr "Duplikat sebagai administrator"
+
+#: tabby-core/src/hotkeys.ts:60
+#: tabby-core/src/tabContextMenu.ts:128
+msgid "Duplicate tab"
+msgstr "Duplikat tab"
+
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsForMode.component.html:6
+msgid "Edit"
+msgstr "Sunting"
+
+#: tabby-electron/src/sftpContextMenu.ts:35
+msgid "Edit locally"
+msgstr "Sunting Lokal"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:58
+msgid "Enable"
+msgstr "Izinkan"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:32
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:66
+msgid "Enable analytics"
+msgstr "Izinkan analitik"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:87
+msgid "Enable animations"
+msgstr "Aktifkan animasi"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:74
+msgid "Enable automatic installation of updates when they become available."
+msgstr "Aktifkan penginstalan pembaruan otomatis saat tersedia."
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:211
+msgid "Enable fluent background option"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:16
+msgid "Enable font ligatures"
+msgstr "Aktifkan ligatur font"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:39
+msgid "Enable global hotkey (Ctrl-Space)"
+msgstr "Aktifkan hotkey global (Ctrl-Space)"
+
+#: locale/tmp-html/tabby-local/src/components/shellSettingsTab.component.html:6
+msgid "Enables the experimental Windows ConPTY API"
+msgstr "Mengaktifkan Windows ConPTY API eksperimental"
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:37
+msgid "Encrypt config file"
+msgstr "Enkripsi berkas konfigurasi"
+
+#: tabby-terminal/src/hotkeys.ts:26
+msgid "End of the line"
+msgstr "Baris akhir"
+
+#: locale/tmp-html/tabby-local/src/components/localProfileSettings.component.html:17
+msgid "Environment"
+msgstr "Lingkungan"
+
+#: tabby-core/src/services/config.service.ts:429
+#: tabby-core/src/services/config.service.ts:443
+msgid "Erase config"
+msgstr "Hapus konfigurasi"
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:12
+msgid "Erase the Vault"
+msgstr "Hapus vault"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:6
+msgid "Error in {plugin}:"
+msgstr "Eror di {plugin}:"
+
+#: locale/tmp-html/tabby-terminal/src/components/loginScriptsSettings.component.html:10
+msgid "Exact match"
+msgstr "Paling cocok"
+
+#: locale/tmp-html/tabby-local/src/components/environmentEditor.component.html:15
+msgid "Example:"
+msgstr "Contoh:"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:212
+msgid "Experimental Windows 10 background style known to cause issues"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:28
+msgid "Export"
+msgstr "Ekspor"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:76
+msgid "Fallback font"
+msgstr "Font cadangan"
+
+#: locale/tmp-html/tabby-core/src/components/transfersMenu.component.html:3
+msgid "File transfers"
+msgstr "Transfer berkas"
+
+#: tabby-settings/src/components/vaultSettingsTab.component.ts:96
+msgid "File: {description}"
+msgstr "Berkas: {description}"
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:9
+msgid "Filter"
+msgstr "Saring"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:147
+msgid "Fixed"
+msgstr "Tetap"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:219
+msgid "Fluent background sometimes causes drag lag"
+msgstr "Latar belakang yang lancar terkadang menyebabkan kelambatan seret"
+
+#: tabby-terminal/src/tabContextMenu.ts:82
+msgid "Focus all panes"
+msgstr "Fokuskan semua panel"
+
+#: tabby-terminal/src/hotkeys.ts:78
+msgid "Focus all panes at once (broadcast)"
+msgstr "Fokuskan semua panel sekaligus (siaran)"
+
+#: tabby-terminal/src/tabContextMenu.ts:75
+msgid "Focus all tabs"
+msgstr ""
+
+#: tabby-terminal/src/hotkeys.ts:82
+msgid "Focus all tabs at once (broadcast)"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:196
+msgid "Focus follows mouse"
+msgstr ""
+
+#: tabby-core/src/hotkeys.ts:196
+msgid "Focus next pane"
+msgstr "Fokuskan panel berikutnya"
+
+#: tabby-core/src/hotkeys.ts:200
+#: tabby-core/src/hotkeys.ts:204
+#: tabby-core/src/hotkeys.ts:208
+#: tabby-core/src/hotkeys.ts:212
+#: tabby-core/src/hotkeys.ts:216
+#: tabby-core/src/hotkeys.ts:220
+#: tabby-core/src/hotkeys.ts:224
+#: tabby-core/src/hotkeys.ts:228
+#: tabby-core/src/hotkeys.ts:232
+msgid "Focus pane {number}"
+msgstr ""
+
+#: tabby-core/src/hotkeys.ts:192
+msgid "Focus previous pane"
+msgstr "Fokuskan panel sebelumnya"
+
+#: tabby-core/src/hotkeys.ts:176
+msgid "Focus the pane above"
+msgstr "Fokuskan panel di atas"
+
+#: tabby-core/src/hotkeys.ts:180
+msgid "Focus the pane below"
+msgstr "Fokuskan panel di bawah"
+
+#: tabby-core/src/hotkeys.ts:184
+msgid "Focus the pane on the left"
+msgstr "Fokuskan panel di kiri"
+
+#: tabby-core/src/hotkeys.ts:188
+msgid "Focus the pane on the right"
+msgstr "Fokuskan panel di kanan"
+
+#: tabby-core/src/theme.ts:34
+msgid "Follow the color scheme"
+msgstr "Ikuti Sekema Warna"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:5
+msgid "Font"
+msgstr "Font"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:190
+msgid "For keyboard shortcuts"
+msgstr "Untuk pintasan keyboard"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:53
+msgid "Force CR"
+msgstr "Paksakan CR"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:55
+msgid "Force CRLF"
+msgstr "Paksakan CRLF"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:54
+msgid "Force LF"
+msgstr "Paksakan LF"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:25
+msgid "Forces a specific SSH agent connection type."
+msgstr "Memaksa jenis koneksi agen SSH tertentu."
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:105
+msgid "Forget"
+msgstr "Lupakan"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:45
+msgid "Forward port"
+msgstr "Port penerusan"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingModal.component.html:3
+msgid "Forwarded ports"
+msgstr "Port diteruskan"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:46
+msgid "From color scheme"
+msgstr "Dari skema warna"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:23
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsTab.component.html:9
+msgid "From system"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:44
+msgid "From theme"
+msgstr "Dari tema"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:6
+msgid "Frontend"
+msgstr "Tampilan Depan"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:61
+msgid "Full"
+msgstr "Penuh"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:3
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:3
+#: locale/tmp-html/tabby-telnet/src/components/telnetProfileSettings.component.html:3
+msgid "General"
+msgstr "Umum"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:21
+msgid "Generate a pre-filled GitHub issue"
+msgstr "Buat pra-diisi isu di GitHub"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:25
+msgid "Get"
+msgstr "Dapatkan"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:18
+msgid "Get it from the Tabby Web settings window"
+msgstr "Dapatkan dari jendela pengaturan Web Tabby"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:29
+msgid "Gives the window a blurred transparent background"
+msgstr "Beri jendela latar belakang transparan buram"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpPanel.component.html:24
+msgid "Go up"
+msgstr "Naik"
+
+#: tabby-core/src/utils.ts:61
+msgid "Green"
+msgstr "Hijau"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:16
+msgid "Group"
+msgstr "Grup"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:201
+msgid "Hacks"
+msgstr "Peretasan"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:33
+msgid "Help track the number of Tabby installs across the world!"
+msgstr "Bantu lacak jumlah pemasangan Tabby di seluruh dunia!"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:50
+msgid "Help translate Tabby"
+msgstr "Bantu terjemahkan Tabby"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:32
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:45
+msgid "Hexadecimal"
+msgstr "Heksadesimal"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:49
+msgid "Hide"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:176
+msgid "Hide tab close button"
+msgstr "Sembunyikan tombol tutup tab"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:158
+msgid "Hide tab index"
+msgstr "Sembunyikan indeks tab"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:170
+msgid "Hide tab options button"
+msgstr "Sembunyikan tombol opsi tab"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:118
+msgid "Hide window on focus loss"
+msgstr "Sembunyikan jendela saat kehilangan fokus"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:119
+msgid "Hides the docked terminal when you click away."
+msgstr "Sembunyikan terminal yang terkait saat Anda mengklik."
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:26
+msgid "Homepage"
+msgstr "Beranda"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:34
+#: locale/tmp-html/tabby-telnet/src/components/telnetProfileSettings.component.html:6
+msgid "Host"
+msgstr "Host"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:206
+msgid "Host key"
+msgstr "Kunci host"
+
+#: locale/tmp-html/tabby-ssh/src/components/hostKeyPromptModal.component.html:3
+msgid "Host key verification"
+msgstr "Kunci verifikasi host"
+
+#: locale/tmp-html/tabby-settings/src/components/hotkeySettingsTab.component.html:2
+#: tabby-settings/src/settings.ts:15
+msgid "Hotkeys"
+msgstr "Pintasan"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:83
+msgid "How Tabby presents itself through environment vars"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:24
+msgid "HTTP proxy"
+msgstr "HTTP proxy"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:61
+msgid "HTTP proxy host"
+msgstr "Host HTTP proxy"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:65
+msgid "HTTP proxy port"
+msgstr "Port HTTP proxy"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:20
+msgid "Icon"
+msgstr "Ikon"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:145
+msgid "id.tab-width.dynamic"
+msgstr "id.lebar-tab.dinamis"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:76
+msgid "If disabled, only custom profiles will show up in the profile selector"
+msgstr "Jika dimatikan, hanya profil khusus yang akan tampil di pemilhan profil"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:23
+msgid "Immediately echoes your input locally"
+msgstr "Segera menggemakan masukan Anda secara lokal"
+
+#: tabby-core/src/hotkeys.ts:252
+msgid "Increase horizontal split size"
+msgstr "Tingkatkan ukuran pemisahan horizontal"
+
+#: tabby-core/src/hotkeys.ts:244
+msgid "Increase vertical split size"
+msgstr "Tingkatkan ukuran pemisahan vertikal"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:91
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:226
+#: locale/tmp-html/tabby-telnet/src/components/telnetProfileSettings.component.html:21
+msgid "Input"
+msgstr ""
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:18
+msgid "Input is sent as you type"
+msgstr "Masukan dikirim saat Anda mengetik"
+
+#: locale/tmp-html/tabby-terminal/src/components/streamProcessingSettings.component.html:4
+msgid "Input mode"
+msgstr "Modus masukan"
+
+#: locale/tmp-html/tabby-terminal/src/components/streamProcessingSettings.component.html:15
+msgid "Input newlines"
+msgstr "Masukan garis baru"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:39
+msgid "Installed"
+msgstr "Terpasang"
+
+#: tabby-electron/src/services/updater.service.ts:131
+msgid "Installing the update will close all tabs and restart Tabby."
+msgstr "Pemasangan pembaruan akan menutup semua tab dan mengulang kembali Tabby."
+
+#: tabby-terminal/src/hotkeys.ts:66
+msgid "Intelligent Ctrl-C (copy/abort)"
+msgstr "Ctrl-C cerdas (salin/batal)"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:94
+msgid "Interactive"
+msgstr "Interaktif"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:130
+msgid "Invalid syntax"
+msgstr "Sintaks tidak sah"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:16
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:43
+msgid "Jump host"
+msgstr "Lompat host"
+
+#: tabby-terminal/src/hotkeys.ts:34
+msgid "Jump to next word"
+msgstr "Lompat ke kata berikutnya"
+
+#: tabby-terminal/src/hotkeys.ts:30
+msgid "Jump to previous word"
+msgstr "Lompat ke kata sebelumnya"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:51
+#: tabby-settings/src/components/editProfileGroupModal.component.ts:39
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:131
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:216
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:319
+#: tabby-settings/src/components/vaultSettingsTab.component.ts:53
+#: tabby-terminal/src/components/colorSchemeSettingsForMode.component.ts:93
+#: tabby-terminal/src/components/loginScriptsSettings.component.ts:33
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:51
+msgid "Keep"
+msgstr "Tetap"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:154
+msgid "Keep Alive Interval (Milliseconds)"
+msgstr "Interval Tetap Hidup (Milidetik)"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:98
+msgid "Keep docked terminal always on top"
+msgstr "Terminal tetap selalu diatas"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:86
+msgid "Key"
+msgstr "Kunci"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:186
+msgid "Key exchange"
+msgstr "Bertukar kunci"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:36
+msgid "Keyboard"
+msgstr "Papan ketik"
+
+#: locale/tmp-html/tabby-ssh/src/components/keyboardInteractiveAuthPanel.component.html:2
+msgid "Keyboard-interactive auth"
+msgstr "Otentikasi keyboard-interaktif"
+
+#: tabby-local/src/components/terminalTab.component.ts:117
+msgid "Kill"
+msgstr "Matikan"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:10
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:50
+msgid "Language"
+msgstr "Bahasa"
+
+#: locale/tmp-html/tabby-ssh/src/components/hostKeyPromptModal.component.html:11
+msgid "Last known host key fingerprint"
+msgstr ""
+
+#: tabby-ssh/src/tabContextMenu.ts:32
+msgid "Launch WinSCP"
+msgstr "Buka WinSCP"
+
+#: tabby-ssh/src/hotkeys.ts:14
+msgid "Launch WinSCP for current SSH session"
+msgstr "Buka WinSCP untuk sesi SSH saat ini"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpPanel.component.html:16
+#: locale/tmp-html/tabby-ssh/src/components/sshTab.component.html:7
+msgid "Learn how to allow Tabby to detect remote shell's working directory."
+msgstr "Pelajari cara mengizinkan Tabby mendeteksi direktori kerja shell jarak jauh."
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:134
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:76
+#: tabby-core/src/tabContextMenu.ts:80
+msgid "Left"
+msgstr "Kiri"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:40
+msgid "Lets the shell handle Meta key instead of OS"
+msgstr "Biarkan shell menangani kunci Meta daripada OS"
+
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsTab.component.html:22
+msgid "Light mode"
+msgstr ""
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:27
+msgid "Line by line"
+msgstr "Baris per baris"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:28
+msgid "Line editor, input is sent after you press Enter"
+msgstr "Editor baris, masukkan dikirim setelah Anda tekan Enter"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:83
+msgid "Line padding"
+msgstr "Bantalan garis"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpPanel.component.html:21
+msgid "Loading"
+msgstr "Memuat"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:34
+msgid "Loading configs..."
+msgstr "Memuat konfigurasi..."
+
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:39
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:5
+msgid "Local"
+msgstr "Lokal"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:22
+msgid "Local echo"
+msgstr "Echo Lokal"
+
+#: tabby-local/src/profiles.ts:12
+msgid "Local terminal"
+msgstr "Terminal lokal"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:86
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:221
+#: locale/tmp-html/tabby-telnet/src/components/telnetProfileSettings.component.html:16
+msgid "Login scripts"
+msgstr "Skrip masuk"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:57
+msgid "Long-click for context menu"
+msgstr "Klik lama untuk menu konteks"
+
+#: tabby-core/src/services/profiles.service.ts:279
+msgid "Manage profiles"
+msgstr "Kelola profil"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:160
+msgid "Max Keep Alive Count"
+msgstr ""
+
+#: tabby-core/src/hotkeys.ts:172
+msgid "Maximize the active pane"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:93
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:70
+msgid "Minimum contrast ratio"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:39
+msgid "Modified on {date}"
+msgstr "Diubah pada {date}"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:53
+msgid "Mouse"
+msgstr "Kursor"
+
+#: tabby-core/src/hotkeys.ts:48
+msgid "Move tab to the left"
+msgstr "Geser tab ke kiri"
+
+#: tabby-core/src/hotkeys.ts:52
+msgid "Move tab to the right"
+msgstr "Geser tab ke kanan"
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:228
+msgid "Move to \"Ungrouped\""
+msgstr "Pindahkan ke \"Tanpa Group\""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:197
+msgid "Moving the mouse over an inactive pane will cause it to activate"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileGroupModal.component.html:9
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:12
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsForMode.component.html:13
+msgid "Name"
+msgstr "Nama"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:60
+msgid "Name for the new config"
+msgstr "Nama untuk konfigurasi baru"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpCreateDirectoryModal.component.html:3
+msgid "Name for the new directory"
+msgstr "Nama untuk direktori baru"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:57
+msgid "Native"
+msgstr "Asli"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:21
+msgid "New"
+msgstr ""
+
+#: tabby-local/src/tabContextMenu.ts:53
+msgid "New admin tab"
+msgstr "Tab admin baru"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:58
+msgid "New config on {platform}"
+msgstr "Pengaturan baru di {platform}"
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:144
+msgid "New group name"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/loginScriptsSettings.component.html:16
+msgid "New item"
+msgstr "Item baru"
+
+#: tabby-settings/src/components/vaultSettingsTab.component.ts:133
+msgid "New name"
+msgstr "Nama baru"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:23
+msgid "New profile"
+msgstr "Profil baru"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:24
+msgid "New profile Group"
+msgstr ""
+
+#: tabby-terminal/src/tabContextMenu.ts:176
+msgid "New profile name"
+msgstr "Nama profil baru"
+
+#: tabby-local/src/hotkeys.ts:10
+msgid "New tab"
+msgstr "Tab Baru"
+
+#: tabby-core/src/hotkeys.ts:271
+msgid "New tab: {profile}"
+msgstr "Tab baru: {profile}"
+
+#: tabby-local/src/buttonProvider.ts:20
+#: tabby-local/src/tabContextMenu.ts:27
+msgid "New terminal"
+msgstr "Terminal Baru"
+
+#: tabby-electron/src/hotkeys.ts:10
+msgid "New window"
+msgstr "Jendela baru"
+
+#: tabby-electron/src/services/dockMenu.service.ts:62
+msgid "New Window"
+msgstr "Jendela Baru"
+
+#: tabby-local/src/tabContextMenu.ts:37
+msgid "New with profile"
+msgstr "Buka baru dengan profil tertentu"
+
+#: tabby-core/src/hotkeys.ts:40
+msgid "Next tab"
+msgstr "Tab selanjutnya"
+
+#: tabby-core/src/utils.ts:59
+msgid "No color"
+msgstr "Tidak berwarna"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:85
+msgid "No modifier"
+msgstr "Tidak ada modifier"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:41
+msgid "None"
+msgstr "Tidak ada"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:17
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:40
+msgid "Normal"
+msgstr "Normal"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:22
+msgid "Normal font weight"
+msgstr "Ketebalan font normal"
+
+#: tabby-terminal/src/components/searchPanel.component.ts:54
+#: tabby-terminal/src/components/searchPanel.component.ts:64
+msgid "Not found"
+msgstr "Tidak ditemukan"
+
+#: tabby-core/src/tabContextMenu.ts:209
+msgid "Notify on activity"
+msgstr "Beri tahu tentang aktivitas"
+
+#: tabby-core/src/tabContextMenu.ts:187
+msgid "Notify when done"
+msgstr "Beri tahu saat selesai"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:17
+msgid "Number of lines kept in the buffer"
+msgstr "Jumlah baris yang disimpan dalam buffer"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:72
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:137
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:60
+msgid "Off"
+msgstr "Mati"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:81
+msgid "Official"
+msgstr "Resmi"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:26
+msgid "On GitHub Discussions"
+msgstr "Di Diskusi GitHub"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:47
+msgid "Only close the tab when session is explicitly terminated"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:46
+msgid "Opacity"
+msgstr "Keburaman"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:82
+msgid "Open DevTools"
+msgstr "Buka DevTools"
+
+#: tabby-settings/src/hotkeys.ts:11
+msgid "Open Settings"
+msgstr "Buka Pengaturan"
+
+#: tabby-settings/src/hotkeys.ts:25
+msgid "Open settings tab: {tab}"
+msgstr "Buka pengaturan tab: {tab}"
+
+#: tabby-ssh/src/tabContextMenu.ts:25
+msgid "Open SFTP panel"
+msgstr "Buka panel SFTP"
+
+#: locale/tmp-html/tabby-terminal/src/components/loginScriptsSettings.component.html:10
+msgid "Optional"
+msgstr "Opsional"
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:11
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:34
+msgid "Options"
+msgstr "Pilihan"
+
+#: tabby-core/src/utils.ts:62
+msgid "Orange"
+msgstr "Oranye"
+
+#: tabby-electron/src/shells/macDefault.ts:25
+msgid "OS default"
+msgstr "Default OS"
+
+#: tabby-electron/src/shells/winDefault.ts:43
+msgid "OS default ({name})"
+msgstr "Default OS ({name})"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:46
+msgid "Output is shown as a hexdump"
+msgstr "Output ditampilkan sebagai hexdump"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:41
+msgid "Output is shown as it is received"
+msgstr "Luaran ditampilkan layaknya saat diterima"
+
+#: locale/tmp-html/tabby-terminal/src/components/streamProcessingSettings.component.html:23
+msgid "Output mode"
+msgstr "Mode luaran"
+
+#: locale/tmp-html/tabby-terminal/src/components/streamProcessingSettings.component.html:34
+msgid "Output newlines"
+msgstr "Baris baru luaran"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:42
+msgid "Override X11 display"
+msgstr "Ganti tampilan X11"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:98
+msgid "Overwrite local and sync"
+msgstr "Timpa lokal dan sinkronkan"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:78
+msgid "Overwrite remote and sync"
+msgstr "Timpa jarak jauh dan sinkronkan"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:76
+msgid "Overwrite the config on the remote side and start syncing?"
+msgstr "Timpa konfigurasi di sisi jarak jauh dan mulai menyinkronkan?"
+
+#: tabby-settings/src/components/configSyncSettingsTab.component.ts:96
+msgid "Overwrite the local config and start syncing?"
+msgstr "Timpa konfigurasi lokal dan mulai menyinkronkan?"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:189
+msgid "Pane resize step"
+msgstr "Langkah mengubah ukuran panel"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:186
+msgid "Panes"
+msgstr "Panel"
+
+#: tabby-core/src/theme.ts:26
+msgid "Paper (legacy)"
+msgstr ""
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:38
+msgid "Parity"
+msgstr "Keseimbangan"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:64
+msgid "Partial config sync is not possible when the config is encrypted via Vault."
+msgstr "Sinkronisasi konfigurasi parsial tidak dimungkinkan saat konfigurasi dienkripsi melalui Vault."
+
+#: tabby-terminal/src/components/inputProcessingSettings.component.ts:17
+msgid "Pass-through"
+msgstr ""
+
+#: tabby-settings/src/components/vaultSettingsTab.component.ts:92
+msgid "Passphrase for a private key with hash {hash}..."
+msgstr "Frasa sandi untuk kunci pribadi dengan hash {hash}..."
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:100
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:82
+msgid "Password"
+msgstr "Kata sandi"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:62
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:521
+#: tabby-terminal/src/tabContextMenu.ts:39
+msgid "Paste"
+msgstr "Tempel"
+
+#: tabby-terminal/src/hotkeys.ts:14
+msgid "Paste from clipboard"
+msgstr "Tempel dari papanklip"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:63
+msgid "Paste if no selection, else copy"
+msgstr ""
+
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:528
+msgid "Paste multiple lines?"
+msgstr "Tempel beberapa baris?"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:68
+msgid "Paste on middle-click"
+msgstr "Tempel di klik tengah"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:43
+msgid "Path or address of the local X11 socket"
+msgstr "Jalur atau alamat soket X11 lokal"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalToolbar.component.html:4
+msgid "Pin"
+msgstr "Pin"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:3
+msgid "Plugins"
+msgstr "Plugin"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:4
+msgid "Plugins folder"
+msgstr "Folder plugin"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:38
+#: locale/tmp-html/tabby-telnet/src/components/telnetProfileSettings.component.html:10
+msgid "Port"
+msgstr "Port"
+
+#: tabby-serial/src/components/serialTab.component.ts:65
+msgid "Port opened"
+msgstr "Port dibuka"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:119
+#: locale/tmp-html/tabby-ssh/src/components/sshTab.component.html:12
+msgid "Ports"
+msgstr "Port"
+
+#: tabby-terminal/src/api/connectableTerminalTab.component.ts:87
+msgid "Press any key to reconnect"
+msgstr "Tekan tombol apa saja untuk menghubungkan ulang"
+
+#: locale/tmp-html/tabby-settings/src/components/hotkeyInputModal.component.html:3
+msgid "Press the key now"
+msgstr "Tekan tombol sekarang"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:21
+msgid "Prevents accidental closing"
+msgstr "Cegah keluar tak disengaja"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:110
+msgid "Prevents accidental execution of pasted commands"
+msgstr "Mencegah eksekusi tidak sengaja dari perintah yang ditempel"
+
+#: tabby-core/src/hotkeys.ts:44
+msgid "Previous tab"
+msgstr "Tab sebelumnya"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:108
+msgid "Private keys"
+msgstr ""
+
+#: tabby-core/src/tabContextMenu.ts:195
+msgid "Process completed"
+msgstr "Proses selesai"
+
+#: tabby-core/src/tabContextMenu.ts:151
+msgid "Profile name"
+msgstr "Nama profil"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:2
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:4
+#: tabby-electron/src/services/dockMenu.service.ts:40
+msgid "Profiles"
+msgstr "Profil"
+
+#: tabby-core/src/commands.ts:32
+#: tabby-settings/src/settings.ts:58
+msgid "Profiles & connections"
+msgstr "Profil & koneksi"
+
+#: locale/tmp-html/tabby-local/src/components/commandLineEditor.component.html:12
+msgid "Program"
+msgstr "Program"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:30
+msgid "Proxy command"
+msgstr ""
+
+#: tabby-core/src/utils.ts:63
+msgid "Purple"
+msgstr "Ungu"
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:38
+msgid "Puts all of Tabby's configuration into the vault"
+msgstr ""
+
+#: tabby-core/src/index.ts:219
+#: tabby-core/src/services/profiles.service.ts:295
+msgid "Quick connect"
+msgstr "Sambung Cepat"
+
+#: tabby-core/src/services/config.service.ts:430
+#: tabby-core/src/services/config.service.ts:444
+msgid "Quit"
+msgstr "Keluar"
+
+#: tabby-telnet/src/profiles.ts:50
+msgid "Raw socket connection"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:166
+msgid "Ready Timeout (Milliseconds)"
+msgstr ""
+
+#: tabby-core/src/services/profiles.service.ts:235
+#: tabby-core/src/services/profiles.service.ts:249
+#: tabby-electron/src/services/dockMenu.service.ts:28
+msgid "Recent"
+msgstr "Terbaru"
+
+#: locale/tmp-html/tabby-serial/src/components/serialTab.component.html:5
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:52
+#: locale/tmp-html/tabby-ssh/src/components/sshTab.component.html:10
+#: locale/tmp-html/tabby-telnet/src/components/telnetTab.component.html:3
+#: tabby-terminal/src/api/connectableTerminalTab.component.ts:32
+#: tabby-terminal/src/tabContextMenu.ts:115
+#: tabby-terminal/src/tabContextMenu.ts:119
+msgid "Reconnect"
+msgstr "Sambungkan Kembali"
+
+#: tabby-terminal/src/hotkeys.ts:102
+msgid "Reconnect current tab (Serial/Telnet/SSH)"
+msgstr ""
+
+#: tabby-core/src/utils.ts:64
+msgid "Red"
+msgstr "Merah"
+
+#: locale/tmp-html/tabby-terminal/src/components/loginScriptsSettings.component.html:10
+msgid "Regex"
+msgstr "Ekspresi reguler"
+
+#: tabby-settings/src/components/releaseNotesTab.component.ts:27
+msgid "Release notes"
+msgstr "Catatan Rilis"
+
+#: locale/tmp-html/tabby-core/src/components/unlockVaultModal.component.html:6
+msgid "Remember for {time}"
+msgstr "Ingat untuk {time}"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:41
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:5
+msgid "Remote"
+msgstr "Jarak Jauh"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:124
+msgid "Remove whitespace and newlines around the copied text"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:26
+#: tabby-core/src/tabContextMenu.ts:120
+msgid "Rename"
+msgstr "Ganti Nama"
+
+#: tabby-core/src/hotkeys.ts:24
+#: tabby-core/src/tabContextMenu.ts:121
+msgid "Rename tab"
+msgstr "Ganti nama label"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:3
+msgid "Rendering"
+msgstr "Rendering"
+
+#: tabby-core/src/hotkeys.ts:32
+msgid "Reopen last tab"
+msgstr "Buka Kembali Tab Terakhir"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:42
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:27
+msgid "Replace"
+msgstr "Menggantikan"
+
+#: locale/tmp-html/tabby-core/src/components/startPage.component.html:11
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:21
+msgid "Report a problem"
+msgstr "Laporkan Masalah"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:81
+msgid "Require a key to click links"
+msgstr "Perlukan tombol khusus untuk membuka tautan"
+
+#: tabby-terminal/src/hotkeys.ts:62
+msgid "Reset zoom"
+msgstr "Ukuran Semula"
+
+#: tabby-serial/src/hotkeys.ts:14
+msgid "Restart current serial session"
+msgstr "Mulai ulang sesi serial saat ini"
+
+#: tabby-ssh/src/hotkeys.ts:10
+msgid "Restart current SSH session"
+msgstr "Mulai ulang sesi SSH saat ini"
+
+#: tabby-telnet/src/hotkeys.ts:10
+msgid "Restart current Telnet session"
+msgstr "Mulai ulang sesi Telnet saat ini"
+
+#: tabby-core/src/hotkeys.ts:64
+msgid "Restart tab"
+msgstr "Muat ulang tab"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:140
+msgid "Restart the app to apply changes"
+msgstr "Mulai ulang aplikasi untuk menerapkan perubahan"
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:316
+msgid "Restore settings to defaults ?"
+msgstr "Kembali ke settingan sebelumnya ?"
+
+#: tabby-settings/src/components/editProfileGroupModal.component.ts:36
+msgid "Restore settings to inherited defaults ?"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:159
+msgid "Restore terminal tabs on app start"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:147
+msgid "Reuse session for multiple tabs"
+msgstr "Gunakan sesi untuk banyak tab"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:136
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:78
+#: tabby-core/src/tabContextMenu.ts:78
+msgid "Right"
+msgstr "Kanan"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:56
+msgid "Right click"
+msgstr "Klik kanan"
+
+#: locale/tmp-html/tabby-local/src/components/localProfileSettings.component.html:5
+msgid "Run as administrator"
+msgstr "Jalan sebagai administrator"
+
+#: locale/tmp-html/tabby-core/src/components/renameTabModal.component.html:6
+#: locale/tmp-html/tabby-settings/src/components/editProfileGroupModal.component.html:27
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:70
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsForMode.component.html:29
+msgid "Save"
+msgstr "Simpan"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:101
+msgid "Save a password in the keychain"
+msgstr "Simpan password di keychain"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:129
+msgid "Save and apply"
+msgstr "Simpan dan terapkan"
+
+#: tabby-terminal/src/tabContextMenu.ts:173
+msgid "Save as profile"
+msgstr "Simpan sebagai profil"
+
+#: tabby-core/src/tabContextMenu.ts:148
+msgid "Save layout as profile"
+msgstr "Simpan tata letak sebagai profil"
+
+#: tabby-terminal/src/tabContextMenu.ts:210
+msgid "Saved"
+msgstr "Disimpan"
+
+#: tabby-core/src/profiles.ts:19
+msgid "Saved layout"
+msgstr "Tata letak tersimpan"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:46
+msgid "Scroll on input"
+msgstr "Gulir saat input"
+
+#: tabby-terminal/src/hotkeys.ts:94
+msgid "Scroll terminal one page down"
+msgstr ""
+
+#: tabby-terminal/src/hotkeys.ts:90
+msgid "Scroll terminal one page up"
+msgstr ""
+
+#: tabby-terminal/src/hotkeys.ts:98
+msgid "Scroll terminal to bottom"
+msgstr "Gulir terminal ke bawah"
+
+#: tabby-terminal/src/hotkeys.ts:86
+msgid "Scroll terminal to top"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:16
+msgid "Scrollback"
+msgstr "Gulir kembali"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:47
+msgid "Scrolls the terminal to the bottom on user input"
+msgstr "Gulir terminal ke bawah saat pengguna meng-input"
+
+#: tabby-terminal/src/hotkeys.ts:74
+msgid "Search"
+msgstr "Cari"
+
+#: tabby-terminal/src/components/colorSchemeSelector.component.ts:9
+#: tabby-terminal/src/components/colorSchemeSettingsForMode.component.ts:10
+msgid "Search color schemes"
+msgstr "Cari skema warna"
+
+#: tabby-settings/src/components/hotkeySettingsTab.component.ts:12
+msgid "Search hotkeys"
+msgstr "Cari hotkey"
+
+#: tabby-plugin-manager/src/components/pluginsSettingsTab.component.ts:14
+msgid "Search plugins"
+msgstr "Cari pluggin"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:17
+msgid "Secret sync token"
+msgstr "Token sinkronisasi rahasia"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:45
+#: tabby-electron/src/services/platform.service.ts:200
+msgid "Select"
+msgstr "Pilih"
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:61
+msgid "Select a base profile to use as a template"
+msgstr "Pilih profil utama sebagai template"
+
+#: tabby-terminal/src/hotkeys.ts:18
+msgid "Select all"
+msgstr "Pilih semua"
+
+#: tabby-core/src/services/fileProviders.service.ts:47
+msgid "Select file storage"
+msgstr "Pilih penyimpanan file"
+
+#: tabby-core/src/index.ts:232
+msgid "Select profile"
+msgstr "Pilih profile"
+
+#: tabby-core/src/services/profiles.service.ts:308
+msgid "Select profile or enter an address"
+msgstr "Pilih profile atau masukkan alamat"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:33
+msgid "Send bytes by typing in hex values"
+msgstr "Kirim byte dengan mengetik nilai hex"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:75
+msgid "Sends data one byte at a time"
+msgstr "Kirim data satu byte pada suatu waktu"
+
+#: tabby-serial/src/profiles.ts:14
+#: tabby-serial/src/profiles.ts:74
+msgid "Serial"
+msgstr "Serial"
+
+#: tabby-serial/src/profiles.ts:53
+#: tabby-serial/src/profiles.ts:64
+msgid "Serial connection"
+msgstr "Koneksi serial"
+
+#: tabby-serial/src/profiles.ts:73
+msgid "Serial: {description}"
+msgstr "Serial: {description}"
+
+#: locale/tmp-html/tabby-settings/src/components/setVaultPassphraseModal.component.html:2
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:5
+msgid "Set master passphrase"
+msgstr "Buat kata sandi utama"
+
+#: locale/tmp-html/tabby-settings/src/components/setVaultPassphraseModal.component.html:11
+msgid "Set passphrase"
+msgstr "Buat kata sandi"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:104
+msgid "Set password"
+msgstr "Buat kata sandi"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:168
+msgid "Set Tabby as %COMSPEC%"
+msgstr "Atur Tabby sebagai %COMSPEC%"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:69
+msgid "Set to 0 to disable recent profiles"
+msgstr "Atur ke 0 untuk men-disable profile saat ini"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:36
+msgid "Sets the SSH agent's named pipe path."
+msgstr ""
+
+#: tabby-settings/src/buttonProvider.ts:28
+#: tabby-settings/src/components/settingsTab.component.ts:57
+msgid "Settings"
+msgstr "Pengaturan"
+
+#: locale/tmp-html/tabby-local/src/components/shellSettingsTab.component.html:2
+msgid "Shell"
+msgstr "Shell"
+
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:593
+msgid "Shell does not support current path detection"
+msgstr "Shell tidak mendukung deteksi path saat ini"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:59
+msgid "Shell integration"
+msgstr "Integrasi Shell"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:50
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:25
+msgid "Show"
+msgstr ""
+
+#: tabby-core/src/hotkeys.ts:275
+msgid "Show {type} profile selector"
+msgstr "Tampilkan {type} selector profile"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:117
+msgid "Show a confirmation box when pasting multiple lines"
+msgstr "Tampilkan dialog konfirmasi ketika menempel banyak baris"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:75
+msgid "Show built-in profiles in selector"
+msgstr "Tampilkan built-in profile di selector"
+
+#: tabby-core/src/hotkeys.ts:12
+msgid "Show command selector"
+msgstr "Tampilkan pemilihan perintah"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:132
+msgid "Show config file"
+msgstr "Tampilkan file konfigurasi"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:131
+msgid "Show defaults"
+msgstr "Tampilkan bawaan"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:146
+msgid "Show Mixer"
+msgstr "Tampilkan Mixer"
+
+#: tabby-core/src/hotkeys.ts:56
+msgid "Show pane labels (for rearranging)"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:164
+msgid "Show profile icon on tab"
+msgstr "Tampilkan ikon profile di tab"
+
+#: tabby-core/src/hotkeys.ts:16
+msgid "Show profile selector"
+msgstr "Tampilkan selector profil"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:68
+msgid "Show recent profiles in selector"
+msgstr "Tampilkan profil terbaru di selector"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:36
+msgid "Show release notes"
+msgstr "Tampilkan catatan pembaruan"
+
+#: tabby-serial/src/hotkeys.ts:10
+msgid "Show Serial connections"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:152
+msgid "Show tabs in fullscreen mode"
+msgstr ""
+
+#: tabby-terminal/src/tabContextMenu.ts:62
+msgid "Show toolbar"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:45
+msgid "Show vault contents"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:29
+msgid "Sixel graphics support (experimental)"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:140
+msgid "Skip MoTD/banner"
+msgstr ""
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:74
+msgid "Slow feed"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:68
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:86
+msgid "Snaps the window to a side of the screen"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:22
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:9
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:20
+msgid "SOCKS proxy"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:51
+msgid "SOCKS proxy host"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:55
+msgid "SOCKS proxy port"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:130
+msgid "Sound"
+msgstr "Bunyi"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:31
+msgid "Source code"
+msgstr "Kode Sumber"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:13
+msgid "Spaciness"
+msgstr ""
+
+#: tabby-core/src/tabContextMenu.ts:75
+msgid "Split"
+msgstr "Bagi"
+
+#: tabby-core/src/hotkeys.ts:160
+msgid "Split to the bottom"
+msgstr "Membelah ke bawah"
+
+#: tabby-core/src/tabContextMenu.ts:85
+msgid "Split to the down"
+msgstr ""
+
+#: tabby-core/src/hotkeys.ts:164
+#: tabby-core/src/tabContextMenu.ts:86
+msgid "Split to the left"
+msgstr "Membelah ke kiri"
+
+#: tabby-core/src/hotkeys.ts:156
+#: tabby-core/src/tabContextMenu.ts:84
+msgid "Split to the right"
+msgstr "Membelah ke kanan"
+
+#: tabby-core/src/hotkeys.ts:168
+msgid "Split to the top"
+msgstr "Membelah ke atas"
+
+#: tabby-core/src/tabContextMenu.ts:87
+msgid "Split to the up"
+msgstr ""
+
+#: tabby-ssh/src/profiles.ts:82
+msgid "SSH connection"
+msgstr "Koneksi SSH"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:47
+msgid "SSH connection management is now done through the \"Profiles & connections\" tab"
+msgstr "Koneksi SSH sekarang dapat dilakukan melalui Tab \"Profil&Koneksi\""
+
+#: tabby-settings/src/components/vaultSettingsTab.component.ts:89
+msgid "SSH password for {user}@{host}:{port}"
+msgstr "Password SSH untuk {user}@{host}:{port}"
+
+#: tabby-core/src/theme.ts:8
+msgid "Standard (legacy)"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:150
+msgid "Startup"
+msgstr "Permulaan"
+
+#: locale/tmp-html/tabby-serial/src/components/serialProfileSettings.component.html:32
+msgid "Stop bits"
+msgstr "Berhentikan Bit"
+
+#: tabby-terminal/src/components/streamProcessingSettings.component.ts:52
+msgid "Strip"
+msgstr "Strip"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:41
+msgid "Subscribe to updates"
+msgstr "Berlangganan untuk memperbarui"
+
+#: locale/tmp-html/tabby-local/src/components/environmentEditor.component.html:13
+msgid "Substitutions allowed."
+msgstr "Pergantian diperbolehkan."
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:19
+#: locale/tmp-html/tabby-terminal/src/components/colorSchemeSettingsTab.component.html:5
+msgid "Switch color scheme"
+msgstr ""
+
+#: tabby-core/src/tabContextMenu.ts:290
+msgid "Switch profile"
+msgstr "Beralih Profil"
+
+#: tabby-core/src/hotkeys.ts:236
+msgid "Switch profile in the active pane"
+msgstr "Beralih profil di panel yang aktif"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:7
+msgid "Switches terminal frontend implementation (experimental)"
+msgstr "Gantikan terminal implementasi frontend (Experimetal)"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:4
+msgid "Sync"
+msgstr "Sinkronisasi"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:53
+msgid "Sync automatically"
+msgstr "Sinkron dengan Otomatis"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:8
+msgid "Sync host"
+msgstr "Sinkron Host"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:68
+msgid "Sync hotkeys"
+msgstr "Sinkron Hotkeys"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:80
+msgid "Sync Vault"
+msgstr "Sinkron Brankas"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:74
+msgid "Sync window settings"
+msgstr "Sinkron Penganturan Jendela"
+
+#: tabby-core/src/hotkeys.ts:100
+#: tabby-core/src/hotkeys.ts:104
+#: tabby-core/src/hotkeys.ts:108
+#: tabby-core/src/hotkeys.ts:112
+#: tabby-core/src/hotkeys.ts:116
+#: tabby-core/src/hotkeys.ts:120
+#: tabby-core/src/hotkeys.ts:124
+#: tabby-core/src/hotkeys.ts:128
+#: tabby-core/src/hotkeys.ts:132
+#: tabby-core/src/hotkeys.ts:136
+#: tabby-core/src/hotkeys.ts:140
+#: tabby-core/src/hotkeys.ts:144
+#: tabby-core/src/hotkeys.ts:148
+#: tabby-core/src/hotkeys.ts:152
+#: tabby-core/src/hotkeys.ts:76
+#: tabby-core/src/hotkeys.ts:80
+#: tabby-core/src/hotkeys.ts:84
+#: tabby-core/src/hotkeys.ts:88
+#: tabby-core/src/hotkeys.ts:92
+#: tabby-core/src/hotkeys.ts:96
+msgid "Tab {number}"
+msgstr "Tab {number}"
+
+#: tabby-core/src/tabContextMenu.ts:223
+msgid "Tab activity"
+msgstr "Aktifitas tab"
+
+#: locale/tmp-html/tabby-core/src/components/safeModeModal.component.html:3
+msgid "Tabby could not start with your plugins, so all third party plugins have been disabled in this session. The error was:"
+msgstr "Tabby tidak bisa memulai dengan plugin anda, sehingga plugin pihak ketiga telah di nonaktifkan untuk sesi ini. Errornya adalah:"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:41
+msgid "Tabby news and updates on Twitter"
+msgstr "Berita dan Pembaharuan Tabby di Twitter"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:123
+msgid "Tabs"
+msgstr "Tabs"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:126
+msgid "Tabs location"
+msgstr "Lokasi Tabs"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:141
+msgid "Tabs width"
+msgstr "Panjang Tab"
+
+#: tabby-telnet/src/profiles.ts:34
+msgid "Telnet session"
+msgstr "Sesi Telnet"
+
+#: tabby-terminal/src/api/baseTerminalTab.component.ts:210
+#: tabby-terminal/src/settings.ts:43
+msgid "Terminal"
+msgstr "Terminal"
+
+#: locale/tmp-html/tabby-terminal/src/components/appearanceSettingsTab.component.html:40
+msgid "Terminal background"
+msgstr "Background Terminal"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:133
+msgid "Terminal bell"
+msgstr "Bell Terminal"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:82
+msgid "Terminal identification"
+msgstr ""
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:7
+msgid "Thank you for downloading Tabby!"
+msgstr "Terima Kasih telah mengunduh Tabby!"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:5
+msgid "Theme"
+msgstr "Tema"
+
+#: tabby-core/src/components/transfersMenu.component.ts:47
+msgid "There are active file transfers"
+msgstr "Sedang ada transfer file aktif"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:102
+msgid "There is a saved password for this connection"
+msgstr "Ada password tersimpan untuk koneksi ini"
+
+#: locale/tmp-html/tabby-settings/src/components/profilesSettingsTab.component.html:102
+msgid "These apply to all profiles of a given type"
+msgstr "Ini diterapkan ke seluruh profile dari tipe tersebut"
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileGroupModal.component.html:17
+msgid "These apply to all profiles of a given type in this group"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:59
+msgid "Thin"
+msgstr "Tipis"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:205
+msgid "Tick this if you're experiencing aliasing, ghosting or other visual issues"
+msgstr "Centang ini jika anda mengalami aliasing, ghosting atau isu visual lainnya"
+
+#: tabby-core/src/hotkeys.ts:20
+msgid "Toggle fullscreen mode"
+msgstr "Beralih ke mode layar penuh"
+
+#: tabby-core/src/hotkeys.ts:36
+msgid "Toggle last tab"
+msgstr "aktifkan tab terakhir"
+
+#: tabby-electron/src/hotkeys.ts:14
+msgid "Toggle terminal window"
+msgstr "Aktifkan jendela terminal"
+
+#: locale/tmp-html/tabby-core/src/components/welcomeTab.component.html:40
+msgid "Toggles the Tabby window visibility"
+msgstr "Alihkan visibilitas jendela Tabby"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:130
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:74
+msgid "Top"
+msgstr "Atas"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:123
+msgid "Trim whitespace and newlines"
+msgstr ""
+
+#: tabby-core/src/services/config.service.ts:428
+msgid "Try again"
+msgstr "Coba Kembali"
+
+#: tabby-ssh/src/session/ssh.ts:476
+msgid "Trying saved password"
+msgstr "Mencoba dengan kata sandi yang tersimpan"
+
+#: tabby-core/src/hotkeys.ts:68
+msgid "Turn current tab's panes into separate tabs"
+msgstr "Ubah tab sekarang menjadi tab terpisah"
+
+#: tabby-core/src/services/profiles.service.ts:418
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:10
+msgid "Ungrouped"
+msgstr "Bubarkan Grup"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:59
+msgid "Uninstall"
+msgstr "Hapus Aplikasi"
+
+#: tabby-settings/src/components/profilesSettingsTab.component.ts:269
+msgid "Unknown"
+msgstr "Tidak Diketahui"
+
+#: tabby-settings/src/components/vaultSettingsTab.component.ts:98
+msgid "Unknown secret of type {type} for {key}"
+msgstr "Tidak Diketahui tipe secret {type} untuk {key}"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalToolbar.component.html:4
+msgid "Unpin"
+msgstr "Lepas Sematan"
+
+#: tabby-core/src/tabContextMenu.ts:81
+msgid "Up"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:14
+#: tabby-electron/src/services/updater.service.ts:133
+msgid "Update"
+msgstr "Perbarui"
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:52
+msgid "Upgrade to {version}"
+msgstr "Pemutahiran ke {version}"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:42
+#: locale/tmp-html/tabby-ssh/src/components/sftpPanel.component.html:10
+msgid "Upload"
+msgstr "Unggah"
+
+#: locale/tmp-html/tabby-settings/src/components/configSyncSettingsTab.component.html:46
+msgid "Upload as a new config"
+msgstr "Unggah sebagai pengaturan baru"
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:39
+msgid "Use {altKeyName} as the Meta key"
+msgstr "Gunakan {altKeyName} sebagai tombol Meta"
+
+#: locale/tmp-html/tabby-local/src/components/shellSettingsTab.component.html:5
+msgid "Use ConPTY"
+msgstr "Gunakan ConPTY"
+
+#: tabby-electron/src/shells/linuxDefault.ts:31
+#: tabby-electron/src/shells/linuxDefault.ts:38
+msgid "User default"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:70
+msgid "Username"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:25
+msgid "Using CONNECT method"
+msgstr ""
+
+#: tabby-ssh/src/session/ssh.ts:465
+msgid "Using preset password"
+msgstr "Gunakan kata sandi yang telah disetel sebelumnya"
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:9
+msgid "Vault"
+msgstr "Brankas"
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:4
+msgid "Vault is an always-encrypted container for secrets such as SSH passwords and private key passphrases."
+msgstr "Brankas adalah kotak penyimpanan yang selalu dienkripsi, berisi sandi rahasia seperti sandi SSH dan passphrase private key."
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:17
+msgid "Vault is empty"
+msgstr "Brankas kosong"
+
+#: locale/tmp-html/tabby-core/src/components/unlockVaultModal.component.html:4
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:44
+msgid "Vault is locked"
+msgstr "Brankas terkunci"
+
+#: locale/tmp-html/tabby-settings/src/components/vaultSettingsTab.component.html:3
+msgid "Vault is not configured"
+msgstr ""
+
+#: tabby-core/src/services/fileProviders.service.ts:40
+msgid "Vault master passphrase needs to be set to allow storing secrets"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:11
+msgid "Verify host keys when connecting"
+msgstr ""
+
+#: locale/tmp-html/tabby-plugin-manager/src/components/pluginsSettingsTab.component.html:75
+msgid "Version"
+msgstr "Versi"
+
+#: locale/tmp-html/tabby-core/src/components/startPage.component.html:13
+msgid "Version: {version}"
+msgstr "Versi: {version}"
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:28
+msgid "Vibrancy"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:139
+msgid "Visual"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:116
+msgid "Warn on multi-line paste"
+msgstr "Peringatkan ketika menempel lebih dari satu baris"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:5
+msgid "Warn when closing active connections"
+msgstr "Peringatkan ketika menutup sambungan yang masih aktif"
+
+#: locale/tmp-html/tabby-ssh/src/components/hostKeyPromptModal.component.html:6
+msgid "Warning: remote host's key has suddenly changed!"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:67
+msgid "We're only tracking your Tabby and OS versions."
+msgstr "Kami hanya mencatat versi Tabby dan sistem operasi Anda."
+
+#: tabby-core/src/components/welcomeTab.component.ts:25
+msgid "Welcome"
+msgstr "Selamat datang"
+
+#: locale/tmp-html/tabby-settings/src/components/settingsTab.component.html:36
+msgid "What's new"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/editProfileModal.component.html:46
+msgid "When a session ends"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:82
+msgid "When enabled, links are only clickable while holding this key"
+msgstr "Jika diaktifkan, tautan hanya bisa diklik bila tombol ini sedang ditekan"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:18
+msgid "When WinSCP is detected, you can launch an SCP session from the context menu."
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:53
+msgid "Whether a custom window or an OS native window should be used"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:141
+msgid "Will prevent the SSH greeting from showing up"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:2
+#: tabby-settings/src/settings.ts:30
+msgid "Window"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:112
+msgid "Window dimension along the edge"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:105
+msgid "Window dimension away from the edge"
+msgstr ""
+
+#: locale/tmp-html/tabby-settings/src/components/windowSettingsTab.component.html:52
+msgid "Window frame"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:165
+msgid "Windows"
+msgstr "Windows"
+
+#: locale/tmp-html/tabby-local/src/components/shellSettingsTab.component.html:11
+msgid "Windows 10 build 18309 or above is recommended for ConPTY"
+msgstr "Windows 10 build 18309 atau lebih baru disarankan untuk ConPTY"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshSettingsTab.component.html:17
+msgid "WinSCP path"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:74
+msgid "Word separators"
+msgstr "Pemisah kata"
+
+#: locale/tmp-html/tabby-local/src/components/localProfileSettings.component.html:10
+msgid "Working directory"
+msgstr "Direktori kerja"
+
+#: locale/tmp-html/tabby-ssh/src/components/sftpPanel.component.html:15
+#: locale/tmp-html/tabby-ssh/src/components/sshTab.component.html:6
+msgid "Working directory detection"
+msgstr ""
+
+#: locale/tmp-html/tabby-terminal/src/components/terminalSettingsTab.component.html:145
+msgid "WSL terminal bell can only be muted via Volume Mixer"
+msgstr ""
+
+#: locale/tmp-html/tabby-local/src/components/shellSettingsTab.component.html:14
+msgid "WSL terminal only supports TrueColor with ConPTY"
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/sshProfileSettings.component.html:128
+msgid "X11 forwarding"
+msgstr ""
+
+#: tabby-core/src/utils.ts:65
+msgid "Yellow"
+msgstr "Kuning"
+
+#: locale/tmp-html/tabby-settings/src/components/setVaultPassphraseModal.component.html:4
+msgid "You can change it later, but it's unrecoverable if forgotten."
+msgstr ""
+
+#: locale/tmp-html/tabby-ssh/src/components/hostKeyPromptModal.component.html:7
+msgid "You could be under a man-in-the-middle attack right now, or the host key could have just been changed."
+msgstr ""
+
+#: tabby-terminal/src/hotkeys.ts:54
+msgid "Zoom in"
+msgstr "Perbesar"
+
+#: tabby-terminal/src/hotkeys.ts:58
+msgid "Zoom out"
+msgstr "Perkecil"
+
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:43
+#: locale/tmp-html/tabby-ssh/src/components/sshPortForwardingConfig.component.html:5
+msgctxt "[Dynamic] port forwarding"
+msgid "id.port-forwarding.dynamic"
+msgstr ""
+

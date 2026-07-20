@@ -1,0 +1,181 @@
+h3.mb-3(translate) Appearance
+.form-line
+    .header
+        .title(translate) Font
+
+    .input-group.w-75
+        input.form-control(
+            type='text',
+            [ngbTypeahead]='fontAutocomplete',
+            [(ngModel)]='config.store.terminal.font',
+            (ngModelChange)='config.save()',
+        )
+        input.form-control.font-size-input(
+            type='number',
+            max='48',
+            [(ngModel)]='config.store.terminal.fontSize',
+            (ngModelChange)='fixFontSize(); config.save()',
+        )
+
+.row
+    .col-12.col-md-6
+        .form-line
+            .header
+                .title(translate) Enable font ligatures
+            toggle(
+                [(ngModel)]='config.store.terminal.ligatures',
+                (ngModelChange)='config.save()',
+            )
+
+        .form-line
+            .header
+                .title(translate) Normal font weight
+            input.form-control(
+                type='number',
+                min='100',
+                max='900',
+                step='100',
+                [(ngModel)]='config.store.terminal.fontWeight',
+                (ngModelChange)='config.save()'
+            )
+
+        .form-line
+            .header
+                .title(translate) Bold font weight
+            input.form-control(
+                type='number',
+                min='100',
+                max='900',
+                step='100',
+                [(ngModel)]='config.store.terminal.fontWeightBold',
+                (ngModelChange)='config.save()'
+            )
+
+    .col-12.col-md-6
+        color-scheme-preview([scheme]='config.store.terminal.colorScheme', [fontPreview]='true')
+
+.content-box
+    .form-line(*ngIf='!themes.findCurrentTheme().followsColorScheme')
+        .header
+            .title(translate) Terminal background
+
+        .btn-group(role='group')
+            input.btn-check(
+                type='radio',
+                name='background',
+                [(ngModel)]='config.store.terminal.background',
+                (ngModelChange)='config.save()',
+                id='backgroundTheme',
+                [value]='"theme"'
+            )
+            label.btn.btn-secondary(
+                for='backgroundTheme'
+            )
+                span(translate) From theme
+            input.btn-check(
+                type='radio',
+                name='background',
+                [(ngModel)]='config.store.terminal.background',
+                (ngModelChange)='config.save()',
+                id='backgroundColorScheme',
+                [value]='"colorScheme"'
+            )
+            label.btn.btn-secondary(
+                for='backgroundColorScheme'
+            )
+                span(translate) From color scheme
+
+    .form-line
+        .header
+            .title(translate) Cursor shape
+
+        .btn-group(role='group')
+            input.btn-check(
+                type='radio',
+                name='cursor',
+                [(ngModel)]='config.store.terminal.cursor',
+                (ngModelChange)='config.save()',
+                id='cursorBlock',
+                [value]='"block"'
+            )
+            label.btn.btn-secondary(
+                for='cursorBlock'
+            )
+                | █
+            input.btn-check(
+                type='radio',
+                name='cursor',
+                [(ngModel)]='config.store.terminal.cursor',
+                (ngModelChange)='config.save()',
+                id='cursorBeam',
+                [value]='"beam"'
+            )
+            label.btn.btn-secondary(
+                for='cursorBeam'
+            )
+                | |
+            input.btn-check(
+                type='radio',
+                name='cursor',
+                [(ngModel)]='config.store.terminal.cursor',
+                (ngModelChange)='config.save()',
+                id='cursorUnderline',
+                [value]='"underline"'
+            )
+            label.btn.btn-secondary(
+                for='cursorUnderline'
+            )
+                | ▁
+
+    .form-line
+        .header
+            .title(translate) Blink cursor
+
+        toggle(
+            [(ngModel)]='config.store.terminal.cursorBlink',
+            (ngModelChange)='config.save()',
+        )
+
+    .form-line
+        .header
+            .title(translate) Minimum contrast ratio
+        input.form-control(
+            type='number',
+            min='1',
+            max='21',
+            step='0.5',
+            [(ngModel)]='config.store.terminal.minimumContrastRatio',
+            (ngModelChange)='config.save()'
+        )
+
+    .form-line
+        .header
+            .title(translate) Fallback font
+            .description(translate) A second font family used to display characters missing in the main font
+
+        input.form-control(
+            type='text',
+            [ngbTypeahead]='fontAutocomplete',
+            [(ngModel)]='config.store.terminal.fallbackFont',
+            (ngModelChange)='config.save()'
+        )
+
+    .form-line
+        .header
+            .title(translate) Line padding
+            .description(translate) Additional space between lines
+        input.form-control(
+            type='number',
+            [(ngModel)]='config.store.terminal.linePadding',
+            (ngModelChange)='config.save()',
+        )
+
+
+    .form-line
+        .header
+            .title(translate) Custom CSS
+
+    textarea.form-control.mb-5(
+        [(ngModel)]='config.store.appearance.css',
+        (ngModelChange)='saveConfiguration()',
+    )

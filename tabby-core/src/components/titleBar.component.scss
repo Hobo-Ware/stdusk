@@ -1,0 +1,33 @@
+$titlebar-height: 30px;
+
+:host {
+    flex: 0 0 $titlebar-height;
+    display: flex;
+    background: var(--theme-bg-more-2);
+    color: var(--bs-body-color);
+
+    .title {
+        flex: auto;
+        padding-left: 15px;
+        line-height: $titlebar-height;
+        -webkit-app-region: drag;
+        color: var(--bs-body-color);
+    }
+
+    window-controls {
+        background: transparent;
+    }
+
+    &.inset {
+        flex-basis: 36px;
+
+        .title {
+            padding-left: 80px;
+            line-height: 36px;
+        }
+
+        window-controls {
+            display: none;
+        }
+    }
+ }

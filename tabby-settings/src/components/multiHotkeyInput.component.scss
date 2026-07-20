@@ -1,0 +1,36 @@
+:host {
+    display: flex;
+    flex-wrap: nowrap;
+
+    &:hover .add {
+        opacity: 1;
+    }
+}
+
+.item {
+    display: flex;
+    flex: none;
+
+    .body {
+        flex: none;
+        display: flex;
+
+        .stroke {
+            flex: none;
+        }
+    }
+
+    .remove {
+        flex: none;
+    }
+}
+
+.add {
+    flex: auto;
+    opacity: 0;
+    white-space: nowrap;
+
+    &:first-child {
+        opacity: 1;
+    }
+}

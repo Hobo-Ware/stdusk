@@ -1,0 +1,53 @@
+.form-line
+    .header
+        .title(translate) Input mode
+
+    .d-flex(ngbDropdown)
+        button.btn.btn-secondary.btn-tab-bar(
+            ngbDropdownToggle,
+        ) {{getInputModeName(options.inputMode)}}
+
+        div(ngbDropdownMenu)
+            a.d-flex.flex-column(
+                *ngFor='let mode of inputModes',
+                (click)='setInputMode(mode.key)',
+                ngbDropdownItem
+            )
+                div {{mode.name|translate}}
+                .text-muted {{mode.description|translate}}
+
+.form-line
+    .header
+        .title(translate) Input newlines
+
+    select.form-control(
+        [(ngModel)]='options.inputNewlines',
+    )
+        option([ngValue]='mode.key', *ngFor='let mode of newlineModes') {{mode.name|translate}}
+
+.form-line
+    .header
+        .title(translate) Output mode
+
+    .d-flex(ngbDropdown)
+        button.btn.btn-secondary.btn-tab-bar(
+            ngbDropdownToggle,
+        ) {{getOutputModeName(options.outputMode)}}
+
+        div(ngbDropdownMenu)
+            a.d-flex.flex-column(
+                *ngFor='let mode of outputModes',
+                (click)='setOutputMode(mode.key)',
+                ngbDropdownItem
+            )
+                div {{mode.name|translate}}
+                .text-muted {{mode.description|translate}}
+
+.form-line
+    .header
+        .title(translate) Output newlines
+
+    select.form-control(
+        [(ngModel)]='options.outputNewlines',
+    )
+        option([ngValue]='mode.key', *ngFor='let mode of newlineModes') {{mode.name|translate}}

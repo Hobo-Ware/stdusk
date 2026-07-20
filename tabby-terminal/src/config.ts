@@ -1,0 +1,227 @@
+import { ConfigProvider, Platform } from 'tabby-core'
+import { DefaultColorSchemes } from './colorSchemes'
+
+/** @hidden */
+export class TerminalConfigProvider extends ConfigProvider {
+    defaults = {
+        hotkeys: {
+            'copy-current-path': [],
+            'debug-save-state': ['Ctrl-Shift-Alt-1'],
+            'debug-load-state': ['Ctrl-Shift-Alt-2'],
+            'debug-copy-state': ['Ctrl-Shift-Alt-3'],
+            'debug-paste-state': ['Ctrl-Shift-Alt-4'],
+            'debug-save-output': ['Ctrl-Shift-Alt-5'],
+            'debug-load-output': ['Ctrl-Shift-Alt-6'],
+            'debug-copy-output': ['Ctrl-Shift-Alt-7'],
+            'debug-paste-output': ['Ctrl-Shift-Alt-8'],
+        },
+        terminal: {
+            frontend: 'xterm-webgl',
+            fontSize: 14,
+            fontWeight: 400,
+            fontWeightBold: 700,
+            fallbackFont: null,
+            linePadding: 0,
+            bell: 'off',
+            bracketedPaste: true,
+            background: 'theme',
+            ligatures: false,
+            cursor: 'block',
+            cursorBlink: true,
+            hideTabIndex: false,
+            showTabProfileIcon: false,
+            hideCloseButton: false,
+            hideTabOptionsButton: false,
+            rightClick: 'menu',
+            pasteOnMiddleClick: true,
+            copyOnSelect: false,
+            copyAsHTML: true,
+            scrollOnInput: true,
+            altIsMeta: false,
+            wordSeparator: ' ()[]{}\'"',
+            colorScheme: {
+                __nonStructural: true,
+                ...DefaultColorSchemes.defaultColorScheme,
+            },
+            lightColorScheme: {
+                __nonStructural: true,
+                ...DefaultColorSchemes.defaultLightColorScheme,
+            },
+            customColorSchemes: [],
+            warnOnMultilinePaste: true,
+            searchRegexAlwaysEnabled: false,
+            searchOptions: {
+                regex: false,
+                wholeWord: false,
+                caseSensitive: false,
+            },
+            detectProgress: true,
+            scrollbackLines: 25000,
+            drawBoldTextInBrightColors: true,
+            sixel: true,
+            minimumContrastRatio: 4,
+            paletteGenerate: false,
+            paletteHarmonious: false,
+            replaceNewlinesWithSpacesOnPaste: false,
+            trimWhitespaceOnPaste: true,
+        },
+    }
+
+    platformDefaults = {
+        [Platform.macOS]: {
+            terminal: {
+                font: 'Menlo',
+            },
+            hotkeys: {
+                'ctrl-c': ['Ctrl-C'],
+                copy: [
+                    '⌘-C',
+                ],
+                paste: [
+                    '⌘-V',
+                ],
+                clear: [
+                    '⌘-K',
+                ],
+                'select-all': ['⌘-A'],
+                'zoom-in': [
+                    '⌘-=',
+                    '⌘-Shift-=',
+                ],
+                'zoom-out': [
+                    '⌘--',
+                    '⌘-Shift--',
+                ],
+                'reset-zoom': [
+                    '⌘-0',
+                ],
+                home: ['⌘-Left', 'Home'],
+                end: ['⌘-Right', 'End'],
+                'previous-word': ['⌥-Left'],
+                'next-word': ['⌥-Right'],
+                'delete-previous-word': ['⌥-Backspace'],
+                'delete-line': ['⌘-Backspace'],
+                'delete-next-word': ['⌥-Delete'],
+                search: [
+                    '⌘-F',
+                ],
+                'pane-focus-all': [
+                    '⌘-Shift-I',
+                ],
+                'focus-all-tabs': [
+                    '⌘-⌥-Shift-I',
+                ],
+                'scroll-to-top': ['Shift-PageUp'],
+                'scroll-page-up': ['⌥-PageUp'],
+                'scroll-up': ['Ctrl-Shift-Up'],
+                'scroll-down': ['Ctrl-Shift-Down'],
+                'scroll-page-down': ['⌥-PageDown'],
+                'scroll-to-bottom': ['Shift-PageDown'],
+            },
+        },
+        [Platform.Windows]: {
+            terminal: {
+                font: 'Consolas',
+                rightClick: 'clipboard',
+                pasteOnMiddleClick: false,
+                copyOnSelect: true,
+            },
+            hotkeys: {
+                'ctrl-c': ['Ctrl-C'],
+                copy: [
+                    'Ctrl-Shift-C',
+                ],
+                paste: [
+                    'Ctrl-Shift-V',
+                    'Shift-Insert',
+                ],
+                'select-all': ['Ctrl-Shift-A'],
+                clear: [],
+                'zoom-in': [
+                    'Ctrl-=',
+                    'Ctrl-Shift-=',
+                ],
+                'zoom-out': [
+                    'Ctrl--',
+                    'Ctrl-Shift--',
+                ],
+                'reset-zoom': [
+                    'Ctrl-0',
+                ],
+                home: ['Home'],
+                end: ['End'],
+                'previous-word': ['Ctrl-Left'],
+                'next-word': ['Ctrl-Right'],
+                'delete-previous-word': ['Ctrl-Backspace'],
+                'delete-line': ['Ctrl-Shift-Backspace'],
+                'delete-next-word': ['Ctrl-Delete'],
+                search: [
+                    'Ctrl-Shift-F',
+                ],
+                'pane-focus-all': [
+                    'Ctrl-Shift-I',
+                ],
+                'focus-all-tabs': [
+                    'Ctrl-Alt-Shift-I',
+                ],
+                'scroll-to-top': ['Ctrl-PageUp'],
+                'scroll-page-up': ['Alt-PageUp'],
+                'scroll-up': ['Ctrl-Shift-Up'],
+                'scroll-down': ['Ctrl-Shift-Down'],
+                'scroll-page-down': ['Alt-PageDown'],
+                'scroll-to-bottom': ['Ctrl-PageDown'],
+            },
+        },
+        [Platform.Linux]: {
+            terminal: {
+                font: 'Liberation Mono',
+                pasteOnMiddleClick: false, // handled by OS
+            },
+            hotkeys: {
+                'ctrl-c': ['Ctrl-C'],
+                copy: [
+                    'Ctrl-Shift-C',
+                ],
+                paste: [
+                    'Ctrl-Shift-V',
+                    'Shift-Insert',
+                ],
+                'select-all': ['Ctrl-Shift-A'],
+                clear: [],
+                'zoom-in': [
+                    'Ctrl-=',
+                    'Ctrl-Shift-=',
+                ],
+                'zoom-out': [
+                    'Ctrl--',
+                    'Ctrl-Shift--',
+                ],
+                'reset-zoom': [
+                    'Ctrl-0',
+                ],
+                home: ['Home'],
+                end: ['End'],
+                'previous-word': ['Ctrl-Left'],
+                'next-word': ['Ctrl-Right'],
+                'delete-previous-word': ['Ctrl-Backspace'],
+                'delete-line': ['Ctrl-Shift-Backspace'],
+                'delete-next-word': ['Ctrl-Delete'],
+                search: [
+                    'Ctrl-Shift-F',
+                ],
+                'pane-focus-all': [
+                    'Ctrl-Shift-I',
+                ],
+                'focus-all-tabs': [
+                    'Ctrl-Alt-Shift-I',
+                ],
+                'scroll-to-top': ['Ctrl-PageUp'],
+                'scroll-page-up': ['Alt-PageUp'],
+                'scroll-up': ['Ctrl-Shift-Up'],
+                'scroll-down': ['Ctrl-Shift-Down'],
+                'scroll-page-down': ['Alt-PageDown'],
+                'scroll-to-bottom': ['Ctrl-PageDown'],
+            },
+        },
+    }
+}

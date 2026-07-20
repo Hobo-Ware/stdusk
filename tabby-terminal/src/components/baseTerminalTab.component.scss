@@ -1,0 +1,67 @@
+:host {
+    flex: auto;
+    display: flex;
+    flex-direction: column;
+    // overflow: hidden;
+    position: relative;
+
+    &> .content {
+        flex: auto;
+        position: relative;
+        display: block;
+        overflow: hidden;
+        margin: calc(max(0px, 30px * var(--spaciness) - 15px));
+        transition: opacity ease-out 0.25s;
+        opacity: 0;
+
+        div[style]:last-child {
+            background: black !important;
+            color: white !important;
+        }
+    }
+
+    $toolbarHeight: 40px;
+
+    > terminal-toolbar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 4;
+
+        opacity: 0;
+        transition: 0.25s opacity;
+        will-change: transform;
+        transform: translate(0, -100px);
+        transition: 0.25s transform ease-out;
+        height: $toolbarHeight;
+    }
+
+    &.toolbar-revealed, &.toolbar-pinned {
+        > terminal-toolbar {
+            opacity: 1;
+            transform: translate(0, 0);
+        }
+    }
+
+    > .toolbar-pin-button {
+        position: absolute;
+        right: 34px;
+        top: 5px;
+        z-index: 4;
+        background: #00000047;
+    }
+
+    &.toolbar-pinned > .terminal-toolbar-spacer {
+        width: 100%;
+        height: $toolbarHeight;
+    }
+}
+
+:host-context(.with-title-inset) {
+    padding-top: 20px;
+
+    terminal-toolbar {
+        padding-left: 90px;
+    }
+}

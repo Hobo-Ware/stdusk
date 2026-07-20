@@ -1,0 +1,28 @@
+:host {
+    padding: 5px 15px 5px 15px;
+    display: flex;
+    z-index: 3;
+    overflow: hidden;
+
+    ::ng-deep .btn {
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+    }
+}
+
+.content {
+    flex-grow: 1;
+    display: flex;
+    align-items: center;
+
+    ::ng-deep .cdk-drag-placeholder {
+        display: none !important;
+    }
+}
+
+.drag-handle {
+    margin: 0 10px 0 0;
+    cursor: move;
+    opacity: .3;
+}

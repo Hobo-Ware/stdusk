@@ -1,0 +1,10 @@
+:host {
+    display: flex;
+    flex: auto;
+    position: relative;
+    overflow: hidden;
+
+    >* {
+        flex: auto;
+    }
+}
