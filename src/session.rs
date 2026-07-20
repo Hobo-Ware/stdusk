@@ -4,12 +4,26 @@
 use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+// No `Eq`: `window` carries f32 geometry. Only `PartialEq` is needed (skip-identical-write guard).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub(crate) struct SavedSession {
     #[serde(default)]
     pub(crate) tabs: Vec<SavedTab>,
     #[serde(default)]
     pub(crate) active: usize,
+    /// Remembered window geometry, restored on next launch in window mode. Written only in window
+    /// mode; dropdown mode leaves it None (it uses the fixed top-edge quake geometry instead).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) window: Option<WindowGeom>,
+}
+
+/// A window's outer position + inner (content) size, in logical points.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct WindowGeom {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) w: f32,
+    pub(crate) h: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -82,10 +96,25 @@ mod tests {
                 SavedTab { title: None, color: None, cwd: Some("/home/x".into()), pinned: false },
             ],
             active: 1,
+            window: None,
         };
         let body = toml::to_string(&s).unwrap();
         let back: SavedSession = toml::from_str(&body).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn window_geometry_round_trips_and_is_absent_by_default() {
+        // Dropdown sessions never write geometry; window mode's rect survives the round-trip.
+        let plain = SavedSession::default();
+        assert!(plain.window.is_none());
+        assert!(!toml::to_string(&plain).unwrap().contains("window"));
+        let s = SavedSession {
+            window: Some(WindowGeom { x: 120.0, y: 64.0, w: 1024.0, h: 640.0 }),
+            ..Default::default()
+        };
+        let back: SavedSession = toml::from_str(&toml::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.window, Some(WindowGeom { x: 120.0, y: 64.0, w: 1024.0, h: 640.0 }));
     }
 
     #[test]

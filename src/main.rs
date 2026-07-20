@@ -3,7 +3,7 @@
 //! The `eframe::App` loop here stays thin; tabs live in `tabs.rs`, the pane workspace in
 //! `workspace.rs`, find/paste overlays in `finder.rs`, drawing widgets + pure helpers in `ui.rs`.
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use eframe::egui;
 use global_hotkey::hotkey::HotKey;
@@ -12,6 +12,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 mod colors;
 mod config;
 mod finder;
+mod instance;
 mod links;
 mod osc;
 mod palette;
@@ -229,6 +230,7 @@ struct Stdusk {
     cfg: Config,
     hotkey_mgr: GlobalHotKeyManager, // kept alive so the registration persists
     registered_hotkey: String, // the hotkey string currently registered (live re-registration)
+    hotkey_registered: bool,   // whether a global hotkey is registered (false in window mode)
     applied_font: String,      // the appearance.font last applied/attempted (live font re-apply)
     bold_font_ready: bool,     // a real bold face is registered (BOLD_FONT_FAMILY exists this run)
     toggle: Arc<AtomicBool>,   // set by the hotkey thread, consumed in ui()
@@ -247,6 +249,7 @@ struct Stdusk {
     pending_close: Option<(u64, String)>, // close-tab confirm: (tab id, prompt message)
     right_press: Option<(Vec<pane::Side>, f64)>, // right-button press on a pane: (path, egui time)
     window_top: Option<bool>, // last-applied always-on-top state (re-applied when it changes)
+    space_all: Option<bool>, // last-applied "join all Spaces" collectionBehavior (re-applied on change)
     fx_opacity: f32, // this frame's effective window opacity (unfocused dim applied); derived
     color_preview: Option<(u64, Option<egui::Color32>)>, // Color-menu swatch hover preview (tab id, color)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
@@ -261,6 +264,7 @@ struct Stdusk {
     sync_slot: sync::SyncSlot,    // settings-sync worker result, polled each frame
     sync_busy: bool,              // a sync push/pull is in flight (buttons disabled)
     launch_pull_cfg: Option<String>, // config TOML when the launch autosync pull spawned (staleness gate)
+    new_tab_req: Arc<AtomicUsize>,   // new-tab requests from other launches (single-instance)
     screenshot: Option<String>,      // --screenshot PATH: demo tabs, capture, exit
 }
 
@@ -270,6 +274,7 @@ impl Stdusk {
         mut cfg: Config,
         screenshot: Option<String>,
         settings_shot: bool,
+        instance_listener: Option<instance::Listener>,
     ) -> Self {
         // Fonts: the shared builder (Phosphor icons + `appearance.font` at the top of Monospace
         // + emoji/symbol fallbacks). An unresolvable family keeps the bundled default + toasts.
@@ -288,10 +293,13 @@ impl Stdusk {
         }
 
         // Global quake hotkey from config (default Ctrl+`). Carbon API on macOS - no
-        // Accessibility grant needed.
+        // Accessibility grant needed. Window mode has no summon hotkey - skip registration.
         let mgr = GlobalHotKeyManager::new().expect("hotkey manager");
-        let (mods, code) = config::parse_hotkey(&cfg.quake.hotkey);
-        let _ = mgr.register(HotKey::new(mods, code));
+        let hotkey_registered = config::should_register_hotkey(&cfg.quake.mode);
+        if hotkey_registered {
+            let (mods, code) = config::parse_hotkey(&cfg.quake.hotkey);
+            let _ = mgr.register(HotKey::new(mods, code));
+        }
 
         // A thread wakes the UI (even while hidden) when the hotkey fires.
         let toggle = Arc::new(AtomicBool::new(false));
@@ -306,6 +314,17 @@ impl Stdusk {
                 }
             }
         });
+
+        // Single-instance: as the primary, accept connections from later launches and, per
+        // connection, surface the window + open a new tab. Skipped when we didn't take the lock
+        // (screenshot harness) or off unix.
+        let new_tab_req = instance::pending_counter();
+        #[cfg(unix)]
+        if let Some(listener) = instance_listener {
+            instance::spawn_listener(listener, new_tab_req.clone(), cc.egui_ctx.clone());
+        }
+        #[cfg(not(unix))]
+        let _ = instance_listener;
 
         // Session restore: reopen last session's tabs (cwd/title/color); else one fresh tab.
         let mut tabs = Vec::new();
@@ -448,8 +467,9 @@ impl Stdusk {
         if sync_busy {
             sync::spawn(sync::Op::Pull, repo, &sync_slot, cc.egui_ctx.clone());
         }
-        // Initial Dock presence must mirror the launch activation policy (see main()).
-        let dock_shown = !cfg.quake.hide_from_dock || cfg.quake.dock_when_visible;
+        // Initial Dock presence must mirror the launch activation policy (see main()). Visible at
+        // launch, so `dock_when_visible` counts; window mode is always Regular.
+        let dock_shown = config::activation_is_regular(&cfg, true);
         Self {
             tabs,
             active,
@@ -457,6 +477,7 @@ impl Stdusk {
             cfg,
             hotkey_mgr: mgr,
             registered_hotkey,
+            hotkey_registered,
             applied_font,
             bold_font_ready,
             toggle,
@@ -475,6 +496,7 @@ impl Stdusk {
             pending_close: None,
             right_press: None,
             window_top: None,
+            space_all: None,
             fx_opacity,
             color_preview: None,
             toast,
@@ -489,6 +511,7 @@ impl Stdusk {
             sync_slot,
             sync_busy,
             launch_pull_cfg,
+            new_tab_req,
             screenshot,
         }
     }
@@ -498,26 +521,61 @@ impl Stdusk {
     /// each frame makes the Dock toggles in settings live (no restart). Only touches the
     /// activation policy when it actually changes.
     fn sync_dock(&mut self) {
-        let want =
-            !self.cfg.quake.hide_from_dock || (self.cfg.quake.dock_when_visible && self.visible);
+        let want = config::activation_is_regular(&self.cfg, self.visible);
         if want != self.dock_shown {
             set_dock_icon(want);
             self.dock_shown = want;
         }
     }
 
-    /// Re-register the global quake hotkey when the config string changed (settings live-apply:
-    /// field commit, Save, Revert, Discard). Returns true when a re-registration happened.
+    /// Reconcile the global quake hotkey with the config (settings live-apply: field commit, Save,
+    /// Revert, Discard, sync pull, and mode switches). Window mode wants NO hotkey, so it
+    /// unregisters any live one; dropdown mode (re-)registers when the string changed or nothing
+    /// is registered yet. Returns true when a hotkey became newly active (for the commit toast).
     fn reregister_hotkey(&mut self) -> bool {
-        if self.cfg.quake.hotkey == self.registered_hotkey {
+        if !config::should_register_hotkey(&self.cfg.quake.mode) {
+            if self.hotkey_registered {
+                let (mods, code) = config::parse_hotkey(&self.registered_hotkey);
+                let _ = self.hotkey_mgr.unregister(HotKey::new(mods, code));
+                self.hotkey_registered = false;
+            }
             return false;
         }
-        let (mods, code) = config::parse_hotkey(&self.registered_hotkey);
-        let _ = self.hotkey_mgr.unregister(HotKey::new(mods, code));
+        if self.hotkey_registered && self.cfg.quake.hotkey == self.registered_hotkey {
+            return false;
+        }
+        if self.hotkey_registered {
+            let (mods, code) = config::parse_hotkey(&self.registered_hotkey);
+            let _ = self.hotkey_mgr.unregister(HotKey::new(mods, code));
+        }
         let (mods, code) = config::parse_hotkey(&self.cfg.quake.hotkey);
         let _ = self.hotkey_mgr.register(HotKey::new(mods, code));
         self.registered_hotkey = self.cfg.quake.hotkey.clone();
+        self.hotkey_registered = true;
         true
+    }
+
+    /// Live-apply a dropdown<->window mode switch from settings: (un)register the global hotkey,
+    /// flip the window chrome + level, and either restore the top-edge quake geometry (dropdown)
+    /// or hand the window back to the user (window). Decoration/activation changes are best-effort
+    /// at runtime on macOS - the settings row hints "chrome applies on restart" for what winit
+    /// won't flip live. The Dock/activation policy reconciles next frame via `sync_dock`.
+    fn apply_quake_mode(&mut self, ctx: &egui::Context) {
+        self.reregister_hotkey();
+        if self.screenshot.is_some() {
+            return;
+        }
+        let window_mode = config::is_window_mode(&self.cfg);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(window_mode));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(window_mode));
+        self.visible = true;
+        self.window_top = None; // force the per-frame WindowLevel reconcile to re-send
+        if !window_mode {
+            // Back to the quake window: pin it to the top edge at the configured height.
+            self.sized = true; // geometry is applied now; skip the first-run sizing path
+            apply_visibility(ctx, true, self.cfg.quake.height_pct);
+            self.was_focused = false;
+        }
     }
 
     /// Rebuild + apply the egui font set when `appearance.font` changed (settings live-apply:
@@ -566,6 +624,30 @@ fn set_dock_icon(visible: bool) {
 }
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon(_visible: bool) {}
+
+/// Set the quake window's Space/full-screen collection behavior. `all_spaces` = true makes it
+/// join every Space (`CanJoinAllSpaces`) and drop over full-screen apps (`FullScreenAuxiliary`)
+/// so summoning it lands on whatever desktop is active; false restores the default (pinned to
+/// its origin Space). Applied to every app window (the app has one viewport). No-op off macOS.
+#[cfg(target_os = "macos")]
+fn set_space_behavior(all_spaces: bool) {
+    use objc2_app_kit::{NSApplication, NSWindowCollectionBehavior};
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        let behavior = if all_spaces {
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary
+        } else {
+            NSWindowCollectionBehavior::Default
+        };
+        let app = NSApplication::sharedApplication(mtm);
+        let windows = app.windows();
+        for i in 0..windows.count() {
+            windows.objectAtIndex(i).setCollectionBehavior(behavior);
+        }
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn set_space_behavior(_all_spaces: bool) {}
 
 /// Post a desktop notification (macOS `osascript`); `body` is the visible line. Shared by
 /// notify-when-done and notify-on-activity so the osascript plumbing can't drift.
@@ -616,7 +698,7 @@ impl eframe::App for Stdusk {
         // Effective window opacity: dim while visible-but-unfocused when hide-on-focus-loss is
         // off (the "keep it around" mode); eased so focus changes fade instead of popping.
         // The screenshot harness window is never focused - keep it at the configured base.
-        let opacity = if self.screenshot.is_none() {
+        let opacity = if self.screenshot.is_none() && !config::is_window_mode(&self.cfg) {
             let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
             let target = ui::effective_opacity(
                 self.cfg.appearance.opacity,
@@ -627,73 +709,129 @@ impl eframe::App for Stdusk {
             );
             ctx.animate_value_with_time(egui::Id::new("fx_opacity"), target, 0.15)
         } else {
+            // Window mode ignores the unfocused-dim option (it's a normal app window).
             self.cfg.appearance.opacity
         };
         self.fx_opacity = opacity;
 
+        // Single-instance: another launch asked us to surface + open a new tab. Drain the
+        // counter regardless of mode (works even while a dropdown window is hidden).
+        let new_tabs = self.new_tab_req.swap(0, Ordering::SeqCst);
+        if new_tabs > 0 && self.screenshot.is_none() {
+            if config::is_window_mode(&self.cfg) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            } else {
+                self.visible = true;
+                apply_visibility(&ctx, true, height_pct);
+                self.was_focused = false;
+            }
+            for _ in 0..new_tabs {
+                self.apply_tab_action(Some(TabAction::New), &ctx);
+            }
+        }
+
         // Quake window management is skipped in the screenshot harness.
         if self.screenshot.is_none() {
-            // Always-on-top while hide-on-focus-loss is off (the window is meant to stay put
-            // over other apps); Normal otherwise. Re-applied whenever the setting changes.
-            let want_top = !self.cfg.quake.hide_on_focus_loss;
-            if self.window_top != Some(want_top) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if want_top {
-                    egui::WindowLevel::AlwaysOnTop
-                } else {
-                    egui::WindowLevel::Normal
-                }));
-                self.window_top = Some(want_top);
-            }
-            // Menu-bar icon toggle is live: build/drop the tray as the setting flips.
+            // Menu-bar icon toggle is live in BOTH modes: build/drop the tray as it flips.
             if self.cfg.quake.menu_bar_icon && self.tray.is_none() {
                 self.tray = tray::build();
             } else if !self.cfg.quake.menu_bar_icon && self.tray.is_some() {
                 self.tray = None;
             }
-            // First run: apply full quake sizing once the monitor size is known.
-            if !self.sized {
-                if ctx.input(|i| i.viewport().monitor_size).is_some() {
-                    apply_visibility(&ctx, true, height_pct);
-                    self.sized = true;
-                } else {
-                    ctx.request_repaint();
-                }
+
+            // Follow the active Space (dropdown quake behavior): join all Spaces so summoning
+            // drops the window onto the current desktop instead of yanking back to its origin
+            // Space. `wants_all_spaces` is false in window mode, so this also resets to the
+            // default behavior on a live dropdown->window switch. Re-applied only on change.
+            let want_spaces = config::wants_all_spaces(&self.cfg);
+            if self.space_all != Some(want_spaces) {
+                set_space_behavior(want_spaces);
+                self.space_all = Some(want_spaces);
             }
 
-            // Quake toggle (from the global-hotkey thread).
-            if self.toggle.swap(false, Ordering::SeqCst) {
-                self.visible = !self.visible;
-                apply_visibility(&ctx, self.visible, height_pct);
-                if self.visible {
-                    self.was_focused = false;
+            if config::forces_quake_geometry(&self.cfg.quake.mode) {
+                // --- Dropdown mode: the quake drop-down window (behavior unchanged) ---
+                // Always-on-top while hide-on-focus-loss is off (the window is meant to stay put
+                // over other apps); Normal otherwise. Re-applied whenever the setting changes.
+                let want_top = !self.cfg.quake.hide_on_focus_loss;
+                if self.window_top != Some(want_top) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if want_top {
+                        egui::WindowLevel::AlwaysOnTop
+                    } else {
+                        egui::WindowLevel::Normal
+                    }));
+                    self.window_top = Some(want_top);
                 }
-            }
+                // First run: apply full quake sizing once the monitor size is known.
+                if !self.sized {
+                    if ctx.input(|i| i.viewport().monitor_size).is_some() {
+                        apply_visibility(&ctx, true, height_pct);
+                        self.sized = true;
+                    } else {
+                        ctx.request_repaint();
+                    }
+                }
 
-            // Menu-bar item: Show/Hide toggles the window, Quit exits.
-            if let Some(tray) = &self.tray {
-                let (show, quit) = tray::poll(tray);
-                if quit {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                if show {
+                // Quake toggle (from the global-hotkey thread).
+                if self.toggle.swap(false, Ordering::SeqCst) {
                     self.visible = !self.visible;
                     apply_visibility(&ctx, self.visible, height_pct);
                     if self.visible {
                         self.was_focused = false;
                     }
                 }
-            }
-            // Hide on focus loss (after we've gained focus since showing), if enabled.
-            let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
-            if self.visible {
-                if focused {
-                    self.was_focused = true;
-                } else if self.was_focused && self.cfg.quake.hide_on_focus_loss {
-                    self.visible = false;
-                    apply_visibility(&ctx, false, height_pct);
+
+                // Menu-bar item: Show/Hide toggles the window, Quit exits.
+                if let Some(tray) = &self.tray {
+                    let (show, quit) = tray::poll(tray);
+                    if quit {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if show {
+                        self.visible = !self.visible;
+                        apply_visibility(&ctx, self.visible, height_pct);
+                        if self.visible {
+                            self.was_focused = false;
+                        }
+                    }
+                }
+                // Hide on focus loss (after we've gained focus since showing), if enabled.
+                let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+                if self.visible {
+                    if focused {
+                        self.was_focused = true;
+                    } else if self.was_focused && config::hides_on_blur(&self.cfg) {
+                        self.visible = false;
+                        apply_visibility(&ctx, false, height_pct);
+                    }
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(120));
                 }
             } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(120));
+                // --- Window mode: a conventional macOS window ---
+                // No always-on-top, no forced quake geometry, and it never auto-hides. Mark the
+                // level Normal once; the red close button / last-window-closed quits via winit's
+                // default CloseRequested handling.
+                if self.window_top != Some(false) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                        egui::WindowLevel::Normal,
+                    ));
+                    self.window_top = Some(false);
+                }
+                self.visible = true;
+                self.was_focused = true;
+                // No summon hotkey is registered in window mode; drop any stray toggle flag.
+                self.toggle.store(false, Ordering::SeqCst);
+                // The menu-bar item still works: Show brings us to front, Quit exits.
+                if let Some(tray) = &self.tray {
+                    let (show, quit) = tray::poll(tray);
+                    if quit {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if show {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                }
             }
             self.sync_dock();
         }
@@ -788,6 +926,24 @@ impl eframe::App for Stdusk {
             let now = ctx.input(|i| i.time);
             if now >= self.next_session_save {
                 self.next_session_save = now + 3.0;
+                // Remember window geometry in window mode (restored next launch); dropdown mode
+                // uses the fixed top-edge quake geometry, so it never persists a rect.
+                let window = config::is_window_mode(&self.cfg)
+                    .then(|| {
+                        ctx.input(|i| {
+                            let vp = i.viewport();
+                            vp.inner_rect.map(|r| {
+                                let pos = vp.outer_rect.map_or(r.min, |o| o.min);
+                                session::WindowGeom {
+                                    x: pos.x,
+                                    y: pos.y,
+                                    w: r.width(),
+                                    h: r.height(),
+                                }
+                            })
+                        })
+                    })
+                    .flatten();
                 let snap = session::SavedSession {
                     tabs: self
                         .tabs
@@ -800,6 +956,7 @@ impl eframe::App for Stdusk {
                         })
                         .collect(),
                     active: self.active,
+                    window,
                 };
                 if snap != self.last_session {
                     session::save(&snap);
@@ -1296,6 +1453,23 @@ fn main() -> eframe::Result<()> {
         cfg.appearance.follow_system = false;
         cfg.appearance.theme = "one-half-dark".into();
     }
+
+    // Single-instance guard: only one stdusk runs. A second launch connects to the primary over
+    // a Unix socket, tells it to surface + open a new tab, and exits(0) without a window of its
+    // own. Skipped under the screenshot harness (it may run alongside a real instance).
+    #[cfg(unix)]
+    let sock_path = (screenshot.is_none()).then(instance::socket_path).flatten();
+    #[cfg(unix)]
+    let instance_listener = match sock_path.as_deref() {
+        Some(path) => match instance::acquire(path) {
+            instance::Acquired::Secondary => return Ok(()),
+            instance::Acquired::Primary(l) => Some(l),
+        },
+        None => None,
+    };
+    #[cfg(not(unix))]
+    let instance_listener: Option<instance::Listener> = None;
+
     colors::init(colors::by_name(&cfg.appearance.theme));
     if let Some(path) = &screenshot {
         // SAFE: single-threaded, set before any threads spawn (edition-2024 set_var is unsafe).
@@ -1312,11 +1486,24 @@ fn main() -> eframe::Result<()> {
         [1200.0, 500.0]
     };
 
+    // Window mode is a conventional decorated, resizable macOS window; dropdown mode is the
+    // borderless top-edge quake window pinned to [0,0].
+    let window_mode = config::is_window_mode(&cfg);
     let mut viewport = egui::ViewportBuilder::default()
-        .with_decorations(false)
+        .with_decorations(window_mode)
         .with_transparent(true)
-        .with_inner_size(size)
-        .with_position([0.0, 0.0]);
+        .with_inner_size(size);
+    if window_mode {
+        viewport = viewport.with_resizable(true);
+        // Restore the remembered geometry (window mode only); else the OS places the window.
+        if screenshot.is_none()
+            && let Some(g) = session::load().window
+        {
+            viewport = viewport.with_inner_size([g.w, g.h]).with_position([g.x, g.y]);
+        }
+    } else {
+        viewport = viewport.with_position([0.0, 0.0]);
+    }
     // App/window icon (the dusk-sun prompt). macOS uses the .app bundle icon for the Dock, so
     // this mainly affects other platforms + the window itself; harmless where ignored.
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/stdusk-icon.png"))
@@ -1335,7 +1522,8 @@ fn main() -> eframe::Result<()> {
     //   hide_from_dock && dock_when_visible: launch regular, then flip to accessory whenever the
     //     window is hidden (see `set_dock_icon`) - Dock icon + real menu bar only while visible.
     //   !hide_from_dock: a normal Dock app.
-    if cfg.quake.hide_from_dock && !cfg.quake.dock_when_visible {
+    //   window mode: always Regular (a normal Dock app), ignoring the Dock toggles above.
+    if !window_mode && cfg.quake.hide_from_dock && !cfg.quake.dock_when_visible {
         options.event_loop_builder = Some(Box::new(|builder| {
             #[cfg(target_os = "macos")]
             {
@@ -1347,11 +1535,20 @@ fn main() -> eframe::Result<()> {
         }));
     }
     let settings_shot = settings_shot.is_some();
-    eframe::run_native(
+    let result = eframe::run_native(
         "stdusk",
         options,
-        Box::new(move |cc| Ok(Box::new(Stdusk::new(cc, cfg, screenshot, settings_shot)))),
-    )
+        Box::new(move |cc| {
+            Ok(Box::new(Stdusk::new(cc, cfg, screenshot, settings_shot, instance_listener)))
+        }),
+    );
+    // Clean up our single-instance socket on graceful exit (a crash leaves it stale, which the
+    // next launch detects and takes over).
+    #[cfg(unix)]
+    if let Some(p) = sock_path {
+        let _ = std::fs::remove_file(p);
+    }
+    result
 }
 
 #[cfg(test)]

@@ -138,6 +138,10 @@ pub(crate) struct Appearance {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct Quake {
+    /// `"dropdown"` (default: drops from the top edge on the global hotkey - the quake behavior)
+    /// or `"window"` (a conventional resizable macOS window). Window mode disables the global
+    /// hotkey and ignores every focus/Dock option below (it's always a normal Dock app).
+    pub(crate) mode: String,
     pub(crate) hotkey: String,
     pub(crate) height_pct: f32,
     pub(crate) hide_on_focus_loss: bool,
@@ -154,6 +158,10 @@ pub(crate) struct Quake {
     /// Extra opacity multiplier while the window is visible but unfocused (only applies with
     /// `hide_on_focus_loss = false`). 1.0 = off.
     pub(crate) unfocused_opacity: f32,
+    /// (Dropdown mode) drop the window onto whatever macOS Space/desktop is active when summoned,
+    /// instead of yanking you back to the Space it was created on. Default true - the expected
+    /// quake behavior. Set false to pin it to its origin Space. Ignored in window mode.
+    pub(crate) follow_active_space: bool,
 }
 
 // Independent user toggles, not a mode - a state machine would be more code, not less.
@@ -206,6 +214,7 @@ impl Default for Appearance {
 impl Default for Quake {
     fn default() -> Self {
         Self {
+            mode: "dropdown".into(),
             hotkey: "Ctrl+Grave".into(),
             height_pct: 0.5,
             hide_on_focus_loss: true,
@@ -213,6 +222,7 @@ impl Default for Quake {
             menu_bar_icon: true,
             dock_when_visible: false,
             unfocused_opacity: 1.0,
+            follow_active_space: true,
         }
     }
 }
@@ -339,6 +349,54 @@ fn parse_code(k: &str) -> Option<Code> {
     Code::from_str(&w3c).ok()
 }
 
+// --- Quake-vs-window mode decisions (pure; table-tested below) ---------------------------------
+// Dropdown mode must answer these exactly as the app did before the mode existed; window mode
+// flips the quake-specific ones. Keep the branching here so the render loop stays dumb.
+
+/// `[quake] mode = "window"` runs stdusk as a conventional resizable macOS window; anything else
+/// (the default `"dropdown"`) keeps the quake drop-from-the-top behavior. Case-insensitive.
+pub(crate) fn window_mode(mode: &str) -> bool {
+    mode.eq_ignore_ascii_case("window")
+}
+
+/// Whether the app is running as a normal window (vs the quake dropdown).
+pub(crate) fn is_window_mode(cfg: &Config) -> bool {
+    window_mode(&cfg.quake.mode)
+}
+
+/// The global summon hotkey is registered only in dropdown mode; window mode has none.
+pub(crate) fn should_register_hotkey(mode: &str) -> bool {
+    !window_mode(mode)
+}
+
+/// Only dropdown mode forces the top-edge position + monitor-width quake sizing; a window keeps
+/// its own geometry.
+pub(crate) fn forces_quake_geometry(mode: &str) -> bool {
+    !window_mode(mode)
+}
+
+/// Whether the window hides when another app takes focus. Never in window mode (it stays put like
+/// any app); in dropdown it follows `hide_on_focus_loss`.
+pub(crate) fn hides_on_blur(cfg: &Config) -> bool {
+    !window_mode(&cfg.quake.mode) && cfg.quake.hide_on_focus_loss
+}
+
+/// Whether the quake window should join all Spaces so it drops onto the active desktop when
+/// summoned (`NSWindowCollectionBehaviorCanJoinAllSpaces`). Only in dropdown mode - a window-mode
+/// window is a normal app window and keeps the default (origin-Space) behavior.
+pub(crate) fn wants_all_spaces(cfg: &Config) -> bool {
+    !window_mode(&cfg.quake.mode) && cfg.quake.follow_active_space
+}
+
+/// Whether the macOS activation policy should be Regular (Dock icon + app-switcher entry).
+/// Always Regular in window mode; in dropdown it follows the Dock toggles (accessory unless a
+/// Dock icon is wanted, or `dock_when_visible` while shown).
+pub(crate) fn activation_is_regular(cfg: &Config, visible: bool) -> bool {
+    window_mode(&cfg.quake.mode)
+        || !cfg.quake.hide_from_dock
+        || (cfg.quake.dock_when_visible && visible)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,7 +410,9 @@ mod tests {
         assert!(c.appearance.font.is_empty()); // "" = bundled default
         assert_eq!(c.appearance.line_padding, 0.0);
         assert_eq!(c.quake.hotkey, "Ctrl+Grave");
+        assert_eq!(c.quake.mode, "dropdown"); // preserves the pre-mode quake behavior
         assert!(c.quake.hide_on_focus_loss);
+        assert!(c.quake.follow_active_space); // quake drops on the active Space by default
         assert_eq!(c.quake.unfocused_opacity, 1.0); // off by default
         assert!(c.terminal.detect_progress);
         assert!(c.terminal.warn_on_close_running);
@@ -391,6 +451,77 @@ mod tests {
         assert_eq!(c.terminal.minimum_contrast, 1.0);
         let c: Config = toml::from_str("[terminal]\n").unwrap();
         assert_eq!(c.terminal.minimum_contrast, 4.0);
+    }
+
+    #[test]
+    fn quake_mode_default_and_round_trips() {
+        // A fresh config and one that omits `mode` both parse as dropdown (identical to the
+        // pre-mode behavior); an explicit window value survives the round-trip.
+        assert_eq!(Config::default().quake.mode, "dropdown");
+        let bare: Config = toml::from_str("[quake]\n").unwrap();
+        assert_eq!(bare.quake.mode, "dropdown");
+        let mut cfg = Config::default();
+        cfg.quake.mode = "window".into();
+        let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
+        assert_eq!(back.quake.mode, "window");
+        assert!(config_dirty(&Config::default(), &cfg)); // the mode flip is a real edit
+    }
+
+    #[test]
+    fn mode_decisions_dropdown_matches_today_window_flips() {
+        // Dropdown: every decision matches what the app did before the mode existed.
+        let mut d = Config::default();
+        assert!(!window_mode(&d.quake.mode) && !is_window_mode(&d));
+        assert!(should_register_hotkey(&d.quake.mode)); // hotkey registered
+        assert!(forces_quake_geometry(&d.quake.mode)); // top-edge + monitor sizing
+        assert!(hides_on_blur(&d)); // hide_on_focus_loss default true
+        assert!(!activation_is_regular(&d, true)); // accessory by default (hidden from Dock)
+        d.quake.hide_from_dock = false;
+        assert!(activation_is_regular(&d, true)); // a Dock app in dropdown when opted in
+        d = Config::default();
+        d.quake.hide_on_focus_loss = false;
+        assert!(!hides_on_blur(&d));
+
+        // Window: the quake-specific decisions flip and the Dock/focus toggles are ignored.
+        let mut w = Config::default();
+        w.quake.mode = "Window".into(); // case-insensitive
+        assert!(window_mode(&w.quake.mode) && is_window_mode(&w));
+        assert!(!should_register_hotkey(&w.quake.mode)); // no global hotkey
+        assert!(!forces_quake_geometry(&w.quake.mode)); // keeps its own geometry
+        assert!(!hides_on_blur(&w)); // never auto-hides even with the flag on
+        assert!(activation_is_regular(&w, false)); // always a Dock app, visible or not
+        w.quake.hide_from_dock = true; // ignored in window mode
+        assert!(activation_is_regular(&w, false));
+    }
+
+    #[test]
+    fn follow_active_space_default_and_round_trips() {
+        // Default on (fixes the "summon yanks you to Desktop 1" bug); omitting it keeps the
+        // default; an explicit false survives the round-trip.
+        assert!(Config::default().quake.follow_active_space);
+        let bare: Config = toml::from_str("[quake]\n").unwrap();
+        assert!(bare.quake.follow_active_space);
+        let mut cfg = Config::default();
+        cfg.quake.follow_active_space = false;
+        let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
+        assert!(!back.quake.follow_active_space);
+        assert!(config_dirty(&Config::default(), &cfg)); // flipping it is a real edit
+    }
+
+    #[test]
+    fn wants_all_spaces_only_in_dropdown_with_the_flag_on() {
+        // (mode, follow_active_space) -> wants_all_spaces
+        for (mode, follow, want) in [
+            ("dropdown", true, true),   // default quake behavior: join all Spaces
+            ("dropdown", false, false), // opted out: pinned to its origin Space
+            ("window", true, false),    // window mode is a normal app window - never
+            ("window", false, false),
+        ] {
+            let mut c = Config::default();
+            c.quake.mode = mode.into();
+            c.quake.follow_active_space = follow;
+            assert_eq!(wants_all_spaces(&c), want, "mode={mode} follow={follow}");
+        }
     }
 
     #[test]

@@ -991,6 +991,8 @@ fn appearance_section(
 ) -> AppearanceFx {
     title(ui, "Appearance");
     let mut fx = AppearanceFx { font_commit: false };
+    // Unfocused-dim is a quake-only effect; window mode greys it out (see quake_section).
+    let window_mode = config::is_window_mode(cfg);
 
     // One live preview for the whole section: resolved theme + font size + cursor + ligatures,
     // overridden by the dropdown row hovered last frame (same handoff as the scheme browser).
@@ -1031,9 +1033,11 @@ fn appearance_section(
             ui,
             "Unfocused opacity",
             "Dim the window while another app has focus",
-            "No effect while Hide on focus loss is on",
+            "No effect while Hide on focus loss is on, or in window mode",
             |ui| {
-                pct_slider(ui, &mut q.unfocused_opacity, 0.2..=1.0);
+                ui.add_enabled_ui(!window_mode, |ui| {
+                    pct_slider(ui, &mut q.unfocused_opacity, 0.2..=1.0);
+                });
             },
         );
         row(ui, "Tab width", "Fixed keeps every tab the same size", |ui| {
@@ -1594,39 +1598,86 @@ fn hotkeys_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> HotkeysFx {
 struct QuakeFx {
     hotkey_commit: bool,  // the hotkey field lost focus - re-register if it changed
     height_changed: bool, // the height slider moved - re-apply the window size live
+    mode_changed: bool,   // dropdown<->window picked - re-apply chrome/hotkey/activation live
 }
 
 fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     title(ui, "Quake");
-    let q = &mut cfg.quake;
-    let mut fx = QuakeFx { hotkey_commit: false, height_changed: false };
+    let mut fx = QuakeFx { hotkey_commit: false, height_changed: false, mode_changed: false };
+    // Window mode greys out the quake-only options below (they no longer apply), so the UI can't
+    // lie about what's in effect.
+    let window_mode = config::is_window_mode(cfg);
 
+    subheading(ui, "Mode");
+    rows(ui, |ui| {
+        row_full(
+            ui,
+            "Window mode",
+            "Dropdown drops from the top on the hotkey; Window is a normal resizable macOS window",
+            "Window mode disables the global hotkey and the Dock/focus options; chrome applies on restart",
+            |ui| {
+                ui.horizontal(|ui| {
+                    for (label, value) in [("Dropdown", "dropdown"), ("Window", "window")] {
+                        let selected =
+                            config::window_mode(&cfg.quake.mode) == config::window_mode(value);
+                        if ui::chip(ui, label, selected).clicked() && !selected {
+                            cfg.quake.mode = value.into();
+                            fx.mode_changed = true;
+                        }
+                    }
+                });
+            },
+        );
+    });
+
+    let q = &mut cfg.quake;
     subheading(ui, "Window");
     rows(ui, |ui| {
         row(ui, "Global hotkey", "Applies when the field loses focus", |ui| {
-            let r = ui::text_field(ui, &mut q.hotkey, "e.g. Ctrl+Grave, F13", 180.0, colors::fg());
-            if r.lost_focus() {
-                fx.hotkey_commit = true;
-            }
+            ui.add_enabled_ui(!window_mode, |ui| {
+                let r =
+                    ui::text_field(ui, &mut q.hotkey, "e.g. Ctrl+Grave, F13", 180.0, colors::fg());
+                if r.lost_focus() {
+                    fx.hotkey_commit = true;
+                }
+            });
         });
         row(ui, "Window height", "Fraction of the screen the window drops down", |ui| {
-            fx.height_changed = pct_slider(ui, &mut q.height_pct, 0.2..=0.9);
+            ui.add_enabled_ui(!window_mode, |ui| {
+                fx.height_changed = pct_slider(ui, &mut q.height_pct, 0.2..=0.9);
+            });
         });
     });
 
     subheading(ui, "Focus & Dock");
     rows(ui, |ui| {
         row(ui, "Hide on focus loss", "Hide when another app takes focus", |ui| {
-            ui::toggle_switch(ui, &mut q.hide_on_focus_loss);
+            ui.add_enabled_ui(!window_mode, |ui| {
+                ui::toggle_switch(ui, &mut q.hide_on_focus_loss);
+            });
         });
+        row(
+            ui,
+            "Follow active desktop",
+            "Drop onto whichever Space is active when summoned",
+            |ui| {
+                ui.add_enabled_ui(!window_mode, |ui| {
+                    ui::toggle_switch(ui, &mut q.follow_active_space);
+                });
+            },
+        );
         row(ui, "Hide from Dock", "Run as an accessory app (no Dock icon)", |ui| {
-            ui::toggle_switch(ui, &mut q.hide_from_dock);
+            ui.add_enabled_ui(!window_mode, |ui| {
+                ui::toggle_switch(ui, &mut q.hide_from_dock);
+            });
         });
         row(ui, "Menu-bar icon", "Status item with Show/Hide and Quit", |ui| {
             ui::toggle_switch(ui, &mut q.menu_bar_icon);
         });
         row(ui, "Dock icon while visible", "Show the Dock icon only while shown", |ui| {
-            ui::toggle_switch(ui, &mut q.dock_when_visible);
+            ui.add_enabled_ui(!window_mode, |ui| {
+                ui::toggle_switch(ui, &mut q.dock_when_visible);
+            });
         });
     });
     fx
@@ -2111,6 +2162,9 @@ impl Stdusk {
 
         // Quake-section side effects that need &mut self / the viewport.
         if let Some(fx) = quake_fx {
+            if fx.mode_changed {
+                self.apply_quake_mode(ctx);
+            }
             if fx.hotkey_commit && self.reregister_hotkey() {
                 let now = ctx.input(|i| i.time);
                 self.toast = Some((format!("Hotkey: {}", self.cfg.quake.hotkey), now + 1.4));
@@ -2477,6 +2531,18 @@ mod tests {
         assert!(st.dropdown_open.is_none());
         // The editor buffers loaded from the selected profile.
         assert_eq!(st.profile_loaded, Some(0));
+
+        // Window mode renders the same section (with its quake-only rows greyed) without panic,
+        // and reports no live side effects (mode/hotkey/height unchanged by a static render).
+        cfg.quake.mode = "window".into();
+        for _ in 0..2 {
+            run_frame(&ctx, vec![], |ui| {
+                let fx = quake_section(ui, &mut cfg);
+                assert!(!fx.mode_changed && !fx.hotkey_commit && !fx.height_changed);
+                let _fx = appearance_section(ui, &mut cfg, &mut st); // greys unfocused-opacity
+            });
+        }
+        assert!(config::is_window_mode(&cfg));
         assert_eq!(st.profile_args, "-l");
         assert_eq!(st.profile_env, vec![("AWS_PROFILE".to_string(), "work".to_string())]);
     }
