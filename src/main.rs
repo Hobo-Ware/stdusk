@@ -352,8 +352,18 @@ impl Stdusk {
         let mut active = 0;
         if cfg.session.restore && screenshot.is_none() {
             let saved = session::load();
-            for st in &saved.tabs {
-                let mut tab = spawn_tab(&cfg, &cc.egui_ctx, st.cwd.clone());
+            // Claude auto-resume targets, gathered while building tabs: (tab index, leaf path) plus
+            // the parallel resume inputs (cwd + captured id). Split tabs contribute one entry per
+            // claude leaf (from the pane tree); legacy single-pane sessions contribute the tab's
+            // top-level claude state at the root leaf.
+            let mut resume_targets: Vec<(usize, Vec<pane::Side>)> = Vec::new();
+            let mut resume_inputs: Vec<session::ResumeTab> = Vec::new();
+            for (i, st) in saved.tabs.iter().enumerate() {
+                // Rebuild the split layout when present; else a single pane in the saved cwd.
+                let mut tab = match &st.pane {
+                    Some(sp) => tabs::spawn_saved_tab(&cfg, &cc.egui_ctx, sp),
+                    None => spawn_tab(&cfg, &cc.egui_ctx, st.cwd.clone()),
+                };
                 // Same rule as the rename dialog: a persisted empty/whitespace rename is no
                 // rename at all - auto-titling stays live.
                 if let Some(title) = st.title.as_deref().and_then(ui::commit_rename) {
@@ -362,30 +372,46 @@ impl Stdusk {
                 }
                 tab.color = st.color.as_deref().and_then(session::hex_to_color);
                 tab.pinned = st.pinned;
+                // Per-leaf claude: align each restored pane (by leaf path) with its saved claude
+                // state. `flat_leaves()` and `leaf_paths()` share the A-before-B order.
+                match &st.pane {
+                    Some(sp) => {
+                        for ((cwd, claude), path) in
+                            sp.flat_leaves().into_iter().zip(tab.root().leaf_paths())
+                        {
+                            if let Some(c) = claude {
+                                resume_targets.push((i, path));
+                                resume_inputs.push(session::ResumeTab {
+                                    cwd: cwd.clone().unwrap_or_default(),
+                                    resume_id: c.resume_id.clone(),
+                                });
+                            }
+                        }
+                    }
+                    None => {
+                        if let Some(c) = &st.claude {
+                            resume_targets.push((i, Vec::new()));
+                            resume_inputs.push(session::ResumeTab {
+                                cwd: st.cwd.clone().unwrap_or_default(),
+                                resume_id: c.resume_id.clone(),
+                            });
+                        }
+                    }
+                }
                 tabs.push(tab);
             }
             active = saved.active.min(tabs.len().saturating_sub(1));
-            // Auto-resume Claude Code tabs: inject a resume command into each claude tab's pty.
+            // Auto-resume Claude Code panes: inject a resume command into each claude pane's pty.
             // The shell buffers stdin, so the command lands at its first prompt (no shell-
             // integration dependency). Never runs under --screenshot (guarded by the block).
             if cfg.session.resume_claude {
-                let claude_idx: Vec<usize> = saved
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, st)| st.claude.as_ref().map(|_| i))
-                    .collect();
-                let inputs: Vec<session::ResumeTab> = claude_idx
-                    .iter()
-                    .map(|&i| session::ResumeTab {
-                        cwd: saved.tabs[i].cwd.clone().unwrap_or_default(),
-                        resume_id: saved.tabs[i].claude.as_ref().and_then(|c| c.resume_id.clone()),
-                    })
-                    .collect();
-                let cmds = session::resume_commands(&inputs, &session::claude_projects_dir());
-                for (&i, cmd) in claude_idx.iter().zip(cmds) {
-                    // `\r` = Enter (a bare CR submits; matches ui::key_to_bytes for Enter).
-                    tabs[i].focused_term_mut().send(format!("{cmd}\r").as_bytes());
+                let cmds =
+                    session::resume_commands(&resume_inputs, &session::claude_projects_dir());
+                for ((i, path), cmd) in resume_targets.into_iter().zip(cmds) {
+                    if let Some(term) = tabs[i].root_mut().leaf_at_mut(&path) {
+                        // `\r` = Enter (a bare CR submits; matches ui::key_to_bytes for Enter).
+                        term.send(format!("{cmd}\r").as_bytes());
+                    }
                 }
             }
         }
@@ -1123,6 +1149,9 @@ impl eframe::App for Stdusk {
                         })
                     })
                     .flatten();
+                // One process-table snapshot (reuses the ~1 Hz-refreshed `sys`) so each leaf can be
+                // tagged claude with its own captured resume id - the split-restore per-pane source.
+                let procs = procwatch::snapshot(&self.sys);
                 let snap = session::SavedSession {
                     tabs: self
                         .tabs
@@ -1134,9 +1163,30 @@ impl eframe::App for Stdusk {
                             pinned: t.pinned,
                             // Mark claude tabs and stash the session id parsed from the claude
                             // process's argv (~1 Hz scan) so restore resumes the exact session.
+                            // Kept for backward-compat / single-pane restore; the pane tree below
+                            // carries the authoritative per-leaf claude state.
                             claude: (t.cli == Some(procwatch::Cli::Claude)).then(|| {
                                 session::ClaudeState { resume_id: t.claude_resume.clone() }
                             }),
+                            // Persist the whole split layout so re-open restores every pane, each
+                            // leaf marked claude (with its own resume id) when a claude runs there.
+                            pane: Some(session::SavedPane::from_tree(
+                                t.root(),
+                                &|term: &PtyTerm| {
+                                    let pid = term.shell_pid();
+                                    let is_claude = pid.is_some_and(|p| {
+                                        procwatch::detect(&procs, p) == Some(procwatch::Cli::Claude)
+                                    });
+                                    session::SavedPane::Leaf {
+                                        cwd: term.cwd(),
+                                        claude: is_claude.then(|| session::ClaudeState {
+                                            resume_id: pid.and_then(|p| {
+                                                procwatch::claude_resume_id(&procs, p)
+                                            }),
+                                        }),
+                                    }
+                                },
+                            )),
                         })
                         .collect(),
                     active: self.active,

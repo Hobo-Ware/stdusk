@@ -26,7 +26,8 @@ pub(crate) struct WindowGeom {
     pub(crate) h: f32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+// No `Eq`: `pane` carries an f32 split ratio. Only `PartialEq` is needed (skip-identical-write).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub(crate) struct SavedTab {
     /// Custom title, only present when the user renamed the tab.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,8 +42,111 @@ pub(crate) struct SavedTab {
     pub(crate) pinned: bool,
     /// Present when this tab was running Claude Code at save time (from CLI detection). Drives
     /// auto-resume on next launch. The inner `name` is Claude's session name (its OSC title).
+    /// Legacy/single-pane path: for split tabs the per-leaf claude state lives in `pane` instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) claude: Option<ClaudeState>,
+    /// The tab's split layout at save time (Tabby-style pane tree). Absent -> a single pane (old
+    /// sessions predating split-restore, decoded via the flat `cwd`). serde-default keeps old
+    /// session files loading unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pane: Option<SavedPane>,
+}
+
+/// A tab's split layout, persisted so re-open restores every pane (not just the first). Mirrors
+/// `pane::Pane`: a `Leaf` (one terminal's cwd + optional claude state) or a `Split` of two
+/// children. Backward-compatible via `SavedTab.pane: Option<_>` (absent -> single pane).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) enum SavedPane {
+    Leaf {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        /// Per-leaf claude state (presence marks a claude pane); drives per-pane auto-resume.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        claude: Option<ClaudeState>,
+    },
+    Split {
+        dir: SavedSplitDir,
+        ratio: f32,
+        a: Box<SavedPane>,
+        b: Box<SavedPane>,
+    },
+}
+
+/// Serializable mirror of `pane::SplitDir` (kept local so `pane.rs` needn't derive serde).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum SavedSplitDir {
+    Row,
+    Column,
+}
+
+impl From<crate::pane::SplitDir> for SavedSplitDir {
+    fn from(d: crate::pane::SplitDir) -> Self {
+        match d {
+            crate::pane::SplitDir::Row => SavedSplitDir::Row,
+            crate::pane::SplitDir::Column => SavedSplitDir::Column,
+        }
+    }
+}
+
+impl From<SavedSplitDir> for crate::pane::SplitDir {
+    fn from(d: SavedSplitDir) -> Self {
+        match d {
+            SavedSplitDir::Row => crate::pane::SplitDir::Row,
+            SavedSplitDir::Column => crate::pane::SplitDir::Column,
+        }
+    }
+}
+
+impl SavedPane {
+    /// Build a saved tree from a live pane tree, extracting each leaf's persisted fields via `leaf`
+    /// (which returns a `SavedPane::Leaf`). Pure + generic so it round-trips in tests with `T`=cwd.
+    pub(crate) fn from_tree<T>(
+        tree: &crate::pane::Pane<T>,
+        leaf: &impl Fn(&T) -> SavedPane,
+    ) -> SavedPane {
+        match tree {
+            crate::pane::Pane::Leaf(t) => leaf(t),
+            crate::pane::Pane::Split { dir, ratio, a, b } => SavedPane::Split {
+                dir: (*dir).into(),
+                ratio: *ratio,
+                a: Box::new(Self::from_tree(a, leaf)),
+                b: Box::new(Self::from_tree(b, leaf)),
+            },
+        }
+    }
+
+    /// Rebuild a live pane tree, constructing each leaf's payload from its saved `Leaf` node via
+    /// `make`. The recursion order (A then B) matches `Pane::leaf_paths`, so a rebuilt tree's
+    /// `leaf_paths()` lines up 1:1 with `flat_leaves()`.
+    pub(crate) fn rebuild<T>(&self, make: &impl Fn(&SavedPane) -> T) -> crate::pane::Pane<T> {
+        match self {
+            SavedPane::Leaf { .. } => crate::pane::Pane::Leaf(make(self)),
+            SavedPane::Split { dir, ratio, a, b } => crate::pane::Pane::Split {
+                dir: (*dir).into(),
+                ratio: *ratio,
+                a: Box::new(a.rebuild(make)),
+                b: Box::new(b.rebuild(make)),
+            },
+        }
+    }
+
+    /// Every leaf's `(cwd, claude)` left-to-right (A before B), parallel to a rebuilt tree's
+    /// `leaf_paths()` - used to align each restored pane with its saved claude state.
+    pub(crate) fn flat_leaves(&self) -> Vec<(&Option<String>, &Option<ClaudeState>)> {
+        let mut out = Vec::new();
+        self.flat_into(&mut out);
+        out
+    }
+
+    fn flat_into<'a>(&'a self, out: &mut Vec<(&'a Option<String>, &'a Option<ClaudeState>)>) {
+        match self {
+            SavedPane::Leaf { cwd, claude } => out.push((cwd, claude)),
+            SavedPane::Split { a, b, .. } => {
+                a.flat_into(out);
+                b.flat_into(out);
+            }
+        }
+    }
 }
 
 /// Persisted Claude Code state for a tab. Its mere presence marks the tab as a claude tab.
@@ -122,9 +226,94 @@ pub(crate) fn encode_cwd(cwd: &str) -> String {
     cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
 }
 
-/// Decide the exact command to inject into each restored claude tab (in input order). Prefers each
-/// tab's own captured session id; falls back to the cwd's most-recent transcript only for a lone
-/// claude tab in that cwd; else bare `claude`. Never `--continue`, never resumes an id twice.
+/// Where a Claude session id's transcript lives, which decides HOW (or whether) to resume it.
+/// `claude --resume <id>` resolves the transcript ONLY from the current cwd's project dir - verified
+/// on macOS: resuming the same id from a different cwd errors "No conversation found". So it is NOT
+/// a global by-id lookup, and a moved repo must `cd` back to the original cwd before resuming.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Resume {
+    /// `<id>.jsonl` is in the tab's own cwd project dir -> `claude --resume <id>` works as-is.
+    InCwd,
+    /// Found only under a DIFFERENT project dir (repo moved). Carries that dir so the caller can
+    /// read the original cwd back out of the transcript and `cd` there first.
+    Moved(std::path::PathBuf),
+    /// No `<id>.jsonl` under any project dir -> resume would error; degrade to a notice + bare claude.
+    Missing,
+}
+
+/// Locate the transcript for `id`: first in `cwd`'s project dir, else a smart-scan of every
+/// `projects_dir/*/` (the moved-repo case). Pure over the filesystem (a synthetic dir in tests).
+pub(crate) fn locate_session(id: &str, cwd: &str, projects_dir: &std::path::Path) -> Resume {
+    let file = format!("{id}.jsonl");
+    if projects_dir.join(encode_cwd(cwd)).join(&file).is_file() {
+        return Resume::InCwd;
+    }
+    if let Ok(rd) = std::fs::read_dir(projects_dir) {
+        for entry in rd.flatten() {
+            let dir = entry.path();
+            if dir.is_dir() && dir.join(&file).is_file() {
+                return Resume::Moved(dir);
+            }
+        }
+    }
+    Resume::Missing
+}
+
+/// The original working directory a transcript was recorded in, read from the first `"cwd":"..."`
+/// on any line of `<id>.jsonl` under `project_dir`. Claude stamps the absolute cwd on every message
+/// line; we need it to `cd` back before resuming a moved repo's session.
+pub(crate) fn session_cwd(project_dir: &std::path::Path, id: &str) -> Option<String> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(project_dir.join(format!("{id}.jsonl"))).ok()?;
+    for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
+        if let Some(cwd) = extract_json_string(&line, "cwd") {
+            return Some(cwd);
+        }
+    }
+    None
+}
+
+/// Pull the value of a `"key":"value"` string field out of one JSON line without a JSON parser
+/// (filesystem paths don't carry escaped quotes). `None` if the field is absent.
+fn extract_json_string(line: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":\"");
+    let start = line.find(&needle)? + needle.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
+/// Single-quote a path for safe injection into the shell command line.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// A friendly no-op comment line (a shell comment, so it just surfaces the reason) followed by a
+/// bare `claude`. The embedded `\r` runs the comment before `claude`; the caller adds the final CR.
+fn notice_bare(id: &str) -> String {
+    format!("# stdusk: could not resume Claude session {id} (not found) - starting fresh\rclaude")
+}
+
+/// Turn a chosen session `id` into the exact command to inject, VERIFYING the transcript exists
+/// first so a stale id degrades to a notice + fresh claude instead of Claude's ugly error.
+fn resume_cmd_for(id: &str, cwd: &str, projects_dir: &std::path::Path) -> String {
+    match locate_session(id, cwd, projects_dir) {
+        Resume::InCwd => format!("claude --resume {id}"),
+        // Repo moved: `cd` back to the transcript's original cwd so `--resume` resolves it there.
+        Resume::Moved(dir) => match session_cwd(&dir, id) {
+            Some(orig) if std::path::Path::new(&orig).is_dir() => {
+                format!("cd {} && claude --resume {id}", sh_quote(&orig))
+            }
+            _ => notice_bare(id),
+        },
+        Resume::Missing => notice_bare(id),
+    }
+}
+
+/// Decide the exact command to inject into each restored claude pane (in input order). Prefers each
+/// pane's own captured session id; falls back to the cwd's most-recent transcript only for a lone
+/// claude pane in that cwd; else bare `claude`. Never `--continue`, never resumes an id twice, and
+/// verifies the transcript exists (smart-scanning for moved repos) before emitting a resume.
 pub(crate) fn resume_commands(tabs: &[ResumeTab], projects_dir: &std::path::Path) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
     let mut per_cwd: HashMap<&str, usize> = HashMap::new();
@@ -145,7 +334,7 @@ pub(crate) fn resume_commands(tabs: &[ResumeTab], projects_dir: &std::path::Path
             });
             match id {
                 Some(id) => {
-                    let cmd = format!("claude --resume {id}");
+                    let cmd = resume_cmd_for(&id, &t.cwd, projects_dir);
                     used.insert(id);
                     cmd
                 }
@@ -190,6 +379,12 @@ mod tests {
                     claude: Some(ClaudeState {
                         resume_id: Some("3e58d6a4-cbcb-43e4-ae76-c56a48d0ffec".into()),
                     }),
+                    pane: Some(SavedPane::Leaf {
+                        cwd: Some("/tmp".into()),
+                        claude: Some(ClaudeState {
+                            resume_id: Some("3e58d6a4-cbcb-43e4-ae76-c56a48d0ffec".into()),
+                        }),
+                    }),
                 },
                 SavedTab {
                     title: None,
@@ -197,6 +392,7 @@ mod tests {
                     cwd: Some("/home/x".into()),
                     pinned: false,
                     claude: None,
+                    pane: None,
                 },
             ],
             active: 1,
@@ -267,8 +463,10 @@ mod tests {
 
     #[test]
     fn resume_commands_captured_id_resumes_that_uuid() {
-        // Primary path: the id captured from the tab's own claude argv wins with no disk lookup.
+        // Primary path: the id captured from the tab's own claude argv wins - its transcript is in
+        // the tab's own cwd project dir, so `--resume` resolves it there.
         let root = temp_projects();
+        write_session(&root, "/proj/a", "uuid-1");
         let tabs = [ResumeTab { cwd: "/proj/a".into(), resume_id: Some("uuid-1".into()) }];
         assert_eq!(resume_commands(&tabs, &root), vec!["claude --resume uuid-1"]);
         std::fs::remove_dir_all(&root).ok();
@@ -280,6 +478,8 @@ mod tests {
         // never a shared `--continue`. This is the correctness guarantee the argv approach buys.
         let root = temp_projects();
         let cwd = "/proj/shared";
+        write_session(&root, cwd, "uuid-a");
+        write_session(&root, cwd, "uuid-b");
         let tabs = [
             ResumeTab { cwd: cwd.into(), resume_id: Some("uuid-a".into()) },
             ResumeTab { cwd: cwd.into(), resume_id: Some("uuid-b".into()) },
@@ -334,11 +534,156 @@ mod tests {
         // Guard: if two tabs somehow carry the same id, only one resumes it; the other goes bare.
         let root = temp_projects();
         let cwd = "/proj/dup";
+        write_session(&root, cwd, "uuid-only");
         let tabs = [
             ResumeTab { cwd: cwd.into(), resume_id: Some("uuid-only".into()) },
             ResumeTab { cwd: cwd.into(), resume_id: Some("uuid-only".into()) },
         ];
         assert_eq!(resume_commands(&tabs, &root), vec!["claude --resume uuid-only", "claude"]);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    // --- Issue A: existence check + smart scan + graceful degradation -------------------------
+
+    #[test]
+    fn locate_session_finds_transcript_in_cwd_dir() {
+        let root = temp_projects();
+        write_session(&root, "/proj/here", "uuid-x");
+        assert_eq!(locate_session("uuid-x", "/proj/here", &root), Resume::InCwd);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn locate_session_smart_scans_other_dirs_for_moved_repo() {
+        // Transcript lives under the OLD cwd's project dir; the tab now reports the NEW cwd.
+        let root = temp_projects();
+        write_session(&root, "/old/path", "uuid-moved");
+        let found = locate_session("uuid-moved", "/new/path", &root);
+        assert_eq!(found, Resume::Moved(root.join(encode_cwd("/old/path"))));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn locate_session_missing_everywhere() {
+        let root = temp_projects();
+        write_session(&root, "/proj/other", "some-other-uuid");
+        assert_eq!(locate_session("ghost", "/proj/here", &root), Resume::Missing);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn resume_commands_missing_transcript_degrades_to_notice_and_bare_claude() {
+        // The bug being fixed: a captured id whose transcript is gone must NOT blindly run
+        // `claude --resume` (ugly error) - it emits a comment notice then a fresh bare claude.
+        let root = temp_projects();
+        let tabs = [ResumeTab { cwd: "/proj/a".into(), resume_id: Some("dead-uuid".into()) }];
+        let cmds = resume_commands(&tabs, &root);
+        assert_eq!(
+            cmds,
+            vec![
+                "# stdusk: could not resume Claude session dead-uuid (not found) - starting fresh\rclaude"
+            ]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn resume_commands_moved_repo_cds_back_then_resumes() {
+        // Transcript found under a DIFFERENT project dir (repo moved). Since `--resume` is cwd-
+        // scoped, the command `cd`s back to the transcript's original cwd (read from the jsonl)
+        // before resuming. The original cwd must still exist on disk.
+        let root = temp_projects();
+        let orig = temp_projects(); // a real, existing dir standing in for the original cwd
+        let dir = root.join(encode_cwd(orig.to_str().unwrap()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("uuid-moved.jsonl"),
+            format!("{{\"type\":\"user\",\"cwd\":\"{}\"}}\n", orig.to_str().unwrap()),
+        )
+        .unwrap();
+        let tabs =
+            [ResumeTab { cwd: "/somewhere/new".into(), resume_id: Some("uuid-moved".into()) }];
+        assert_eq!(
+            resume_commands(&tabs, &root),
+            vec![format!("cd '{}' && claude --resume uuid-moved", orig.to_str().unwrap())]
+        );
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&orig).ok();
+    }
+
+    // --- Issue B: pane-tree persistence -------------------------------------------------------
+
+    /// A saved leaf carrying just a cwd (no claude), for the round-trip shape tests.
+    fn leaf(cwd: &str) -> SavedPane {
+        SavedPane::Leaf { cwd: Some(cwd.into()), claude: None }
+    }
+
+    #[test]
+    fn pane_tree_round_trips_through_toml() {
+        use crate::pane::{Pane, SplitDir};
+        // A horizontal (Row) split of two cwds, like a user's left/right terminal panes.
+        let tree = Pane::Split {
+            dir: SplitDir::Row,
+            ratio: 0.5,
+            a: Box::new(Pane::leaf("/proj/left".to_owned())),
+            b: Box::new(Pane::leaf("/proj/right".to_owned())),
+        };
+        let saved = SavedPane::from_tree(&tree, &|cwd: &String| SavedPane::Leaf {
+            cwd: Some(cwd.clone()),
+            claude: None,
+        });
+        // Serializes inside a SavedTab (the real embedding) and comes back identical.
+        let tab = SavedTab { pane: Some(saved.clone()), ..Default::default() };
+        let back: SavedTab = toml::from_str(&toml::to_string(&tab).unwrap()).unwrap();
+        assert_eq!(back.pane, Some(saved.clone()));
+        // ...and rebuilds to the same shape: two leaves in order, Row split, ratio preserved.
+        let rebuilt = back.pane.unwrap().rebuild(&|sp| match sp {
+            SavedPane::Leaf { cwd, .. } => cwd.clone().unwrap_or_default(),
+            SavedPane::Split { .. } => unreachable!(),
+        });
+        assert_eq!(rebuilt.leaf_count(), 2);
+        assert_eq!(rebuilt.leaf_at(&[crate::pane::Side::A]), Some(&"/proj/left".to_owned()));
+        assert_eq!(rebuilt.leaf_at(&[crate::pane::Side::B]), Some(&"/proj/right".to_owned()));
+    }
+
+    #[test]
+    fn nested_pane_tree_flat_leaves_align_with_leaf_paths() {
+        use crate::pane::Pane;
+        // Row split, then split B into a column: three leaves left-to-right.
+        let (tree, _) = Pane::leaf("a".to_owned()).split(
+            &[],
+            crate::pane::SplitDir::Row,
+            "b".to_owned(),
+            false,
+        );
+        let (tree, _) = tree.split(
+            &[crate::pane::Side::B],
+            crate::pane::SplitDir::Column,
+            "c".to_owned(),
+            false,
+        );
+        let saved = SavedPane::from_tree(&tree, &|cwd: &String| leaf(cwd));
+        // flat_leaves order matches the rebuilt tree's leaf_paths order (A before B, recursively).
+        let cwds: Vec<String> =
+            saved.flat_leaves().into_iter().map(|(c, _)| c.clone().unwrap_or_default()).collect();
+        assert_eq!(cwds, vec!["a", "b", "c"]);
+        let rebuilt = saved.rebuild(&|sp| match sp {
+            SavedPane::Leaf { cwd, .. } => cwd.clone().unwrap_or_default(),
+            SavedPane::Split { .. } => unreachable!(),
+        });
+        let by_path: Vec<String> =
+            rebuilt.leaf_paths().iter().map(|p| rebuilt.leaf_at(p).unwrap().clone()).collect();
+        assert_eq!(cwds, by_path);
+    }
+
+    #[test]
+    fn old_session_without_pane_tree_still_loads() {
+        // Backward-compat: a session file written before split-restore (no `pane` key) decodes,
+        // leaving `pane` None so the tab restores as a single pane.
+        let body = "active = 0\n\n[[tabs]]\ncwd = \"/tmp\"\n";
+        let back: SavedSession = toml::from_str(body).unwrap();
+        assert_eq!(back.tabs.len(), 1);
+        assert_eq!(back.tabs[0].cwd.as_deref(), Some("/tmp"));
+        assert!(back.tabs[0].pane.is_none());
     }
 }

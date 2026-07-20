@@ -88,6 +88,46 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
     }
 }
 
+/// Rebuild a live pane tree from a persisted layout, spawning one shell per leaf in its saved cwd.
+/// Order (A before B) matches `session::SavedPane::flat_leaves`, so the caller can align each pane
+/// with its saved claude state via `leaf_paths()`.
+pub(crate) fn spawn_saved_tree(
+    cfg: &Config,
+    ctx: &egui::Context,
+    sp: &session::SavedPane,
+) -> pane::Pane<PtyTerm> {
+    sp.rebuild(&|leaf| {
+        let cwd = match leaf {
+            session::SavedPane::Leaf { cwd, .. } => cwd.clone(),
+            session::SavedPane::Split { .. } => None,
+        };
+        PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd))
+    })
+}
+
+/// A tab restored from a saved split layout: rebuild the whole pane tree and focus its first leaf.
+/// Title/color/pinned are applied by the caller (same as the single-pane restore path).
+pub(crate) fn spawn_saved_tab(cfg: &Config, ctx: &egui::Context, sp: &session::SavedPane) -> Tab {
+    let root = spawn_saved_tree(cfg, ctx, sp);
+    let focused = root.first_leaf_path();
+    Tab {
+        id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
+        title: "zsh".into(),
+        color: None,
+        renamed: false,
+        root: Some(root),
+        focused,
+        cli: None,
+        claude_resume: None,
+        proc: None,
+        maximized: false,
+        pinned: false,
+        broadcast: false,
+        notify_activity: false,
+        activity_notified: false,
+    }
+}
+
 /// Fresh shell in place of a dead pane's (same cwd), carrying the crash-loop counter: a death
 /// within `RAPID_EXIT_SECS` of spawn increments it, anything longer-lived resets it.
 pub(crate) fn respawn_term(cfg: &Config, ctx: &egui::Context, term: &mut PtyTerm) {
