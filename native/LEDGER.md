@@ -547,6 +547,15 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.0.8 - history slimmed to a single-commit fork base + release line restart
+This repo is a Tabby fork; the upstream history (~6.5k commits) was collapsed into one root
+commit `chore: initial tabby fork` with our native work (134 commits) replayed on top, via a
+`git replace --graft` baked by `git-filter-repo` (a plain `rebase --onto` got hijacked by the
+global autosquash/updateRefs config and went interactive). `.git` dropped 143M -> ~21M. Old
+release tags + GitHub Releases were retired and the release line restarts here with one fresh
+release cut from the slimmed history (brew tracks latest, so `brew upgrade` just works). No
+code/behavior change - purely history + packaging hygiene.
+
 ## 1.0.7 - Hobo-Ware bundle namespace + signing notes
 `CFBundleIdentifier` is `dev.hoboware.stdusk` (hoboware.dev reverse-DNS). Single location -
 `packaging/Info.plist:11`; the id appears nowhere in Rust/config/workflow/cask, and config
