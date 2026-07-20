@@ -4,8 +4,10 @@ on:
   push:
     branches: [main]
     paths: ['src/**', 'Cargo.toml', 'Cargo.lock', 'build.rs', 'assets/**', 'packaging/**', '.github/workflows/native.yml']
+  # No paths filter on PRs: the `check` job is a REQUIRED status check, so it must run on
+  # every PR - a filtered check that skips reports nothing and blocks the merge forever.
   pull_request:
-    paths: ['src/**', 'Cargo.toml', 'Cargo.lock', 'build.rs', 'assets/**', 'packaging/**', '.github/workflows/native.yml']
+    branches: [main]
 
 jobs:
   check:
