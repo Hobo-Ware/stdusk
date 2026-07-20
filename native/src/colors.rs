@@ -390,8 +390,10 @@ pub(crate) fn by_name(name: &str) -> Theme {
     let norm = name.to_ascii_lowercase().replace([' ', '_'], "-");
     match norm.as_str() {
         "dracula" => dracula(),
-        "tokyo-night" | "tokyonight" => tokyo_night(),
-        "one-half-light" | "onehalflight" | "light" => one_half_light(),
+        // Canonical spellings only: the pack ships distinct "tokyonight"/"onehalflight"
+        // variants whose rows must apply the PACK palette, not the built-in namesake.
+        "tokyo-night" => tokyo_night(),
+        "one-half-light" | "light" => one_half_light(),
         // Rename alias (1.0.3): the pack's "Parasio Dark" was an identical typo-dupe of
         // "Paraiso Dark" and was dropped; saved configs must keep resolving.
         "parasio-dark" => crate::themes::lookup("paraiso-dark").unwrap_or_else(one_half_dark),
@@ -491,6 +493,23 @@ mod tests {
         assert_eq!(a.fg, b.fg);
         assert_eq!(a.ansi, b.ansi);
         assert_ne!(a.bg, one_half_dark().bg); // would match if the alias fell through
+    }
+
+    #[test]
+    fn pack_variant_spellings_apply_the_pack_not_the_builtin() {
+        // Browser rows for the pack's TokyoNight/OneHalfLight write those names to config;
+        // the built-in namesakes must not shadow them. Canonical spellings stay built-in.
+        // Compare every palette field: the pack TokyoNight differs from the built-in only
+        // in the cursor color.
+        let key = |t: &Theme| (t.bg, t.fg, t.cursor, t.ansi);
+        for (pack, builtin) in [("tokyonight", tokyo_night()), ("onehalflight", one_half_light())] {
+            let picked = by_name(pack);
+            let shipped = scheme(pack);
+            assert_eq!(key(&picked), key(&shipped), "{pack} must resolve to the pack palette");
+            assert_ne!(key(&picked), key(&builtin), "{pack} shadowed by the built-in");
+        }
+        assert_eq!(key(&by_name("tokyo-night")), key(&tokyo_night()));
+        assert_eq!(key(&by_name("one-half-light")), key(&one_half_light()));
     }
 
     #[test]
