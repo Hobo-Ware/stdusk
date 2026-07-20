@@ -7,12 +7,13 @@ edition = "2024"
 alacritty_terminal = "0.26.0"
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] } # get_image() for clipboard image paste
 base64 = "0.22.1"
+block2 = "0.6" # NSEvent local monitor block (Cmd+V image-paste hook on macOS)
 eframe = { version = "0.35.0", features = ["glow", "__screenshot"] }
 egui = "0.35.0"
 font-kit = "0.14.3" # appearance.font family -> file bytes via the macOS core-text source
 global-hotkey = "0.8.0"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication", "NSWindow"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSEvent", "NSResponder", "NSRunningApplication", "NSWindow"] }
 portable-pty = "0.9.0"
 regex = "1.13.0"
 resvg = { version = "0.45", default-features = false } # CLI-badge brand SVGs -> egui textures (paths only; no text/fonts needed)

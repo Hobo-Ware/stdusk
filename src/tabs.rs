@@ -622,6 +622,13 @@ impl Stdusk {
                 ui.horizontal(|ui| {
                     ui.set_min_height(ui::TAB_H);
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    // Window mode: reserve leading space so the first tab clears the macOS
+                    // traffic-light buttons, which float over the unified titlebar. Dropdown
+                    // mode is borderless - no inset. (Sampled before the fixed-tab-width math
+                    // below, which reads the now-reduced available width.)
+                    if crate::config::is_window_mode(&self.cfg) {
+                        ui.add_space(crate::WINDOW_TRAFFIC_INSET);
+                    }
                     // Right-edge settings control: the gear (BAR_CONTROLS_W already reserves
                     // its ICON_TOGGLE_W) OR - once a session exists - the wider Settings tab
                     // that REPLACES it. `settings_extra` is the delta the swap adds beyond the

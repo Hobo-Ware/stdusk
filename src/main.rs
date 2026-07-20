@@ -39,6 +39,14 @@ use ui::{apply_theme, auto_title, draw_toast, tint, toast_alpha};
 const COLS: usize = 80;
 const ROWS: usize = 24;
 
+/// Leading inset (px) reserved in the tab strip in window mode so the first tab clears the macOS
+/// traffic-light buttons, which float over the unified titlebar (`FullSizeContentView`). Dropdown
+/// mode is borderless and gets no inset; non-macOS window mode keeps standard decorations.
+#[cfg(target_os = "macos")]
+pub(crate) const WINDOW_TRAFFIC_INSET: f32 = 78.0;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const WINDOW_TRAFFIC_INSET: f32 = 0.0;
+
 /// egui font-family name for the terminal's real bold face (registered by `build_fonts` only
 /// when the user's font family resolves a bold sibling - the bundled default has none).
 pub(crate) const BOLD_FONT_FAMILY: &str = "term-bold";
@@ -250,6 +258,8 @@ struct Stdusk {
     right_press: Option<(Vec<pane::Side>, f64)>, // right-button press on a pane: (path, egui time)
     window_top: Option<bool>, // last-applied always-on-top state (re-applied when it changes)
     space_all: Option<bool>, // last-applied "join all Spaces" collectionBehavior (re-applied on change)
+    titlebar_unified: Option<bool>, // last-applied unified-titlebar state (window mode; re-applied on change)
+    cmdv_paste: Arc<AtomicUsize>, // Cmd+V image-paste requests from the NSEvent monitor, drained in ui()
     fx_opacity: f32, // this frame's effective window opacity (unfocused dim applied); derived
     color_preview: Option<(u64, Option<egui::Color32>)>, // Color-menu swatch hover preview (tab id, color)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
@@ -314,6 +324,17 @@ impl Stdusk {
                 }
             }
         });
+
+        // Cmd+V image paste: egui-winit swallows Cmd+V by reading clipboard TEXT only, so an
+        // image-only clipboard produces no egui event (see LEDGER). A macOS NSEvent LOCAL monitor
+        // sees the KeyDown alongside egui-winit; when it's Cmd+V over an image-only clipboard it
+        // bumps this counter (drained in ui() -> inject ^V to the focused pane) and swallows the
+        // key. Skipped under --screenshot.
+        let cmdv_paste = Arc::new(AtomicUsize::new(0));
+        #[cfg(target_os = "macos")]
+        if screenshot.is_none() {
+            install_cmd_v_image_monitor(cc.egui_ctx.clone(), cmdv_paste.clone());
+        }
 
         // Single-instance: as the primary, accept connections from later launches and, per
         // connection, surface the window + open a new tab. Skipped when we didn't take the lock
@@ -520,6 +541,8 @@ impl Stdusk {
             right_press: None,
             window_top: None,
             space_all: None,
+            titlebar_unified: None,
+            cmdv_paste,
             fx_opacity,
             color_preview: None,
             toast,
@@ -593,6 +616,7 @@ impl Stdusk {
         ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(window_mode));
         self.visible = true;
         self.window_top = None; // force the per-frame WindowLevel reconcile to re-send
+        self.titlebar_unified = None; // re-apply the unified-titlebar state for the new mode
         if !window_mode {
             // Back to the quake window: pin it to the top edge at the configured height.
             self.sized = true; // geometry is applied now; skip the first-run sizing path
@@ -623,13 +647,6 @@ impl Stdusk {
     }
 }
 
-/// Show (drop to the top edge, focused) or "hide" the quake window.
-///
-/// We do NOT use `Visible(false)` or move fully off-screen: on macOS that lets the OS
-/// occlude the window and App-Nap the process, which throttles the run loop so the global
-/// hotkey handler never fires again. Instead we park the window mostly below the screen,
-/// leaving a ~2px sliver on-screen so it stays un-occluded and the run loop keeps delivering
-/// the hotkey. A proper native hide (NSPanel orderOut) is a polish item.
 /// Show/hide the Dock icon (+ menu bar) at runtime by flipping the macOS activation policy.
 /// Used only in the dynamic `dock_when_visible` mode. No-op off macOS.
 #[cfg(target_os = "macos")]
@@ -672,6 +689,131 @@ fn set_space_behavior(all_spaces: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_space_behavior(_all_spaces: bool) {}
 
+/// Unified titlebar (window mode): make the OS title bar transparent + extend the content view
+/// under it (`FullSizeContentView`) so the tab strip fills the top row and the traffic-light
+/// buttons float over it. `enabled=false` restores the standard stacked title bar. No-op off
+/// macOS.
+///
+/// NOTE: deliberately does NOT set `movableByWindowBackground`. winit 0.30 doesn't override
+/// `mouseDownCanMoveWindow`, so enabling it could let AppKit start a window-drag on mouse-down
+/// before egui sees the event - hijacking terminal text selection / tab clicks in window mode.
+/// Losing drag-by-tab-bar is the safer trade.
+#[cfg(target_os = "macos")]
+fn set_unified_titlebar(enabled: bool) {
+    use objc2_app_kit::{NSApplication, NSWindowStyleMask, NSWindowTitleVisibility};
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        let windows = app.windows();
+        for i in 0..windows.count() {
+            let w = windows.objectAtIndex(i);
+            w.setTitlebarAppearsTransparent(enabled);
+            w.setTitleVisibility(if enabled {
+                NSWindowTitleVisibility::Hidden
+            } else {
+                NSWindowTitleVisibility::Visible
+            });
+            let mut mask = w.styleMask();
+            mask.set(NSWindowStyleMask::FullSizeContentView, enabled);
+            w.setStyleMask(mask);
+        }
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn set_unified_titlebar(_enabled: bool) {}
+
+/// Fully hide (`hidden=true`, macOS `orderOut:`) or restore (`makeKeyAndOrderFront:`) every app
+/// window. This is the sanctioned native full-hide that leaves ZERO pixels on-screen, replacing
+/// the old 2px offscreen-park sliver (see platform.md). No-op off macOS (the caller parks the
+/// window there instead).
+#[cfg(target_os = "macos")]
+fn set_native_hidden(hidden: bool) {
+    use objc2_app_kit::NSApplication;
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        let windows = app.windows();
+        for i in 0..windows.count() {
+            let w = windows.objectAtIndex(i);
+            if hidden {
+                w.orderOut(None);
+            } else {
+                w.makeKeyAndOrderFront(None);
+            }
+        }
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn set_native_hidden(_hidden: bool) {}
+
+/// Whether the whole app is the active (frontmost) macOS app. This stays TRUE when a *system*
+/// panel (the emoji/character viewer, Ctrl+Cmd+Space) takes the key window - unlike winit's
+/// per-window `focused`, which drops. Used to gate hide-on-blur so the emoji picker doesn't
+/// dismiss the quake window; it only drops to false when another real app is activated. Off
+/// macOS there's no such panel, so we report false and let winit focus drive hiding as before.
+#[cfg(target_os = "macos")]
+fn app_is_active() -> bool {
+    objc2::MainThreadMarker::new()
+        .is_some_and(|mtm| objc2_app_kit::NSApplication::sharedApplication(mtm).isActive())
+}
+#[cfg(not(target_os = "macos"))]
+fn app_is_active() -> bool {
+    false
+}
+
+/// Whether a Cmd+V keystroke over an image-only clipboard should be swallowed (and an image paste
+/// injected). Pure decision so the seam is unit-testable; the impure clipboard probe lives in
+/// `clipboard_image_only`.
+fn decide_cmd_v_image_paste(command_down: bool, is_v: bool, image_only: bool) -> bool {
+    command_down && is_v && image_only
+}
+
+/// True when the system clipboard holds an image and NO usable text. Text always wins (mirrors
+/// the mouse-paste decision in `workspace.rs`), so a Cmd+V with text on the clipboard is left to
+/// egui's normal text-paste path.
+#[cfg(target_os = "macos")]
+fn clipboard_image_only() -> bool {
+    let Ok(mut cb) = arboard::Clipboard::new() else {
+        return false;
+    };
+    let has_text = cb.get_text().ok().is_some_and(|t| !t.is_empty());
+    !has_text && cb.get_image().is_ok()
+}
+
+/// Install a macOS NSEvent LOCAL key-down monitor for the Cmd+V image-paste hook. It runs on the
+/// main thread inside `[NSApplication sendEvent:]`, BEFORE egui-winit sees the key: for Cmd+V over
+/// an image-only clipboard it bumps `paste_req` + wakes the UI and returns nil (swallowing the
+/// event so egui doesn't also handle it); every other key is returned unchanged.
+#[cfg(target_os = "macos")]
+fn install_cmd_v_image_monitor(ctx: egui::Context, paste_req: Arc<AtomicUsize>) {
+    use std::ptr::NonNull;
+
+    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags};
+
+    let block = block2::RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit hands us a live NSEvent for the duration of this callback.
+        #[allow(unsafe_code)]
+        let ev = unsafe { event.as_ref() };
+        let command_down = ev.modifierFlags().contains(NSEventModifierFlags::Command);
+        let is_v = ev.charactersIgnoringModifiers().is_some_and(|s| s.to_string() == "v");
+        // Only probe the clipboard for the Cmd+V combo (cheap on every other key).
+        let image_only = command_down && is_v && clipboard_image_only();
+        if decide_cmd_v_image_paste(command_down, is_v, image_only) {
+            paste_req.fetch_add(1, Ordering::SeqCst);
+            ctx.request_repaint();
+            std::ptr::null_mut() // swallow: egui-winit must not also process this Cmd+V
+        } else {
+            event.as_ptr() // pass through unchanged (normal text Cmd+V still works)
+        }
+    });
+    // SAFETY: the handler returns a valid NSEvent pointer or null, per the monitor contract.
+    #[allow(unsafe_code)]
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block)
+    };
+    // The monitor + block must live for the app's lifetime; leak both (removed only at exit).
+    std::mem::forget(monitor);
+    std::mem::forget(block);
+}
+
 /// Post a desktop notification (macOS `osascript`); `body` is the visible line. Shared by
 /// notify-when-done and notify-on-activity so the osascript plumbing can't drift.
 fn notify(body: &str) {
@@ -690,9 +832,15 @@ fn notify_done(title: &str, code: i32) {
     notify(&format!("{title}: command {status}"));
 }
 
+/// Show (drop to the top edge, focused) or fully hide the quake window. On macOS the hide is the
+/// native `orderOut:` (see `set_native_hidden`) so ZERO pixels remain; the hotkey thread's
+/// `request_repaint` + the 120ms tick in `ui()` keep the run loop delivering the summon hotkey.
 pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
     if visible {
+        // Native show first (macOS): bring the ordered-out window back on-screen + make it key,
+        // then re-pin the top-edge quake geometry through egui.
+        set_native_hidden(false);
         if let Some(m) = mon {
             let h = (m.y * height_pct).round();
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(m.x, h)));
@@ -700,8 +848,15 @@ pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
-        let y = mon.map_or(2000.0, |m| m.y - 2.0);
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
+        // Full native hide on macOS (`orderOut:`) - ZERO pixels remain, no bottom sliver. Off
+        // macOS, park the window just below the screen (no App-Nap concern there).
+        #[cfg(target_os = "macos")]
+        set_native_hidden(true);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let y = mon.map_or(2000.0, |m| m.y - 2.0);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
+        }
     }
 }
 
@@ -753,6 +908,16 @@ impl eframe::App for Stdusk {
             }
         }
 
+        // Cmd+V image paste: the NSEvent monitor swallowed a Cmd+V over an image-only clipboard.
+        // Inject the raw ^V (0x16) into the focused pane's pty; Claude Code (iTerm-style) reads
+        // the system clipboard itself on ^V and ingests the image (same path as Ctrl+V).
+        if self.cmdv_paste.swap(0, Ordering::SeqCst) > 0
+            && self.screenshot.is_none()
+            && let Some(tab) = self.tabs.get_mut(self.active)
+        {
+            tab.focused_term_mut().send(&[0x16]);
+        }
+
         // Quake window management is skipped in the screenshot harness.
         if self.screenshot.is_none() {
             // Menu-bar icon toggle is live in BOTH modes: build/drop the tray as it flips.
@@ -773,6 +938,12 @@ impl eframe::App for Stdusk {
             }
 
             if config::forces_quake_geometry(&self.cfg.quake.mode) {
+                // Dropdown mode is borderless: ensure the unified-titlebar tweaks are off (a live
+                // window->dropdown switch would otherwise leave movable-by-background set).
+                if self.titlebar_unified != Some(false) {
+                    set_unified_titlebar(false);
+                    self.titlebar_unified = Some(false);
+                }
                 // --- Dropdown mode: the quake drop-down window (behavior unchanged) ---
                 // Always-on-top while hide-on-focus-loss is off (the window is meant to stay put
                 // over other apps); Normal otherwise. Re-applied whenever the setting changes.
@@ -823,7 +994,13 @@ impl eframe::App for Stdusk {
                 if self.visible {
                     if focused {
                         self.was_focused = true;
-                    } else if self.was_focused && config::hides_on_blur(&self.cfg) {
+                    } else if self.was_focused
+                        && config::hides_on_blur(&self.cfg)
+                        && !app_is_active()
+                    {
+                        // Only hide on a REAL app deactivation. A system panel (emoji/character
+                        // viewer, Ctrl+Cmd+Space) steals winit's window focus but keeps the app
+                        // active, so gating on `app_is_active()` stops it from dismissing quake.
                         self.visible = false;
                         apply_visibility(&ctx, false, height_pct);
                     }
@@ -832,6 +1009,13 @@ impl eframe::App for Stdusk {
                 }
             } else {
                 // --- Window mode: a conventional macOS window ---
+                // Unified titlebar: transparent title bar + FullSizeContentView so the tab strip
+                // fills the top row and the traffic-light buttons float over it (the tab strip
+                // reserves WINDOW_TRAFFIC_INSET on its leading edge to clear them).
+                if self.titlebar_unified != Some(true) {
+                    set_unified_titlebar(true);
+                    self.titlebar_unified = Some(true);
+                }
                 // No always-on-top, no forced quake geometry, and it never auto-hides. Mark the
                 // level Normal once; the red close button / last-window-closed quits via winit's
                 // default CloseRequested handling.
@@ -1690,5 +1874,17 @@ mod tests {
         let all = installed_families();
         assert!(all.iter().any(|n| n == "Menlo"));
         assert!(all.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn cmd_v_image_paste_only_swallows_command_v_over_an_image() {
+        // The intended case: Cmd held, "v", image-only clipboard -> swallow + inject.
+        assert!(decide_cmd_v_image_paste(true, true, true));
+        // No image on the clipboard: let egui's normal (text) Cmd+V through.
+        assert!(!decide_cmd_v_image_paste(true, true, false));
+        // Not the V key, or Command not held: never our concern.
+        assert!(!decide_cmd_v_image_paste(true, false, true));
+        assert!(!decide_cmd_v_image_paste(false, true, true));
+        assert!(!decide_cmd_v_image_paste(false, false, false));
     }
 }
