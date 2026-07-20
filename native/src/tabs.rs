@@ -619,15 +619,21 @@ impl Stdusk {
                 ui.horizontal(|ui| {
                     ui.set_min_height(ui::TAB_H);
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    // The Settings tab (right-pinned, fixed width) reserves its slice of the
-                    // bar whenever its session exists (visible or hidden behind a tab switch).
-                    let settings_w = if self.settings_tab { ui::SETTINGS_TAB_W + 4.0 } else { 0.0 };
+                    // Right-edge settings control: the gear (BAR_CONTROLS_W already reserves
+                    // its ICON_TOGGLE_W) OR - once a session exists - the wider Settings tab
+                    // that REPLACES it. `settings_extra` is the delta the swap adds beyond the
+                    // gear the base already budgeted, so fixed tabs shrink by exactly that.
+                    let settings_extra = if self.settings_tab {
+                        ui::SETTINGS_TAB_W + 4.0 - ui::ICON_TOGGLE_W
+                    } else {
+                        0.0
+                    };
                     // Fixed mode (the default): every tab gets the same width, shrinking evenly
                     // once the bar fills up. Dynamic sizes each tab to its title.
                     let tab_width = match ui::tab_width_mode(&self.cfg.appearance.tab_width) {
                         ui::TabWidthMode::Dynamic => None,
                         ui::TabWidthMode::Fixed => Some(ui::fixed_tab_width(
-                            ui.available_width() - BAR_CONTROLS_W - settings_w,
+                            ui.available_width() - BAR_CONTROLS_W - settings_extra,
                             self.tabs.len(),
                             4.0,
                         )),
@@ -765,12 +771,18 @@ impl Stdusk {
                             action = Some(TabAction::OpenPalette);
                         }
                     });
-                    // Settings tab + gear pinned to the right edge (spacer, not a nested
-                    // layout). The Settings TAB exists while a settings session does (even
-                    // hidden behind a terminal tab - staged edits live on): clicking it
-                    // re-activates the view, its close-x runs the guarded close. The gear
-                    // toggles the VIEW (a tab-switch away, never a close).
-                    ui.add_space((ui.available_width() - settings_w - ui::ICON_TOGGLE_W).max(0.0));
+                    // Right-edge settings control, pinned via a spacer (not a nested layout).
+                    // The gear and the Settings tab are MUTUALLY EXCLUSIVE: the gear shows
+                    // only until a session exists (its click opens one); once open, the
+                    // Settings TAB replaces it - clicking re-activates the view, its close-x
+                    // runs the guarded close, and it survives switching to a terminal tab
+                    // (staged edits live on). Never both, so the bar reads with one affordance.
+                    let right_w = if self.settings_tab {
+                        ui::SETTINGS_TAB_W + 4.0
+                    } else {
+                        ui::ICON_TOGGLE_W
+                    };
+                    ui.add_space((ui.available_width() - right_w).max(0.0));
                     if self.settings_tab {
                         let (s_resp, s_close) = draw_tab(
                             ui,
@@ -791,10 +803,11 @@ impl Stdusk {
                         } else if s_resp.clicked() {
                             self.open_settings();
                         }
-                    }
-                    let gear_tip = ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings);
-                    if ui::icon_toggle(ui, icons::GEAR, self.settings_open, &gear_tip).clicked() {
-                        self.toggle_settings();
+                    } else {
+                        let gear_tip = ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings);
+                        if ui::icon_toggle(ui, icons::GEAR, false, &gear_tip).clicked() {
+                            self.open_settings();
+                        }
                     }
                 });
             });

@@ -2694,7 +2694,9 @@ mod tests {
                     );
                     out.term_clicked = t.clicked();
                     out.term_rect = t.rect;
-                    ui.add_space((ui.available_width() - SETTINGS_TAB_W - ICON_TOGGLE_W).max(0.0));
+                    // The Settings tab REPLACES the gear (they never both show), so it pins to
+                    // the right edge with only its own width reserved.
+                    ui.add_space((ui.available_width() - SETTINGS_TAB_W).max(0.0));
                     let (s, s_close) = draw_tab(
                         ui,
                         None,
