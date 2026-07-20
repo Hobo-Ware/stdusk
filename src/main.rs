@@ -721,29 +721,6 @@ fn set_unified_titlebar(enabled: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_unified_titlebar(_enabled: bool) {}
 
-/// Fully hide (`hidden=true`, macOS `orderOut:`) or restore (`makeKeyAndOrderFront:`) every app
-/// window. This is the sanctioned native full-hide that leaves ZERO pixels on-screen, replacing
-/// the old 2px offscreen-park sliver (see platform.md). No-op off macOS (the caller parks the
-/// window there instead).
-#[cfg(target_os = "macos")]
-fn set_native_hidden(hidden: bool) {
-    use objc2_app_kit::NSApplication;
-    if let Some(mtm) = objc2::MainThreadMarker::new() {
-        let app = NSApplication::sharedApplication(mtm);
-        let windows = app.windows();
-        for i in 0..windows.count() {
-            let w = windows.objectAtIndex(i);
-            if hidden {
-                w.orderOut(None);
-            } else {
-                w.makeKeyAndOrderFront(None);
-            }
-        }
-    }
-}
-#[cfg(not(target_os = "macos"))]
-fn set_native_hidden(_hidden: bool) {}
-
 /// Whether the whole app is the active (frontmost) macOS app. This stays TRUE when a *system*
 /// panel (the emoji/character viewer, Ctrl+Cmd+Space) takes the key window - unlike winit's
 /// per-window `focused`, which drops. Used to gate hide-on-blur so the emoji picker doesn't
@@ -832,15 +809,12 @@ fn notify_done(title: &str, code: i32) {
     notify(&format!("{title}: command {status}"));
 }
 
-/// Show (drop to the top edge, focused) or fully hide the quake window. On macOS the hide is the
-/// native `orderOut:` (see `set_native_hidden`) so ZERO pixels remain; the hotkey thread's
-/// `request_repaint` + the 120ms tick in `ui()` keep the run loop delivering the summon hotkey.
+/// Show (drop to the top edge, focused) or hide the quake window by parking it fully above the
+/// top edge (ZERO pixels remain, no sliver). The parked window stays a live viewport so `ui()`
+/// keeps ticking - the hotkey thread's `request_repaint` + the 120ms tick then deliver the summon.
 pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
     if visible {
-        // Native show first (macOS): bring the ordered-out window back on-screen + make it key,
-        // then re-pin the top-edge quake geometry through egui.
-        set_native_hidden(false);
         if let Some(m) = mon {
             let h = (m.y * height_pct).round();
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(m.x, h)));
@@ -848,15 +822,13 @@ pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
-        // Full native hide on macOS (`orderOut:`) - ZERO pixels remain, no bottom sliver. Off
-        // macOS, park the window just below the screen (no App-Nap concern there).
-        #[cfg(target_os = "macos")]
-        set_native_hidden(true);
-        #[cfg(not(target_os = "macos"))]
-        {
-            let y = mon.map_or(2000.0, |m| m.y - 2.0);
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
-        }
+        // Park the window FULLY above the top edge: zero pixels remain (no sliver), but it stays
+        // a live on-screen viewport so eframe keeps calling `ui()` - which re-arms the 120ms tick
+        // that lets the summon hotkey reshow it. A native `orderOut:` / `set_visible(false)` would
+        // hide it truly but PARK THE RUN LOOP (ui() stops ticking), so the hotkey could never
+        // bring it back - the 1.3.0->1.3.1 quake regression.
+        let h = mon.map_or(1200.0, |m| (m.y * height_pct).round());
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, -(h + 8.0))));
     }
 }
 

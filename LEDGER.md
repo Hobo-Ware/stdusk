@@ -573,6 +573,16 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.3.2 - HOTFIX: quake never reshowed after hide
+Regression from 1.3.0's sliver fix: hide switched to native `orderOut:`, which fully removes
+the window - but that PARKS eframe's run loop (ui() stops ticking for a hidden window), so the
+summon hotkey's `request_repaint` could never wake it and F13 hid the window forever. Reverted
+to a park-based hide, but parked FULLY above the top edge (`y = -(height+8)`) so it's a live
+on-screen viewport (ui() keeps ticking, hotkey reshows it) AND zero pixels remain (no sliver -
+the thing 1.3.0 was fixing). Removed the now-dead `set_native_hidden`/orderOut path. Quake
+show/hide can't be exercised headlessly (harness skips window management) - reasoned from the
+run-loop mechanism; 261 tests green.
+
 ## 1.3.1 - kill the TUI redraw flicker (repaint coalescing)
 git:work / fzf-style list TUIs flashed on every arrow-key nav. Measured with a real pty: a
 clear+redraw frame (ESC[2J + rows) arrives as ~28 separate read() chunks over ~152us, and the
