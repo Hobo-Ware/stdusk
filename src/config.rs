@@ -662,6 +662,48 @@ name = "ops"
     }
 
     #[test]
+    fn quake_dock_and_focus_toggles_round_trip() {
+        // The toggles that drive activation_is_regular / effective_opacity - each must survive
+        // config_to_toml -> parse so a saved non-default can't silently revert.
+        let mut cfg = Config::default();
+        cfg.quake.hide_from_dock = false;
+        cfg.quake.menu_bar_icon = false;
+        cfg.quake.dock_when_visible = true;
+        cfg.quake.unfocused_opacity = 0.6;
+        cfg.quake.hide_on_focus_loss = false;
+        cfg.quake.height_pct = 0.75;
+        let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
+        assert!(!back.quake.hide_from_dock);
+        assert!(!back.quake.menu_bar_icon);
+        assert!(back.quake.dock_when_visible);
+        assert_eq!(back.quake.unfocused_opacity, 0.6);
+        assert!(!back.quake.hide_on_focus_loss);
+        assert_eq!(back.quake.height_pct, 0.75);
+        // A bare [quake] parses every toggle to its documented default.
+        let bare: Config = toml::from_str("[quake]\n").unwrap();
+        assert!(bare.quake.hide_from_dock);
+        assert!(bare.quake.menu_bar_icon);
+        assert!(!bare.quake.dock_when_visible);
+        assert_eq!(bare.quake.unfocused_opacity, 1.0);
+    }
+
+    #[test]
+    fn activation_regular_follows_dock_toggles_in_dropdown() {
+        // Accessory (hidden from Dock) by default; opting into a Dock icon, or dock_when_visible
+        // while shown, makes it Regular. Window mode is always Regular (covered elsewhere).
+        let mut c = Config::default();
+        assert!(!activation_is_regular(&c, true)); // default: accessory even when visible
+        assert!(!activation_is_regular(&c, false));
+        c.quake.hide_from_dock = false;
+        assert!(activation_is_regular(&c, false)); // a plain Dock app, visible or not
+
+        c = Config::default();
+        c.quake.dock_when_visible = true;
+        assert!(activation_is_regular(&c, true)); // Dock icon only while shown
+        assert!(!activation_is_regular(&c, false)); // accessory again when hidden
+    }
+
+    #[test]
     fn hotkeys_default_to_the_shipped_binds() {
         let h = Hotkeys::default();
         assert_eq!(h.new_tab, "Cmd+T");

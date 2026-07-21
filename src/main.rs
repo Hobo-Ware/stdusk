@@ -471,18 +471,17 @@ impl Stdusk {
 /// while the window keeps drawing. Restore alpha to 1 on show.
 pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
+    set_window_alpha(ui::quake_alpha(visible));
     if visible {
-        set_window_alpha(1.0);
         if let Some(m) = mon {
-            let h = (m.y * height_pct).round();
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(m.x, h)));
+            let (w, h) = ui::quake_shown_size(m.x, m.y, height_pct);
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
-        set_window_alpha(0.0);
-        // Park just off the bottom edge - keeps a ~2px sliver on-screen so the run loop stays warm.
-        let y = mon.map_or(2000.0, |m| m.y - 2.0);
+        // Park just off the bottom edge - keeps a sliver on-screen so the run loop stays warm.
+        let y = mon.map_or(2000.0, |m| ui::quake_hidden_y(m.y));
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
     }
 }
@@ -593,7 +592,7 @@ impl eframe::App for Stdusk {
                 // --- Dropdown mode: the quake drop-down window (behavior unchanged) ---
                 // Always-on-top while hide-on-focus-loss is off (the window is meant to stay put
                 // over other apps); Normal otherwise. Re-applied whenever the setting changes.
-                let want_top = !self.cfg.quake.hide_on_focus_loss;
+                let want_top = ui::wants_always_on_top(false, self.cfg.quake.hide_on_focus_loss);
                 if self.window_top != Some(want_top) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if want_top {
                         egui::WindowLevel::AlwaysOnTop
@@ -640,10 +639,13 @@ impl eframe::App for Stdusk {
                 if self.visible {
                     if focused {
                         self.was_focused = true;
-                    } else if self.was_focused
-                        && config::hides_on_blur(&self.cfg)
-                        && !app_is_active()
-                    {
+                    } else if ui::should_hide_on_blur(
+                        self.visible,
+                        self.was_focused,
+                        focused,
+                        config::hides_on_blur(&self.cfg),
+                        app_is_active(),
+                    ) {
                         // Only hide on a REAL app deactivation. A system panel (emoji/character
                         // viewer, Ctrl+Cmd+Space) steals winit's window focus but keeps the app
                         // active, so gating on `app_is_active()` stops it from dismissing quake.

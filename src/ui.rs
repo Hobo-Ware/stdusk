@@ -128,6 +128,56 @@ pub(crate) fn effective_opacity(
     }
 }
 
+/// The on-screen sliver (points) the hidden quake window keeps at the bottom edge. LOAD-BEARING:
+/// a window with zero pixels on-screen (ordered out or parked fully off-screen) parks eframe's run
+/// loop, so the summon hotkey can never reshow it (broke 3x - see `apply_visibility`). Hidden ==
+/// parked with this sliver still visible + alpha 0, never fully off-screen. Extend cautiously.
+pub(crate) const QUAKE_HIDE_SLIVER: f32 = 2.0;
+
+/// The window's top-left y when hidden: parked so only `QUAKE_HIDE_SLIVER` points remain at the
+/// bottom edge. INVARIANT: strictly less than `monitor_h` (the window stays ON-SCREEN) and the
+/// visible sliver is exactly `QUAKE_HIDE_SLIVER` - the exact regression guard for the "hotkey can't
+/// reshow after hide" bug. Pure so the invariant is testable without a window.
+pub(crate) fn quake_hidden_y(monitor_h: f32) -> f32 {
+    monitor_h - QUAKE_HIDE_SLIVER
+}
+
+/// The quake window's inner size when shown: full monitor width, `height_pct` of its height
+/// (rounded). Pure companion to `quake_hidden_y` so the show/hide geometry is testable.
+pub(crate) fn quake_shown_size(monitor_w: f32, monitor_h: f32, height_pct: f32) -> (f32, f32) {
+    (monitor_w, (monitor_h * height_pct).round())
+}
+
+/// Window alpha for the quake show/hide: fully opaque when shown, fully transparent (NOT ordered
+/// out) when hidden - alpha-0 hides the load-bearing sliver visually while the window keeps drawing
+/// so the run loop stays warm. Pure seam for the invariant "hidden means alpha 0, never removed".
+pub(crate) fn quake_alpha(visible: bool) -> f64 {
+    if visible { 1.0 } else { 0.0 }
+}
+
+/// Always-on-top decision: a dropdown window with hide-on-focus-loss OFF is meant to stay put over
+/// other apps, so it floats; every other case (hide-on-blur on, or window mode) is a Normal-level
+/// window. Pure; mirrors the mode decisions in `config.rs`.
+pub(crate) fn wants_always_on_top(window_mode: bool, hide_on_focus_loss: bool) -> bool {
+    !window_mode && !hide_on_focus_loss
+}
+
+/// Whether a visible dropdown window should hide THIS frame because focus left it. Only fires once
+/// it has actually held focus since showing (`was_focused`), on a real focus loss, when hide-on-blur
+/// is enabled, AND only on a real app deactivation (`app_active` false) - a system panel (emoji /
+/// character viewer) steals winit's window focus but keeps the app active, so gating on `app_active`
+/// stops it dismissing quake. Pure so the whole trigger is table-testable off the render loop.
+#[allow(clippy::fn_params_excessive_bools)] // independent focus/mode flags, table-tested below
+pub(crate) fn should_hide_on_blur(
+    visible: bool,
+    was_focused: bool,
+    focused: bool,
+    hides_on_blur: bool,
+    app_active: bool,
+) -> bool {
+    visible && was_focused && !focused && hides_on_blur && !app_active
+}
+
 /// Should keystrokes be kept away from the pty this frame? True while any modal text surface
 /// owns the keyboard. The find bar counts only while its text field actually has focus - an
 /// open-but-unfocused find bar must not silently swallow terminal input (that read as
@@ -1465,6 +1515,67 @@ mod tests {
         }
         // multiplier 1.0 = feature off
         assert_eq!(effective_opacity(0.9, 1.0, true, false, false), 0.9);
+    }
+
+    #[test]
+    fn hidden_quake_window_stays_on_screen() {
+        // The load-bearing invariant that broke 3x: hiding parks the window with a sliver still
+        // on-screen (never fully off), or the run loop parks and the hotkey can't reshow it.
+        for monitor_h in [600.0_f32, 900.0, 1080.0, 1440.0, 2160.0] {
+            let y = quake_hidden_y(monitor_h);
+            assert!(y < monitor_h, "hidden y must stay ON-SCREEN (y < monitor_h) at {monitor_h}");
+            let sliver = monitor_h - y;
+            assert!(sliver > 0.0, "a positive sliver must remain visible at {monitor_h}");
+            assert!(
+                (sliver - QUAKE_HIDE_SLIVER).abs() < 1e-6,
+                "the on-screen sliver must be exactly QUAKE_HIDE_SLIVER at {monitor_h}"
+            );
+        }
+    }
+
+    #[test]
+    fn quake_alpha_hides_by_transparency_not_removal() {
+        // Shown = opaque, hidden = alpha 0 (still drawn, run loop warm) - NOT ordered out.
+        assert_eq!(quake_alpha(true), 1.0);
+        assert_eq!(quake_alpha(false), 0.0);
+    }
+
+    #[test]
+    fn quake_shown_size_fills_width_and_height_fraction() {
+        assert_eq!(quake_shown_size(1440.0, 900.0, 0.5), (1440.0, 450.0));
+        assert_eq!(quake_shown_size(1920.0, 1080.0, 0.33), (1920.0, 356.0)); // 356.4 rounds down
+        assert_eq!(quake_shown_size(1000.0, 800.0, 1.0), (1000.0, 800.0));
+    }
+
+    #[test]
+    fn always_on_top_only_for_a_pinned_dropdown() {
+        // (window_mode, hide_on_focus_loss) -> floats on top
+        assert!(wants_always_on_top(false, false)); // dropdown, stays-put mode: float
+        assert!(!wants_always_on_top(false, true)); // dropdown, hides on blur: Normal
+        assert!(!wants_always_on_top(true, false)); // window mode: always Normal
+        assert!(!wants_always_on_top(true, true));
+    }
+
+    #[test]
+    fn hide_on_blur_fires_only_on_a_real_deactivation() {
+        // The full trigger, incl. the app_is_active gate (emoji/character viewer keeps the app
+        // active while stealing window focus, so it must NOT dismiss quake).
+        // (visible, was_focused, focused, hides_on_blur, app_active) -> hides
+        let cases = [
+            ((true, true, false, true, false), true), // real deactivation: hide
+            ((true, true, false, true, true), false), // system panel: app still active, stay
+            ((true, false, false, true, false), false), // never held focus yet: don't vanish
+            ((true, true, true, true, false), false), // still focused: stay
+            ((true, true, false, false, false), false), // hide-on-blur off: stay
+            ((false, true, false, true, false), false), // already hidden: no-op
+        ];
+        for ((visible, was, focused, hob, active), want) in cases {
+            assert_eq!(
+                should_hide_on_blur(visible, was, focused, hob, active),
+                want,
+                "v={visible} was={was} f={focused} hob={hob} active={active}"
+            );
+        }
     }
 
     #[test]

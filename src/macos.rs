@@ -85,8 +85,16 @@ pub(crate) fn set_unified_titlebar(_enabled: bool) {}
 /// How far (points) to lower the traffic lights from their macOS default position so their row
 /// centres on the taller tab strip. Dialed in by eye against a real window-mode window (the
 /// headless harness can't render OS buttons). Unflipped coords: down = subtract.
-#[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_DROP: f64 = 5.0;
+
+/// The absolute y to place a traffic-light button at, capturing the macOS-default y into `baseline`
+/// on the FIRST call and returning `baseline - DROP` on every call thereafter. Making it ABSOLUTE
+/// off a once-captured baseline (rather than nudging the current position) is what keeps re-applying
+/// idempotent: no per-frame drift, and it can never fling the buttons off-screen the way relative
+/// window-height math did (the 1.4.1 vanished-traffic-lights bug). Pure so the idempotence is tested.
+pub(crate) fn traffic_light_y(baseline: &mut Option<f64>, current: f64) -> f64 {
+    *baseline.get_or_insert(current) - TRAFFIC_LIGHT_DROP
+}
 
 /// Re-anchor the three standard window buttons onto the tab row. On the FIRST call `baseline`
 /// captures their macOS-default y (before we ever move them); every call then sets an ABSOLUTE
@@ -109,8 +117,7 @@ pub(crate) fn center_window_buttons(baseline: &mut Option<f64>) {
         ] {
             if let Some(btn) = w.standardWindowButton(b) {
                 let mut o = btn.frame().origin;
-                let base = *baseline.get_or_insert(o.y);
-                o.y = base - TRAFFIC_LIGHT_DROP;
+                o.y = traffic_light_y(baseline, o.y);
                 btn.setFrameOrigin(o);
             }
         }
@@ -226,7 +233,25 @@ pub(crate) fn notify_done(title: &str, code: i32) {
 
 #[cfg(test)]
 mod tests {
-    use super::decide_cmd_v_image_paste;
+    use super::{decide_cmd_v_image_paste, traffic_light_y};
+
+    #[test]
+    fn traffic_light_baseline_captured_once_and_reapply_is_idempotent() {
+        // First call captures the macOS-default y as the baseline and drops from it.
+        let mut baseline = None;
+        let placed = traffic_light_y(&mut baseline, 30.0);
+        assert_eq!(baseline, Some(30.0));
+        assert_eq!(placed, 30.0 - super::TRAFFIC_LIGHT_DROP);
+
+        // Re-applying (macOS re-lays buttons out each frame) feeds back the ALREADY-MOVED position;
+        // the absolute-off-baseline math must ignore it and return the same y - no per-frame drift,
+        // and never a compounding subtraction that flings the buttons off-screen (the 1.4.1 bug).
+        for _ in 0..100 {
+            let again = traffic_light_y(&mut baseline, placed);
+            assert_eq!(again, placed, "re-apply must be idempotent, no drift");
+            assert_eq!(baseline, Some(30.0), "baseline stays the once-captured default");
+        }
+    }
 
     #[test]
     fn cmd_v_image_paste_only_swallows_command_v_over_an_image() {
