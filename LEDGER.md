@@ -598,6 +598,13 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## Unreleased (bundling into next wave)
+- DECCKM arrows: arrow keys + Home/End now emit SS3 (`ESC O x`) when the focused term set
+  application-cursor-keys mode (`TermMode::APP_CURSOR`), CSI (`ESC [ x`) otherwise. TUIs/pickers
+  that bind only the SS3 form were getting a no-op arrow before. `key_to_bytes` gained an
+  `app_cursor` flag threaded from `PtyTerm::app_cursor()` through `collect_input`; modified arrows
+  (word/line readline motions) stay mode-independent. Pure test asserts both forms for all 6 keys.
+
 ## 1.4.5 - traffic lights centered (verified live) + `--state-dir` runs standalone
 Local visual verify finally worked - and it turned out window chrome IS launchable locally (the
 whole product launches; `cargo run` opened it all through dev). The alpha's "opens and closes"
