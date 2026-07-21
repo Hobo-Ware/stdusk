@@ -685,6 +685,12 @@ impl PtyTerm {
         self.term.lock().mode().contains(TermMode::ALT_SCREEN)
     }
 
+    /// Whether the app enabled DECCKM (application cursor keys) - arrows/Home/End should then be
+    /// sent as SS3 (`ESC O x`) rather than CSI (`ESC [ x`). Grab-copy-drop the lock.
+    pub(crate) fn app_cursor(&self) -> bool {
+        self.term.lock().mode().contains(TermMode::APP_CURSOR)
+    }
+
     /// The mouse-reporting modes the app has enabled, snapshotted from the `Term`, so the UI can
     /// route wheel/pointer events to the pty instead of scrolling/selecting locally.
     pub(crate) fn mouse_reporting(&self) -> MouseReporting {

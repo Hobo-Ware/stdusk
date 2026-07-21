@@ -189,7 +189,10 @@ impl Stdusk {
                 // Keystrokes -> focused pane (unless a text field/modal owns the keyboard);
                 // broadcast mode (Tabby pane-focus-all) fans them out to EVERY pane instead.
                 if !input_captured {
-                    let input = collect_input(ui, tcfg.alt_is_meta, ctrl_c && has_selection);
+                    // DECCKM: arrows/Home/End follow the focused pane's application-cursor-keys mode.
+                    let app_cursor = tab.focused_term().app_cursor();
+                    let input =
+                        collect_input(ui, tcfg.alt_is_meta, ctrl_c && has_selection, app_cursor);
                     if !input.is_empty() {
                         let targets = if tab.broadcast {
                             tab.root_mut().leaves_mut()

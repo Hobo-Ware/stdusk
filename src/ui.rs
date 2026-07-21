@@ -858,7 +858,12 @@ pub(crate) fn draw_tab(
 }
 
 /// Translate this frame's key/text events into bytes for the pty.
-pub(crate) fn collect_input(ui: &egui::Ui, alt_is_meta: bool, intercept_ctrl_c: bool) -> Vec<u8> {
+pub(crate) fn collect_input(
+    ui: &egui::Ui,
+    alt_is_meta: bool,
+    intercept_ctrl_c: bool,
+    app_cursor: bool,
+) -> Vec<u8> {
     let mut out = Vec::new();
     ui.input(|i| {
         let alt_held = i.modifiers.alt;
@@ -874,7 +879,9 @@ pub(crate) fn collect_input(ui: &egui::Ui, alt_is_meta: bool, intercept_ctrl_c: 
                     if intercept_ctrl_c && *key == egui::Key::C && modifiers.ctrl {
                         continue;
                     }
-                    if let Some(bytes) = crate::keys::key_to_bytes(*key, *modifiers, alt_is_meta) {
+                    if let Some(bytes) =
+                        crate::keys::key_to_bytes(*key, *modifiers, alt_is_meta, app_cursor)
+                    {
                         out.extend_from_slice(&bytes);
                     }
                 }
@@ -1690,7 +1697,7 @@ mod tests {
                 let rect = ui.available_rect_before_wrap();
                 let g = ui.interact(rect, egui::Id::new("grid"), egui::Sense::click_and_drag());
                 g.request_focus();
-                out.keys = collect_input(ui, false, false);
+                out.keys = collect_input(ui, false, false, false);
             });
         });
         out

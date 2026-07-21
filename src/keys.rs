@@ -11,8 +11,13 @@ pub(crate) fn key_to_bytes(
     key: egui::Key,
     mods: egui::Modifiers,
     alt_is_meta: bool,
+    app_cursor: bool,
 ) -> Option<Vec<u8>> {
     use egui::Key;
+    // Cursor + Home/End keys switch CSI (`ESC [ x`) <-> SS3 (`ESC O x`) with the app's DECCKM /
+    // application-cursor-keys mode. TUIs that set it (vim, less, some pickers) may bind only the
+    // SS3 form; zsh binds both. `app_cursor` = the focused term's TermMode::APP_CURSOR.
+    let cursor_key = |tail: u8| vec![0x1b, if app_cursor { b'O' } else { b'[' }, tail];
     if mods.ctrl {
         return ctrl_letter(key).map(|b| vec![b]);
     }
@@ -56,18 +61,18 @@ pub(crate) fn key_to_bytes(
         Key::Insert => b"\x1b[2~".to_vec(),
         // Shift+Home/End/PageUp/PageDown are app scrollback bindings - don't forward those.
         Key::Home | Key::End | Key::PageUp | Key::PageDown if mods.shift => return None,
-        Key::Home => b"\x1b[H".to_vec(),
-        Key::End => b"\x1b[F".to_vec(),
+        Key::Home => cursor_key(b'H'),
+        Key::End => cursor_key(b'F'),
         Key::PageUp => b"\x1b[5~".to_vec(),
         Key::PageDown => b"\x1b[6~".to_vec(),
-        Key::ArrowUp => b"\x1b[A".to_vec(),
-        Key::ArrowDown => b"\x1b[B".to_vec(),
+        Key::ArrowUp => cursor_key(b'A'),
+        Key::ArrowDown => cursor_key(b'B'),
         Key::ArrowRight if mods.alt => b"\x1bf".to_vec(), // forward word (readline)
         Key::ArrowRight if mods.command => vec![0x05],    // Ctrl-E: end of line
-        Key::ArrowRight => b"\x1b[C".to_vec(),
+        Key::ArrowRight => cursor_key(b'C'),
         Key::ArrowLeft if mods.alt => b"\x1bb".to_vec(), // backward word (readline)
         Key::ArrowLeft if mods.command => vec![0x01],    // Ctrl-A: start of line
-        Key::ArrowLeft => b"\x1b[D".to_vec(),
+        Key::ArrowLeft => cursor_key(b'D'),
         _ => return None,
     };
     Some(bytes)
@@ -296,73 +301,116 @@ mod tests {
 
     #[test]
     fn key_to_bytes_plain_and_ctrl() {
-        assert_eq!(key_to_bytes(Key::Enter, mods(false, false, false), false), Some(vec![b'\r']));
         assert_eq!(
-            key_to_bytes(Key::Backspace, mods(false, false, false), false),
+            key_to_bytes(Key::Enter, mods(false, false, false), false, false),
+            Some(vec![b'\r'])
+        );
+        assert_eq!(
+            key_to_bytes(Key::Backspace, mods(false, false, false), false, false),
             Some(vec![0x7f])
         );
-        assert_eq!(key_to_bytes(Key::C, mods(true, false, false), false), Some(vec![3])); // Ctrl-C SIGINT
-        assert_eq!(key_to_bytes(Key::Enter, mods(true, false, false), false), None); // Ctrl+non-letter
-        assert_eq!(key_to_bytes(Key::F5, mods(false, false, false), false), None); // unmapped
+        assert_eq!(key_to_bytes(Key::C, mods(true, false, false), false, false), Some(vec![3])); // Ctrl-C SIGINT
+        assert_eq!(key_to_bytes(Key::Enter, mods(true, false, false), false, false), None); // Ctrl+non-letter
+        assert_eq!(key_to_bytes(Key::F5, mods(false, false, false), false, false), None); // unmapped
         // Option+Enter -> meta+Return (ESC+CR): apps read it as "insert newline", not "submit".
         assert_eq!(
-            key_to_bytes(Key::Enter, mods(false, true, false), false),
+            key_to_bytes(Key::Enter, mods(false, true, false), false, false),
             Some(vec![0x1b, b'\r'])
         );
         // Cmd+Alt+Enter stays an app pane binding (maximize), not forwarded.
-        assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true), false), None);
+        assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true), false, false), None);
         // Shift+Enter -> bare LF ("insert newline"); distinct from plain Enter's CR ("submit")
         // and Option+Enter's ESC+CR. All three coexist.
         let shift = Modifiers { shift: true, ..Modifiers::default() };
-        assert_eq!(key_to_bytes(Key::Enter, shift, false), Some(vec![b'\n']));
-        assert_eq!(key_to_bytes(Key::Enter, Modifiers::default(), false), Some(vec![b'\r']));
+        assert_eq!(key_to_bytes(Key::Enter, shift, false, false), Some(vec![b'\n']));
+        assert_eq!(key_to_bytes(Key::Enter, Modifiers::default(), false, false), Some(vec![b'\r']));
     }
 
     #[test]
     fn key_to_bytes_natural_editing() {
         // Option (alt) + arrows -> word motion; Cmd + arrows -> line ends.
         assert_eq!(
-            key_to_bytes(Key::ArrowLeft, mods(false, true, false), false),
+            key_to_bytes(Key::ArrowLeft, mods(false, true, false), false, false),
             Some(b"\x1bb".to_vec())
         );
         assert_eq!(
-            key_to_bytes(Key::ArrowRight, mods(false, true, false), false),
+            key_to_bytes(Key::ArrowRight, mods(false, true, false), false, false),
             Some(b"\x1bf".to_vec())
         );
-        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, false, true), false), Some(vec![0x01]));
         assert_eq!(
-            key_to_bytes(Key::ArrowRight, mods(false, false, true), false),
+            key_to_bytes(Key::ArrowLeft, mods(false, false, true), false, false),
+            Some(vec![0x01])
+        );
+        assert_eq!(
+            key_to_bytes(Key::ArrowRight, mods(false, false, true), false, false),
             Some(vec![0x05])
         );
         // Plain arrows keep the CSI sequences.
         assert_eq!(
-            key_to_bytes(Key::ArrowLeft, mods(false, false, false), false),
+            key_to_bytes(Key::ArrowLeft, mods(false, false, false), false, false),
             Some(b"\x1b[D".to_vec())
         );
         // Backspace variants.
         assert_eq!(
-            key_to_bytes(Key::Backspace, mods(false, true, false), false),
+            key_to_bytes(Key::Backspace, mods(false, true, false), false, false),
             Some(b"\x1b\x7f".to_vec())
         );
-        assert_eq!(key_to_bytes(Key::Backspace, mods(false, false, true), false), Some(vec![0x15]));
+        assert_eq!(
+            key_to_bytes(Key::Backspace, mods(false, false, true), false, false),
+            Some(vec![0x15])
+        );
+    }
+
+    #[test]
+    fn arrows_and_home_end_follow_application_cursor_mode() {
+        let none = mods(false, false, false);
+        // DECCKM off -> CSI (ESC [ x); on -> SS3 (ESC O x). Covers Up/Down/Left/Right + Home/End.
+        for (key, tail) in [
+            (Key::ArrowUp, b'A'),
+            (Key::ArrowDown, b'B'),
+            (Key::ArrowRight, b'C'),
+            (Key::ArrowLeft, b'D'),
+            (Key::Home, b'H'),
+            (Key::End, b'F'),
+        ] {
+            assert_eq!(
+                key_to_bytes(key, none, false, false),
+                Some(vec![0x1b, b'[', tail]),
+                "{key:?} CSI"
+            );
+            assert_eq!(
+                key_to_bytes(key, none, false, true),
+                Some(vec![0x1b, b'O', tail]),
+                "{key:?} SS3"
+            );
+        }
+        // Modified arrows (readline word/line motions) are mode-independent - never SS3.
+        assert_eq!(
+            key_to_bytes(Key::ArrowLeft, mods(false, true, false), false, true),
+            Some(b"\x1bb".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(Key::ArrowRight, mods(false, false, true), false, true),
+            Some(vec![0x05])
+        );
     }
 
     #[test]
     fn alt_is_meta_sends_esc_prefixed_letters() {
         let alt = mods(false, true, false);
-        assert_eq!(key_to_bytes(Key::B, alt, true), Some(vec![0x1b, b'b']));
-        assert_eq!(key_to_bytes(Key::Num3, alt, true), Some(vec![0x1b, b'3'])); // digits too
+        assert_eq!(key_to_bytes(Key::B, alt, true, false), Some(vec![0x1b, b'b']));
+        assert_eq!(key_to_bytes(Key::Num3, alt, true, false), Some(vec![0x1b, b'3'])); // digits too
         // Off: unmapped (macOS composes a Text event instead).
-        assert_eq!(key_to_bytes(Key::B, alt, false), None);
+        assert_eq!(key_to_bytes(Key::B, alt, false, false), None);
         // Word-motion arrows unchanged even with altIsMeta.
-        assert_eq!(key_to_bytes(Key::ArrowLeft, alt, true), Some(b"\x1bb".to_vec()));
+        assert_eq!(key_to_bytes(Key::ArrowLeft, alt, true, false), Some(b"\x1bb".to_vec()));
     }
 
     #[test]
     fn cmd_shift_arrows_are_reserved_for_move_tab() {
         let m = egui::Modifiers { shift: true, command: true, mac_cmd: true, ..Default::default() };
-        assert_eq!(key_to_bytes(Key::ArrowLeft, m, false), None);
-        assert_eq!(key_to_bytes(Key::ArrowRight, m, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowLeft, m, false, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowRight, m, false, false), None);
     }
 
     #[test]
@@ -379,8 +427,8 @@ mod tests {
         // Ctrl+Shift+Up/Down are the line-step scroll hotkeys (Tabby default binding) -
         // the ctrl branch maps arrows to None, so no reservation is needed.
         let m = Modifiers { ctrl: true, shift: true, ..Modifiers::default() };
-        assert_eq!(key_to_bytes(Key::ArrowUp, m, false), None);
-        assert_eq!(key_to_bytes(Key::ArrowDown, m, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowUp, m, false, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowDown, m, false, false), None);
     }
 
     #[test]
@@ -469,28 +517,32 @@ mod tests {
         // Defaults: app-only (no pty bytes). Cmd+letter chords are unmapped in key_to_bytes.
         for (spec, key) in [("Cmd+T", Key::T), ("Cmd+W", Key::W), ("Cmd+O", Key::O)] {
             assert!(hotkey_matches(spec, key, cmd));
-            assert_eq!(key_to_bytes(key, cmd, false), None, "{spec} must not leak to the pty");
+            assert_eq!(
+                key_to_bytes(key, cmd, false, false),
+                None,
+                "{spec} must not leak to the pty"
+            );
         }
         // A custom Ctrl+letter rebind collides: both the app action and the control byte fire.
         assert!(hotkey_matches("Ctrl+K", Key::K, ctrl));
-        assert_eq!(key_to_bytes(Key::K, ctrl, false), Some(vec![11]));
+        assert_eq!(key_to_bytes(Key::K, ctrl, false, false), Some(vec![11]));
     }
 
     #[test]
     fn cmd_alt_combos_are_reserved_for_panes() {
         // Cmd+Alt+arrows/Enter are app pane bindings; they must not reach the pty.
-        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, true, true), false), None);
-        assert_eq!(key_to_bytes(Key::ArrowRight, mods(false, true, true), false), None);
-        assert_eq!(key_to_bytes(Key::ArrowUp, mods(false, true, true), false), None);
-        assert_eq!(key_to_bytes(Key::ArrowDown, mods(false, true, true), false), None);
-        assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true), false), None);
+        assert_eq!(key_to_bytes(Key::ArrowLeft, mods(false, true, true), false, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowRight, mods(false, true, true), false, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowUp, mods(false, true, true), false, false), None);
+        assert_eq!(key_to_bytes(Key::ArrowDown, mods(false, true, true), false, false), None);
+        assert_eq!(key_to_bytes(Key::Enter, mods(false, true, true), false, false), None);
     }
 
     #[test]
     fn shift_tab_is_back_tab() {
         let shift = Modifiers { shift: true, ..Modifiers::default() };
-        assert_eq!(key_to_bytes(Key::Tab, shift, false), Some(b"\x1b[Z".to_vec())); // apps cycle on this
-        assert_eq!(key_to_bytes(Key::Tab, Modifiers::default(), false), Some(vec![b'\t'])); // plain tab
+        assert_eq!(key_to_bytes(Key::Tab, shift, false, false), Some(b"\x1b[Z".to_vec())); // apps cycle on this
+        assert_eq!(key_to_bytes(Key::Tab, Modifiers::default(), false, false), Some(vec![b'\t'])); // plain tab
     }
 
     #[test]
@@ -503,16 +555,16 @@ mod tests {
     #[test]
     fn nav_and_edit_keys_map_to_csi() {
         let none = Modifiers::default();
-        assert_eq!(key_to_bytes(Key::Delete, none, false), Some(b"\x1b[3~".to_vec()));
-        assert_eq!(key_to_bytes(Key::Insert, none, false), Some(b"\x1b[2~".to_vec()));
-        assert_eq!(key_to_bytes(Key::Home, none, false), Some(b"\x1b[H".to_vec()));
-        assert_eq!(key_to_bytes(Key::End, none, false), Some(b"\x1b[F".to_vec()));
-        assert_eq!(key_to_bytes(Key::PageUp, none, false), Some(b"\x1b[5~".to_vec()));
-        assert_eq!(key_to_bytes(Key::PageDown, none, false), Some(b"\x1b[6~".to_vec()));
+        assert_eq!(key_to_bytes(Key::Delete, none, false, false), Some(b"\x1b[3~".to_vec()));
+        assert_eq!(key_to_bytes(Key::Insert, none, false, false), Some(b"\x1b[2~".to_vec()));
+        assert_eq!(key_to_bytes(Key::Home, none, false, false), Some(b"\x1b[H".to_vec()));
+        assert_eq!(key_to_bytes(Key::End, none, false, false), Some(b"\x1b[F".to_vec()));
+        assert_eq!(key_to_bytes(Key::PageUp, none, false, false), Some(b"\x1b[5~".to_vec()));
+        assert_eq!(key_to_bytes(Key::PageDown, none, false, false), Some(b"\x1b[6~".to_vec()));
         // Shift variants are app scrollback bindings - reserved.
         let shift = Modifiers { shift: true, ..Modifiers::default() };
         for k in [Key::Home, Key::End, Key::PageUp, Key::PageDown] {
-            assert_eq!(key_to_bytes(k, shift, false), None, "{k:?} must stay an app bind");
+            assert_eq!(key_to_bytes(k, shift, false, false), None, "{k:?} must stay an app bind");
         }
     }
 }
