@@ -255,6 +255,8 @@ struct Stdusk {
     closed: Vec<String>, // cwds of recently closed tabs, for reopen (Cmd+Shift+T)
     pending_pastes: std::collections::VecDeque<(u64, String)>, // multiline pastes awaiting confirm (tab id, text)
     pending_close: Option<(u64, String)>, // close-tab confirm: (tab id, prompt message)
+    pending_quit: Option<String>, // quit confirm: Some(detail message) while the modal is shown
+    quit_confirmed: bool, // a confirmed/proc-free quit is in flight: let the OS window close pass
     right_press: Option<(Vec<pane::Side>, f64)>, // right-button press on a pane: (path, egui time)
     window_top: Option<bool>, // last-applied always-on-top state (re-applied when it changes)
     space_all: Option<bool>, // last-applied "join all Spaces" collectionBehavior (re-applied on change)
@@ -352,13 +354,7 @@ impl Stdusk {
         let mut active = 0;
         if cfg.session.restore && screenshot.is_none() {
             let saved = session::load();
-            // Claude auto-resume targets, gathered while building tabs: (tab index, leaf path) plus
-            // the parallel resume inputs (cwd + captured id). Split tabs contribute one entry per
-            // claude leaf (from the pane tree); legacy single-pane sessions contribute the tab's
-            // top-level claude state at the root leaf.
-            let mut resume_targets: Vec<(usize, Vec<pane::Side>)> = Vec::new();
-            let mut resume_inputs: Vec<session::ResumeTab> = Vec::new();
-            for (i, st) in saved.tabs.iter().enumerate() {
+            for st in &saved.tabs {
                 // Rebuild the split layout when present; else a single pane in the saved cwd.
                 let mut tab = match &st.pane {
                     Some(sp) => tabs::spawn_saved_tab(&cfg, &cc.egui_ctx, sp),
@@ -372,48 +368,9 @@ impl Stdusk {
                 }
                 tab.color = st.color.as_deref().and_then(session::hex_to_color);
                 tab.pinned = st.pinned;
-                // Per-leaf claude: align each restored pane (by leaf path) with its saved claude
-                // state. `flat_leaves()` and `leaf_paths()` share the A-before-B order.
-                match &st.pane {
-                    Some(sp) => {
-                        for ((cwd, claude), path) in
-                            sp.flat_leaves().into_iter().zip(tab.root().leaf_paths())
-                        {
-                            if let Some(c) = claude {
-                                resume_targets.push((i, path));
-                                resume_inputs.push(session::ResumeTab {
-                                    cwd: cwd.clone().unwrap_or_default(),
-                                    resume_id: c.resume_id.clone(),
-                                });
-                            }
-                        }
-                    }
-                    None => {
-                        if let Some(c) = &st.claude {
-                            resume_targets.push((i, Vec::new()));
-                            resume_inputs.push(session::ResumeTab {
-                                cwd: st.cwd.clone().unwrap_or_default(),
-                                resume_id: c.resume_id.clone(),
-                            });
-                        }
-                    }
-                }
                 tabs.push(tab);
             }
             active = saved.active.min(tabs.len().saturating_sub(1));
-            // Auto-resume Claude Code panes: inject a resume command into each claude pane's pty.
-            // The shell buffers stdin, so the command lands at its first prompt (no shell-
-            // integration dependency). Never runs under --screenshot (guarded by the block).
-            if cfg.session.resume_claude {
-                let cmds =
-                    session::resume_commands(&resume_inputs, &session::claude_projects_dir());
-                for ((i, path), cmd) in resume_targets.into_iter().zip(cmds) {
-                    if let Some(term) = tabs[i].root_mut().leaf_at_mut(&path) {
-                        // `\r` = Enter (a bare CR submits; matches ui::key_to_bytes for Enter).
-                        term.send(format!("{cmd}\r").as_bytes());
-                    }
-                }
-            }
         }
         if tabs.is_empty() {
             tabs.push(spawn_tab(&cfg, &cc.egui_ctx, None));
@@ -564,6 +521,8 @@ impl Stdusk {
             closed: Vec::new(),
             pending_pastes: std::collections::VecDeque::new(),
             pending_close: None,
+            pending_quit: None,
+            quit_confirmed: false,
             right_press: None,
             window_top: None,
             space_all: None,
@@ -747,6 +706,55 @@ fn set_unified_titlebar(enabled: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_unified_titlebar(_enabled: bool) {}
 
+/// Extra points to lower the traffic-light cluster BELOW the computed tab-row centre. macOS pins
+/// the three window buttons near the very top of the titlebar (centre ~y=14), higher than the
+/// TAB_H-tall pills, so we re-anchor them onto the tab row instead of fighting it with strip
+/// height. Positive = lower. Eyeball-tuned starting at 0 (centre exactly on the row midpoint).
+///
+/// NEEDS LIVE VERIFICATION: the OS-drawn lights do NOT render in the headless `--screenshot`
+/// harness, so neither this magnitude nor the vertical DIRECTION can be checked in CI - confirm on
+/// a real macOS window and flip the sign in `center_window_buttons` if they end up too high/low.
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHT_DROP: f32 = 0.0;
+
+/// Re-anchor the three standard window buttons (close/miniaturize/zoom) so the cluster's vertical
+/// centre lands on the tab strip's centre. Called every window-mode frame from the same reconcile
+/// as the other window-chrome tweaks, because macOS re-lays these buttons out on resize /
+/// fullscreen / key changes - a one-shot move wouldn't stick. `strip_h` is the full tab-strip
+/// height in points. No-op off macOS / in dropdown mode (the caller only invokes it in window mode).
+#[cfg(target_os = "macos")]
+fn center_window_buttons(strip_h: f32) {
+    use objc2_app_kit::{NSApplication, NSWindowButton};
+    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    let windows = app.windows();
+    for i in 0..windows.count() {
+        let w = windows.objectAtIndex(i);
+        // Unflipped titlebar coords: y grows UP from the window bottom. With FullSizeContentView the
+        // content view (and its tab strip) reaches the window top at y = win_h, so the tab-row
+        // centre sits strip_h/2 below that. Placing a button's centre there => origin.y = win_h -
+        // strip_h/2 - btn_h/2. Computed absolutely (never a per-frame decrement) so re-applying is
+        // idempotent and can't drift. TRAFFIC_LIGHT_DROP lowers it further (direction: verify live).
+        let win_h = w.frame().size.height;
+        for b in [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ] {
+            if let Some(btn) = w.standardWindowButton(b) {
+                let mut origin = btn.frame().origin;
+                origin.y = win_h
+                    - f64::from(strip_h) / 2.0
+                    - btn.frame().size.height / 2.0
+                    - f64::from(TRAFFIC_LIGHT_DROP);
+                btn.setFrameOrigin(origin);
+            }
+        }
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn center_window_buttons(_strip_h: f32) {}
+
 /// Whether the whole app is the active (frontmost) macOS app. This stays TRUE when a *system*
 /// panel (the emoji/character viewer, Ctrl+Cmd+Space) takes the key window - unlike winit's
 /// per-window `focused`, which drops. Used to gate hide-on-blur so the emoji picker doesn't
@@ -918,6 +926,25 @@ impl eframe::App for Stdusk {
 
         // Quake window management is skipped in the screenshot harness.
         if self.screenshot.is_none() {
+            // Intercept an OS window close (red button / Cmd+Q / window-mode last-window close) so
+            // a quit with running child processes confirms first - the raw close must NOT bypass
+            // it. `quit_confirmed` (set once the user confirms, or when nothing is running) lets
+            // the real close through on the next CloseRequested.
+            if !self.quit_confirmed
+                && self.pending_quit.is_none()
+                && ctx.input(|i| i.viewport().close_requested())
+            {
+                let (procs, tabs) = self.running_summary();
+                if ui::should_confirm_running(self.cfg.session.confirm_quit_running, procs) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    self.pending_quit = Some(ui::quit_confirm_message(procs, tabs));
+                } else {
+                    // Nothing to confirm: let the close proceed, but kill the groups first so no
+                    // shell tree leaks (Drop is the backstop if this path is ever missed).
+                    self.kill_all_panes();
+                    self.quit_confirmed = true;
+                }
+            }
             // Menu-bar icon toggle is live in BOTH modes: build/drop the tray as it flips.
             if self.cfg.quake.menu_bar_icon && self.tray.is_none() {
                 self.tray = tray::build();
@@ -977,7 +1004,7 @@ impl eframe::App for Stdusk {
                 if let Some(tray) = &self.tray {
                     let (show, quit) = tray::poll(tray);
                     if quit {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        self.begin_quit(&ctx);
                     }
                     if show {
                         self.visible = !self.visible;
@@ -1014,6 +1041,10 @@ impl eframe::App for Stdusk {
                     set_unified_titlebar(true);
                     self.titlebar_unified = Some(true);
                 }
+                // Re-anchor the traffic lights onto the tab row EVERY frame (macOS re-lays them out
+                // on resize/fullscreen/key changes, so a one-shot move wouldn't hold). Idempotent:
+                // it sets an absolute origin, never a running offset.
+                center_window_buttons(ui::TAB_H + 6.0 + ui::WINDOW_TAB_H_EXTRA);
                 // No always-on-top, no forced quake geometry, and it never auto-hides. Mark the
                 // level Normal once; the red close button / last-window-closed quits via winit's
                 // default CloseRequested handling.
@@ -1031,7 +1062,7 @@ impl eframe::App for Stdusk {
                 if let Some(tray) = &self.tray {
                     let (show, quit) = tray::poll(tray);
                     if quit {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        self.begin_quit(&ctx);
                     }
                     if show {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -1149,9 +1180,6 @@ impl eframe::App for Stdusk {
                         })
                     })
                     .flatten();
-                // One process-table snapshot (reuses the ~1 Hz-refreshed `sys`) so each leaf can be
-                // tagged claude with its own captured resume id - the split-restore per-pane source.
-                let procs = procwatch::snapshot(&self.sys);
                 let snap = session::SavedSession {
                     tabs: self
                         .tabs
@@ -1161,31 +1189,11 @@ impl eframe::App for Stdusk {
                             color: t.color.map(session::color_to_hex),
                             cwd: t.focused_term().cwd(),
                             pinned: t.pinned,
-                            // Mark claude tabs and stash the session id parsed from the claude
-                            // process's argv (~1 Hz scan) so restore resumes the exact session.
-                            // Kept for backward-compat / single-pane restore; the pane tree below
-                            // carries the authoritative per-leaf claude state.
-                            claude: (t.cli == Some(procwatch::Cli::Claude)).then(|| {
-                                session::ClaudeState { resume_id: t.claude_resume.clone() }
-                            }),
-                            // Persist the whole split layout so re-open restores every pane, each
-                            // leaf marked claude (with its own resume id) when a claude runs there.
+                            // Persist the whole split layout so re-open restores every pane in its
+                            // cwd (a fresh shell per leaf - nothing is replayed into it).
                             pane: Some(session::SavedPane::from_tree(
                                 t.root(),
-                                &|term: &PtyTerm| {
-                                    let pid = term.shell_pid();
-                                    let is_claude = pid.is_some_and(|p| {
-                                        procwatch::detect(&procs, p) == Some(procwatch::Cli::Claude)
-                                    });
-                                    session::SavedPane::Leaf {
-                                        cwd: term.cwd(),
-                                        claude: is_claude.then(|| session::ClaudeState {
-                                            resume_id: pid.and_then(|p| {
-                                                procwatch::claude_resume_id(&procs, p)
-                                            }),
-                                        }),
-                                    }
-                                },
+                                &|term: &PtyTerm| session::SavedPane::Leaf { cwd: term.cwd() },
                             )),
                         })
                         .collect(),
@@ -1255,12 +1263,6 @@ impl eframe::App for Stdusk {
                     let pids: Vec<u32> =
                         tab.root().leaves().iter().filter_map(|t| t.shell_pid()).collect();
                     tab.cli = pids.iter().find_map(|&pid| procwatch::detect(&procs, pid));
-                    // For claude tabs, capture the session id from its argv (auto-resume source).
-                    tab.claude_resume = (tab.cli == Some(procwatch::Cli::Claude))
-                        .then(|| {
-                            pids.iter().find_map(|&pid| procwatch::claude_resume_id(&procs, pid))
-                        })
-                        .flatten();
                     tab.proc = pids.iter().find_map(|&pid| procwatch::busy_child(&procs, pid));
                 }
                 // Keep the cadence ticking even when the window is otherwise idle.
@@ -1298,7 +1300,8 @@ impl eframe::App for Stdusk {
         // see `settings_only` below).
         let text_modal = self.renaming.is_some()
             || !self.pending_pastes.is_empty()
-            || self.pending_close.is_some();
+            || self.pending_close.is_some()
+            || self.pending_quit.is_some();
         let hard_modal = text_modal || self.palette.is_some() || self.settings_open;
         ctx.input(|i| {
             // Remappable app hotkeys (`[hotkeys]`, defaults = the shipped binds): every key
@@ -1563,7 +1566,7 @@ impl eframe::App for Stdusk {
             self.palette.is_some(),
             self.settings_open,
             !self.pending_pastes.is_empty(),
-            self.pending_close.is_some(),
+            self.pending_close.is_some() || self.pending_quit.is_some(),
         );
 
         // Terminal input keybinds - suppressed while anything else owns the keyboard.
@@ -1604,6 +1607,7 @@ impl eframe::App for Stdusk {
         self.rename_window(&ctx);
         self.paste_confirm_window(&ctx);
         self.close_confirm_window(&ctx);
+        self.quit_confirm_window(&ctx);
         self.palette_window(&ctx);
 
         // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.

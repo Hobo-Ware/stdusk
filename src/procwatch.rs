@@ -96,71 +96,6 @@ pub(crate) fn detect(procs: &[Proc], root: u32) -> Option<Cli> {
     TABLE.iter().map(|t| t.0).find(|c| found.contains(c))
 }
 
-/// The Claude Code session id from a claude process running under `root` (the tab's shell), by
-/// parsing `--resume <uuid>` out of its argv. `None` for a bare/fresh `claude` (no `--resume`
-/// yet) or when no claude descendant exists. Per-process, so parallel same-cwd tabs each yield
-/// their own id - the basis of stdusk's title-independent, collision-free auto-resume.
-pub(crate) fn claude_resume_id(procs: &[Proc], root: u32) -> Option<String> {
-    let mut children: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
-    for (i, p) in procs.iter().enumerate() {
-        if let Some(par) = p.parent {
-            children.entry(par).or_default().push(i);
-        }
-    }
-    let mut stack = vec![root];
-    let mut seen = std::collections::HashSet::new();
-    while let Some(pid) = stack.pop() {
-        if !seen.insert(pid) {
-            continue; // guard against pid-reuse cycles
-        }
-        let Some(kids) = children.get(&pid) else { continue };
-        for &i in kids {
-            let p = &procs[i];
-            if classify(&p.name, &p.cmd) == Some(Cli::Claude)
-                && let Some(id) = parse_resume_id(&p.cmd)
-            {
-                return Some(id);
-            }
-            stack.push(p.pid);
-        }
-    }
-    None
-}
-
-/// Parse the session id from a claude argv: both `--resume <uuid>` and `--resume=<uuid>`. The
-/// token must look like a UUID (so a bare `--resume` interactive picker, whose next arg is a flag
-/// or prompt, doesn't get mistaken for an id). Pure + unit-tested.
-pub(crate) fn parse_resume_id(cmd: &[String]) -> Option<String> {
-    let mut it = cmd.iter();
-    while let Some(arg) = it.next() {
-        let Some(rest) = arg.strip_prefix("--resume").or_else(|| arg.strip_prefix("-r")) else {
-            continue;
-        };
-        if let Some(v) = rest.strip_prefix('=') {
-            if looks_like_uuid(v) {
-                return Some(v.to_owned());
-            }
-        } else if rest.is_empty() {
-            // Space-separated form: the id is the next token (if it looks like one).
-            if let Some(v) = it.next().filter(|v| looks_like_uuid(v)) {
-                return Some(v.clone());
-            }
-        }
-    }
-    None
-}
-
-/// A canonical 8-4-4-4-12 lowercase-or-upper hex UUID (Claude's session id shape).
-fn looks_like_uuid(s: &str) -> bool {
-    let groups = [8, 4, 4, 4, 12];
-    let parts: Vec<&str> = s.split('-').collect();
-    parts.len() == groups.len()
-        && parts
-            .iter()
-            .zip(groups)
-            .all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
-}
-
 /// Classify one process by scanning the path segments of its name and each argv entry.
 fn classify(name: &str, cmd: &[String]) -> Option<Cli> {
     let args = std::iter::once(name).chain(cmd.iter().map(String::as_str));
@@ -224,6 +159,36 @@ pub(crate) fn busy_child(procs: &[Proc], root: u32) -> Option<String> {
     deepest.map(|(_, name)| name)
 }
 
+/// Every process running under `root` (the tab's shell) - its descendants, NOT the shell itself.
+/// Used to count + preview what a close/quit will terminate (the shell's process group). A
+/// recognized AI CLI is surfaced by its brand label (e.g. `claude`), everything else by its raw
+/// process name. Order is discovery order; the caller truncates for display.
+pub(crate) fn running_children(procs: &[Proc], root: u32) -> Vec<String> {
+    let mut children: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
+    for (i, p) in procs.iter().enumerate() {
+        if let Some(par) = p.parent {
+            children.entry(par).or_default().push(i);
+        }
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue; // guard against pid-reuse cycles
+        }
+        let Some(kids) = children.get(&pid) else { continue };
+        for &i in kids {
+            let p = &procs[i];
+            out.push(
+                classify(&p.name, &p.cmd).map_or_else(|| p.name.clone(), |c| c.label().to_owned()),
+            );
+            stack.push(p.pid);
+        }
+    }
+    out
+}
+
 /// Snapshot sysinfo's process table into plain `Proc`s (the pure fns work on these). The ~1 Hz
 /// scan loop snapshots ONCE and runs `detect`/`busy_child` per tab on the same table.
 pub(crate) fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
@@ -236,11 +201,6 @@ pub(crate) fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
             cmd: p.cmd().iter().map(|s| s.to_string_lossy().into_owned()).collect(),
         })
         .collect()
-}
-
-/// Live version of `busy_child` (close-tab confirmation). Refresh happens in the caller.
-pub(crate) fn scan_busy(sys: &sysinfo::System, root: u32) -> Option<String> {
-    busy_child(&snapshot(sys), root)
 }
 
 #[cfg(test)]
@@ -324,38 +284,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_resume_id_reads_both_forms() {
-        let uuid = "3e58d6a4-cbcb-43e4-ae76-c56a48d0ffec";
-        // Real observed argv: `claude --permission-mode bypassPermissions --resume <uuid>`.
-        let space = ["claude", "--permission-mode", "bypassPermissions", "--resume", uuid]
-            .map(String::from);
-        assert_eq!(parse_resume_id(&space).as_deref(), Some(uuid));
-        let eq = ["claude".to_string(), format!("--resume={uuid}")];
-        assert_eq!(parse_resume_id(&eq).as_deref(), Some(uuid));
-        let short = ["claude".to_string(), "-r".to_string(), uuid.to_string()];
-        assert_eq!(parse_resume_id(&short).as_deref(), Some(uuid));
+    fn running_children_lists_every_descendant_by_friendly_name() {
+        // shell(100) -> node(200 = claude) -> worker(300); an unrelated tree is excluded.
+        let procs = vec![
+            p(200, 100, "node", &["node", "/x/claude-code/cli.js"]),
+            p(300, 200, "worker", &["worker"]),
+            p(999, 1, "Finder", &["Finder"]),
+        ];
+        let mut got = running_children(&procs, 100);
+        got.sort();
+        assert_eq!(got, vec!["claude".to_string(), "worker".to_string()]);
     }
 
     #[test]
-    fn parse_resume_id_ignores_bare_flag_and_absence() {
-        // Bare `claude` (fresh session) -> no id.
-        assert_eq!(parse_resume_id(&["claude".to_string()]), None);
-        // `--resume` with no id (interactive picker) followed by another flag -> not an id.
-        let picker = ["claude", "--resume", "--verbose"].map(String::from);
-        assert_eq!(parse_resume_id(&picker), None);
-        // A non-uuid value (e.g. a search term for the picker) isn't taken.
-        let term = ["claude", "--resume", "auth"].map(String::from);
-        assert_eq!(parse_resume_id(&term), None);
-    }
-
-    #[test]
-    fn claude_resume_id_finds_the_descendant_claude_argv() {
-        let uuid = "f205e638-644c-46ba-b36e-8ab6d938d51d";
-        // shell(100) -> claude(200) carrying --resume <uuid>.
-        let procs = vec![p(200, 100, "claude", &["claude", "--resume", uuid])];
-        assert_eq!(claude_resume_id(&procs, 100).as_deref(), Some(uuid));
-        // A bare claude descendant yields no id (fresh session).
-        let bare = vec![p(200, 100, "claude", &["claude"])];
-        assert_eq!(claude_resume_id(&bare, 100), None);
+    fn running_children_of_an_idle_shell_is_empty() {
+        // A bare shell (no descendants) has nothing to terminate - the no-nag case.
+        let procs = vec![p(999, 1, "Finder", &["Finder"])];
+        assert!(running_children(&procs, 100).is_empty());
     }
 }

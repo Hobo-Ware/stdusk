@@ -61,7 +61,8 @@ focus_follows_mouse = false # hovering a split pane focuses it without clicking
 
 [session]
 restore = true            # reopen last session's tabs (cwd/title/color) on launch
-resume_claude = true      # auto-resume Claude Code tabs to their prior conversation (needs restore)
+confirm_quit_running = true # ask before quitting when child processes (claude/npm/editors/...) are
+                          # running - quitting kills each shell's whole process group
 
 [sync]
 repo = ""                 # git remote for config.toml + custom schemes (keep it private); "" = off

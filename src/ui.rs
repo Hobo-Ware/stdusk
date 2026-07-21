@@ -462,14 +462,47 @@ pub(crate) fn moved_index(from: usize, to: usize, tracked: usize) -> usize {
     }
 }
 
-/// The close-tab confirm prompt, or `None` to close silently. A pinned tab always asks;
-/// otherwise only a running child process does (`warn_on_close_running` gating is the caller's).
-pub(crate) fn close_confirm_message(pinned: bool, busy: Option<&str>) -> Option<String> {
-    match (pinned, busy) {
-        (true, _) => Some("This tab is pinned.".into()),
-        (false, Some(name)) => Some(format!("{name} is still running in this tab.")),
-        (false, None) => None,
+/// The close-tab confirm prompt, or `None` to close silently. A pinned tab always asks; a tab
+/// with live child processes states HOW MANY will be terminated (and names a few). `running` is
+/// the shell's descendants across the tab's panes (`warn_on_close_running` gating is the caller's).
+pub(crate) fn close_confirm_message(pinned: bool, running: &[String]) -> Option<String> {
+    match (pinned, running.is_empty()) {
+        (false, true) => None, // plain idle tab: close silently
+        (true, true) => Some("This tab is pinned.".into()),
+        (true, false) => Some(format!("This tab is pinned. {}.", terminate_phrase(running))),
+        (false, false) => Some(format!("{} in this tab.", terminate_phrase(running))),
     }
+}
+
+/// "It will terminate N running process(es) (a, b, c, ...)." - the shared count+preview phrase for
+/// the close/quit confirms. The name list is capped so a big claude tree doesn't overflow the pill.
+pub(crate) fn terminate_phrase(running: &[String]) -> String {
+    let n = running.len();
+    let noun = if n == 1 { "process" } else { "processes" };
+    format!("It will terminate {n} running {noun}{}", name_preview(running))
+}
+
+/// ` (a, b, c, ...)` for a non-empty list (first 3 names, `...` when more), else empty.
+fn name_preview(names: &[String]) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    let head = names.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > 3 { format!(" ({head}, ...)") } else { format!(" ({head})") }
+}
+
+/// The quit confirm body: how much a quit will kill. `procs` running child processes summed
+/// across `tabs` tabs. Title ("Quit stdusk?") is drawn by the modal; this is the detail line.
+pub(crate) fn quit_confirm_message(procs: usize, tabs: usize) -> String {
+    let p_noun = if procs == 1 { "process" } else { "processes" };
+    let t_noun = if tabs == 1 { "tab" } else { "tabs" };
+    format!("This will terminate {procs} running {p_noun} across {tabs} {t_noun}.")
+}
+
+/// Whether a close/quit should stop to confirm: only when the feature is on AND there is actually
+/// something running to kill (a bare-shell tab never nags). Pure seam for table tests.
+pub(crate) fn should_confirm_running(enabled: bool, running_count: usize) -> bool {
+    enabled && running_count > 0
 }
 
 /// Notify-on-activity step: `(fire a notification now?, notified-flag after)`. Viewing the tab
@@ -1198,12 +1231,13 @@ fn paint_cli_chip(p: &egui::Painter, rect: egui::Rect, cli: crate::procwatch::Cl
 
 /// Tab geometry: shared with the tab bar so the row height / spacer math can't rot.
 pub(crate) const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (flush underline)
-/// Extra tab-strip height in macOS window mode so the OS traffic-light cluster (pinned near the
-/// window top over the `FullSizeContentView` titlebar) centers against the tab row. Zero in
-/// dropdown mode and off macOS, so those strips are unchanged. Tunable if the buttons still look
-/// off-centre (headless capture can't render the OS-drawn lights, so this is eyeball-calibrated).
+/// Extra tab-strip height in macOS window mode. Now 0: the OS traffic-light cluster is actively
+/// re-anchored onto the tab row (see `main::center_window_buttons`), so the strip no longer needs
+/// to GROW to make room - growing it as well would double-compensate. Kept as a tunable const (the
+/// `tabs.rs` centering path still honors a non-zero value) in case the window-mode strip ever wants
+/// a taller look; leave it 0 unless you also re-check the button anchor by eye on a real window.
 #[cfg(target_os = "macos")]
-pub(crate) const WINDOW_TAB_H_EXTRA: f32 = 10.0;
+pub(crate) const WINDOW_TAB_H_EXTRA: f32 = 0.0;
 #[cfg(not(target_os = "macos"))]
 pub(crate) const WINDOW_TAB_H_EXTRA: f32 = 0.0;
 pub(crate) const TAB_FIXED_W: f32 = 200.0; // fixed-mode standard width (Tabby-like)
@@ -1985,17 +2019,53 @@ mod tests {
     }
 
     #[test]
-    fn close_confirm_pinned_beats_busy() {
-        assert_eq!(close_confirm_message(false, None), None); // plain tab: close silently
+    fn close_confirm_states_process_count_and_pin() {
+        let none: &[String] = &[];
+        assert_eq!(close_confirm_message(false, none), None); // plain idle tab: close silently
         assert_eq!(
-            close_confirm_message(false, Some("vim")).as_deref(),
-            Some("vim is still running in this tab.")
+            close_confirm_message(false, &["vim".into()]).as_deref(),
+            Some("It will terminate 1 running process (vim) in this tab.")
         );
-        assert_eq!(close_confirm_message(true, None).as_deref(), Some("This tab is pinned."));
         assert_eq!(
-            close_confirm_message(true, Some("vim")).as_deref(),
-            Some("This tab is pinned.") // pinned always asks, with the pin as the reason
+            close_confirm_message(false, &["claude".into(), "node".into()]).as_deref(),
+            Some("It will terminate 2 running processes (claude, node) in this tab.")
         );
+        // Pinned always asks, even when idle...
+        assert_eq!(close_confirm_message(true, none).as_deref(), Some("This tab is pinned."));
+        // ...and the pin reason leads, the process count follows.
+        assert_eq!(
+            close_confirm_message(true, &["vim".into()]).as_deref(),
+            Some("This tab is pinned. It will terminate 1 running process (vim).")
+        );
+    }
+
+    #[test]
+    fn name_preview_caps_at_three_names() {
+        assert_eq!(name_preview(&[]), "");
+        assert_eq!(name_preview(&["a".into()]), " (a)");
+        assert_eq!(
+            name_preview(&["a".into(), "b".into(), "c".into(), "d".into()]),
+            " (a, b, c, ...)"
+        );
+    }
+
+    #[test]
+    fn quit_confirm_message_pluralizes() {
+        assert_eq!(
+            quit_confirm_message(1, 1),
+            "This will terminate 1 running process across 1 tab."
+        );
+        assert_eq!(
+            quit_confirm_message(5, 2),
+            "This will terminate 5 running processes across 2 tabs."
+        );
+    }
+
+    #[test]
+    fn should_confirm_running_needs_both_flag_and_count() {
+        assert!(should_confirm_running(true, 1));
+        assert!(!should_confirm_running(true, 0)); // nothing running -> no nag
+        assert!(!should_confirm_running(false, 3)); // feature off -> never
     }
 
     #[test]

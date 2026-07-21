@@ -112,12 +112,12 @@ pub(crate) fn expand_tilde(path: &str) -> String {
 #[serde(default)]
 pub(crate) struct Session {
     pub(crate) restore: bool, // reopen last session's tabs (cwd/title/color) on launch
-    pub(crate) resume_claude: bool, // auto-resume Claude Code tabs on launch (needs `restore`)
+    pub(crate) confirm_quit_running: bool, // confirm before quitting while child processes run
 }
 
 impl Default for Session {
     fn default() -> Self {
-        Self { restore: true, resume_claude: true }
+        Self { restore: true, confirm_quit_running: true }
     }
 }
 
@@ -656,7 +656,7 @@ name = "ops"
         assert_eq!(back.appearance.theme, Config::default().appearance.theme);
         assert_eq!(back.terminal.scrollback_lines, 25000);
         assert!(back.session.restore);
-        assert!(back.session.resume_claude);
+        assert!(back.session.confirm_quit_running);
         assert_eq!(back.profiles[0].name, "ops");
         assert!(back.profiles[0].shell.is_none() && back.profiles[0].color.is_none());
     }

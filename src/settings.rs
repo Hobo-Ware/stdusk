@@ -1695,17 +1695,6 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
                 ui::toggle_switch(ui, &mut cfg.session.restore);
             },
         );
-        row(
-            ui,
-            "Resume Claude sessions",
-            "Reattach each restored Claude Code tab to its prior conversation",
-            |ui| {
-                // Meaningless without tab restore - greyed out when that's off.
-                ui.add_enabled_ui(cfg.session.restore, |ui| {
-                    ui::toggle_switch(ui, &mut cfg.session.resume_claude);
-                });
-            },
-        );
     });
 
     subheading(ui, "Sync");

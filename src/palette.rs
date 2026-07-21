@@ -301,7 +301,7 @@ impl Stdusk {
                     let _ = std::process::Command::new("open").arg(p).spawn();
                 }
             }
-            PaletteCmd::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            PaletteCmd::Quit => self.begin_quit(ctx),
         }
     }
 

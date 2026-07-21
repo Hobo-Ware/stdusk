@@ -12,8 +12,9 @@ eframe = { version = "0.35.0", features = ["glow", "__screenshot"] }
 egui = "0.35.0"
 font-kit = "0.14.3" # appearance.font family -> file bytes via the macOS core-text source
 global-hotkey = "0.8.0"
+libc = "0.2" # killpg on tab/app close: SIGTERM+SIGKILL the shell's process group (kill orphans)
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSEvent", "NSResponder", "NSRunningApplication", "NSWindow"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSResponder", "NSRunningApplication", "NSView", "NSWindow"] }
 portable-pty = "0.9.0"
 regex = "1.13.0"
 resvg = { version = "0.45", default-features = false } # CLI-badge brand SVGs -> egui textures (paths only; no text/fonts needed)
@@ -27,7 +28,7 @@ winit = "0.30" # macOS activation policy (accessory app) via eframe's event_loop
 proptest = "1.8.0"
 
 [lints.rust]
-unsafe_code = "deny" # one justified local #[allow] in main (edition-2024 set_var); nothing else
+unsafe_code = "deny" # justified local #[allow]s only: main's edition-2024 set_var + terminal's killpg FFI
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }

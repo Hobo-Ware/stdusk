@@ -30,7 +30,6 @@ pub(crate) struct Tab {
     pub(crate) root: Option<pane::Pane<PtyTerm>>, // Option so whole-tree transforms can `take()` it
     pub(crate) focused: Vec<pane::Side>,     // path to the focused leaf (its identity)
     pub(crate) cli: Option<procwatch::Cli>,  // a known AI CLI detected running in the tab (badge)
-    pub(crate) claude_resume: Option<String>, // claude session id from its argv (~1 Hz; auto-resume)
     pub(crate) proc: Option<String>, // running child's name (~1 Hz cache; menu "Running:" row)
     pub(crate) maximized: bool,      // zoom the focused pane to fill the tab (hide the other panes)
     pub(crate) pinned: bool,         // pinned tabs sort first, guard close, persist in session.toml
@@ -78,7 +77,6 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
         root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
         cli: None,
-        claude_resume: None,
         proc: None,
         maximized: false,
         pinned: false,
@@ -89,8 +87,7 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
 }
 
 /// Rebuild a live pane tree from a persisted layout, spawning one shell per leaf in its saved cwd.
-/// Order (A before B) matches `session::SavedPane::flat_leaves`, so the caller can align each pane
-/// with its saved claude state via `leaf_paths()`.
+/// Order (A before B) matches the saved tree, so a rebuilt tree's `leaf_paths()` lines up with it.
 pub(crate) fn spawn_saved_tree(
     cfg: &Config,
     ctx: &egui::Context,
@@ -118,7 +115,6 @@ pub(crate) fn spawn_saved_tab(cfg: &Config, ctx: &egui::Context, sp: &session::S
         root: Some(root),
         focused,
         cli: None,
-        claude_resume: None,
         proc: None,
         maximized: false,
         pinned: false,
@@ -155,7 +151,6 @@ pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Pro
         root: Some(pane::Pane::leaf(term)),
         focused: Vec::new(),
         cli: None,
-        claude_resume: None,
         proc: None,
         maximized: false,
         pinned: false,
@@ -559,22 +554,25 @@ impl Stdusk {
     /// child (command / REPL) asks when the warning is enabled. Otherwise close immediately.
     pub(crate) fn request_close_tab(&mut self, i: usize, ctx: &egui::Context) {
         if let Some(tab) = self.tabs.get(i) {
-            let busy = if self.cfg.terminal.warn_on_close_running {
+            let running = if self.cfg.terminal.warn_on_close_running {
                 self.sys.refresh_processes_specifics(
                     sysinfo::ProcessesToUpdate::All,
                     true,
                     sysinfo::ProcessRefreshKind::nothing()
                         .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
                 );
+                // Every live child across all the tab's panes - the process group(s) a close kills.
+                let procs = procwatch::snapshot(&self.sys);
                 tab.root()
                     .leaves()
                     .iter()
                     .filter_map(|t| t.shell_pid())
-                    .find_map(|pid| procwatch::scan_busy(&self.sys, pid))
+                    .flat_map(|pid| procwatch::running_children(&procs, pid))
+                    .collect::<Vec<_>>()
             } else {
-                None
+                Vec::new()
             };
-            if let Some(msg) = ui::close_confirm_message(tab.pinned, busy.as_deref()) {
+            if let Some(msg) = ui::close_confirm_message(tab.pinned, &running) {
                 self.pending_close = Some((tab.id, msg));
                 return;
             }
@@ -625,6 +623,108 @@ impl Stdusk {
             }
         } else if !cancel {
             self.pending_close = Some((tab_id, msg)); // keep asking next frame
+        }
+    }
+
+    /// Kill every pane's shell process group (the shell + its descendants), so nothing leaks as an
+    /// orphan when the app quits. Idempotent per pane (`PtyTerm::kill` guards re-entry / Drop).
+    pub(crate) fn kill_all_panes(&mut self) {
+        for tab in &mut self.tabs {
+            for term in tab.root_mut().leaves_mut() {
+                term.kill();
+            }
+        }
+    }
+
+    /// `(running child processes, tabs that have any)` across every pane - what a quit would
+    /// terminate. Refreshes the process table once, then sums `procwatch::running_children`.
+    pub(crate) fn running_summary(&mut self) -> (usize, usize) {
+        self.sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
+        );
+        let procs = procwatch::snapshot(&self.sys);
+        let (mut total, mut tabs) = (0usize, 0usize);
+        for tab in &self.tabs {
+            let n: usize = tab
+                .root()
+                .leaves()
+                .iter()
+                .filter_map(|t| t.shell_pid())
+                .map(|pid| procwatch::running_children(&procs, pid).len())
+                .sum();
+            if n > 0 {
+                total += n;
+                tabs += 1;
+            }
+        }
+        (total, tabs)
+    }
+
+    /// Entry point for a user-initiated quit (tray Quit, palette Quit). Confirms first when child
+    /// processes are running (and the guard is on); otherwise kills the groups and closes now.
+    pub(crate) fn begin_quit(&mut self, ctx: &egui::Context) {
+        let (procs, tabs) = self.running_summary();
+        if self.screenshot.is_none()
+            && ui::should_confirm_running(self.cfg.session.confirm_quit_running, procs)
+        {
+            self.pending_quit = Some(ui::quit_confirm_message(procs, tabs));
+        } else {
+            self.finish_quit(ctx);
+        }
+    }
+
+    /// Actually quit: kill every pane's group, then close the window. `quit_confirmed` lets the
+    /// resulting OS `CloseRequested` pass the interception unchallenged.
+    pub(crate) fn finish_quit(&mut self, ctx: &egui::Context) {
+        self.pending_quit = None;
+        self.quit_confirmed = true;
+        self.kill_all_panes();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Quit-confirm modal, shown while `pending_quit` is set. Mirrors `close_confirm_window`:
+    /// Enter confirms / Esc cancels (unless a text modal owns them), buttons otherwise.
+    pub(crate) fn quit_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some(msg) = self.pending_quit.take() else {
+            return;
+        };
+        let mut confirm = false;
+        let mut cancel = false;
+        egui::Window::new("Quit stdusk?")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .frame(ui::overlay_frame())
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Quit stdusk?").strong().color(colors::fg()));
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(&msg).color(colors::dim()));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui::action_button(ui, "Quit", true).clicked() {
+                        confirm = true;
+                    }
+                    if ui::action_button(ui, "Cancel", false).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if self.renaming.is_none() && self.pending_pastes.is_empty() && self.pending_close.is_none()
+        {
+            if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                confirm = true;
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+        }
+        if confirm {
+            self.finish_quit(ctx);
+        } else if !cancel {
+            self.pending_quit = Some(msg); // keep asking next frame
         }
     }
 

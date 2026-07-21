@@ -333,9 +333,10 @@ pub(crate) struct PtyTerm {
     state: Arc<Mutex<TabState>>,
     cols: usize,
     rows: usize,
-    shell_pid: Option<u32>, // for CLI-awareness process scanning (procwatch)
+    shell_pid: Option<u32>, // for CLI-awareness process scanning (procwatch) + process-group kill
     bold_bright: bool,      // draw bold text in bright ANSI colors
     rapid_exits: u32,       // consecutive <RAPID_EXIT_SECS deaths, carried across respawns
+    killed: bool,           // kill() ran (idempotency guard; Drop calls kill() too)
 }
 
 impl PtyTerm {
@@ -553,12 +554,30 @@ impl PtyTerm {
             shell_pid,
             bold_bright: opts.bold_bright,
             rapid_exits: 0,
+            killed: false,
         }
     }
 
     /// PID of the tab's shell process - the root for CLI-awareness descendant scans.
     pub(crate) fn shell_pid(&self) -> Option<u32> {
         self.shell_pid
+    }
+
+    /// Terminate the shell's whole process GROUP so the shell AND its descendants
+    /// (claude/node/npm/editors/...) die instead of leaking as orphans. Dropping the pty master
+    /// only sends SIGHUP, which node-based CLIs routinely ignore - hence the explicit group kill.
+    /// The shell is a session/process-group leader (portable-pty `setsid`), so its pid IS the pgid.
+    /// Idempotent (the `killed` guard) and safe on an already-dead group (killpg ESRCH is ignored).
+    /// No-op off unix (no POSIX process groups) or when the pid is unknown / not a leader.
+    pub(crate) fn kill(&mut self) {
+        if self.killed {
+            return;
+        }
+        self.killed = true;
+        #[cfg(unix)]
+        if let Some(pid) = self.shell_pid {
+            kill_process_group(pid as i32);
+        }
     }
 
     pub(crate) fn send(&mut self, bytes: &[u8]) {
@@ -853,6 +872,51 @@ impl PtyTerm {
     }
 }
 
+/// Last-resort cleanup: a dropped pane/tab/app MUST NOT leak its shell tree. Drop runs on tab
+/// close (the tab is removed), pane close (the leaf is dropped), respawn (the old term is
+/// replaced), and app exit (the app -> tabs -> terms drop chain), so a single Drop covers every
+/// path. `kill()` is idempotent, so an explicit earlier `kill()` won't double-signal here.
+impl Drop for PtyTerm {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// SIGTERM a process group, wait a short grace for it to drain, then SIGKILL any survivor.
+/// `pid` must be the group leader's pid (== the pgid). Guards `pid <= 0` (0 = OUR group, -1 =
+/// every process). `libc::killpg` is a raw POSIX FFI with no safe wrapper - the crate's only
+/// `unsafe` besides main's `set_var`, hence the local allow. ESRCH (group already gone) is ignored.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn kill_process_group(pid: i32) {
+    if pid <= 0 {
+        return;
+    }
+    // SAFETY: thin FFI to killpg; pid > 0 is checked and the args are plain ints.
+    unsafe {
+        libc::killpg(pid, libc::SIGTERM);
+    }
+    // Poll for the whole group to disappear; SIGKILL it if it outlives the grace. `killpg(pid, 0)`
+    // sends no signal - it just probes existence (0 = still alive, -1/ESRCH = gone). A bare shell
+    // dies on the first poll, so this returns in ~one tick; only a SIGTERM-ignoring tree waits out
+    // the grace.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        // SAFETY: same as above; signal 0 only probes, sends nothing.
+        if unsafe { libc::killpg(pid, 0) } == -1 {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            // SAFETY: same as above.
+            unsafe {
+                libc::killpg(pid, libc::SIGKILL);
+            }
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -995,6 +1059,34 @@ mod tests {
             "uptime must reflect spawn->exit, got {}",
             exit.uptime_secs
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[allow(unsafe_code)] // killpg existence probe, mirroring kill_process_group
+    fn real_pty_kill_terminates_the_process_group() {
+        // The shell backgrounds a long sleep in its OWN process group (non-interactive `sh -c`
+        // runs jobs in-group). kill() must take the WHOLE group down, not just the shell.
+        let mut term = e2e_term("sleep 300 & sleep 60");
+        let pid = poll_term(&term, PtyTerm::shell_pid).expect("no shell pid") as i32;
+        // SAFETY: signal 0 only probes existence. The group is alive right after spawn.
+        assert_eq!(unsafe { libc::killpg(pid, 0) }, 0, "group must be alive before kill()");
+        term.kill();
+        // kill() signalled the group; its members then die and get REAPED asynchronously (the
+        // reader thread reaps the shell, init reaps the reparented sleep), so killpg's existence
+        // probe only flips to ESRCH once the last zombie is gone - poll for it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let gone = loop {
+            // SAFETY: same probe as above.
+            if unsafe { libc::killpg(pid, 0) } == -1 {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        };
+        assert!(gone, "process group must be dead after kill()");
     }
 
     #[test]
