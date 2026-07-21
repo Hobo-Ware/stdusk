@@ -582,6 +582,47 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.4.1 - drop Claude auto-resume, kill orphans on close/quit, traffic-light re-anchor (uncommitted)
+Bundled batch (details + rationale below). Version NOT bumped, NOT committed. 261 tests
+(270 -> 261: removed the resume tests, added kill / running-children / confirm-message tests).
+
+- **Claude auto-resume REMOVED as unstable.** `claude --resume` is CWD-scoped, and orphaned /
+  moved sessions made it unreliable (an id whose transcript moved, or a bare session with no
+  argv id, degraded to notices or bare relaunches often enough that it did more harm than good).
+  Deleted: `[session] resume_claude` (config + default + Settings toggle), the whole resolver
+  (`session::locate_session`/`Resume`/`session_cwd`/`resume_commands`/`most_recent_session`/
+  `resume_cmd_for`/`encode_cwd`/`claude_projects_dir`/`ResumeTab`/`ClaudeState`), the argv capture
+  (`procwatch::parse_resume_id`/`claude_resume_id`/`looks_like_uuid` + `Tab.claude_resume`), and
+  the restore-time injection in `main.rs`. **Kept**: plain tab restore AND split/pane restore -
+  `SavedTab.pane` is now `Leaf{cwd} | Split{dir,ratio,a,b}` (the `claude` field dropped), still
+  serde-default so older session files load. Restored leaves just spawn a fresh shell in their cwd,
+  nothing typed in. CLI-badge detection (`procwatch::detect`/`classify`/`busy_child`) is untouched.
+- **Kill the shell's PROCESS GROUP on pane/tab close AND app quit** (was: only dropped the pty
+  master, i.e. SIGHUP, which node-based CLIs ignore -> orphaned `claude`/`npm`/editors). New
+  `PtyTerm::kill()` + `Drop` send `killpg(shell_pid, SIGTERM)` then `SIGKILL` after a 200ms grace
+  (the shell is a `setsid` session/group leader, so its pid IS the pgid). Idempotent (`killed`
+  guard). Drop covers every teardown path (close_tab, pane close, respawn, app-exit drop chain);
+  `Stdusk::kill_all_panes()` also kills explicitly on confirmed/quiet quit. `libc` added as a dep;
+  the `killpg` FFI is a justified local `#[allow(unsafe_code)]` (the crate's 2nd unsafe after
+  main's set_var). Real-pty test backgrounds a `sleep` and asserts the group is gone after kill().
+- **Close/quit confirmations state the process COUNT.** Close-tab confirm now reads
+  "It will terminate N running processes (a, b, c, ...)" via `procwatch::running_children` (all of
+  a tab's shell descendants, friendly-named) instead of the single busy name; bare-shell tabs still
+  close silently. New QUIT confirm (`[session] confirm_quit_running`, default true) intercepts every
+  quit path - tray Quit, palette Quit, and the raw OS `CloseRequested` (red button / Cmd+Q / window-
+  mode last-window close, vetoed via `CancelClose` until confirmed) - and only prompts when child
+  processes actually run. Pure seams table-tested: `ui::close_confirm_message`/`terminate_phrase`/
+  `quit_confirm_message`/`should_confirm_running`, `procwatch::running_children`.
+- **Window-mode traffic-light centering, done right.** Instead of GROWing the strip
+  (`WINDOW_TAB_H_EXTRA`, now 0 to avoid double-compensation), `main::center_window_buttons` re-
+  anchors the three standard window buttons onto the tab-row centre via objc2
+  (`NSWindow::standardWindowButton(Close/Miniaturize/Zoom)` -> `setFrameOrigin`), computed as an
+  ABSOLUTE origin (`win_h - strip_h/2 - btn_h/2 - TRAFFIC_LIGHT_DROP`) so re-applying every window-
+  mode frame is idempotent (no drift). Re-applied on the same per-frame reconcile as
+  `titlebar_unified` because macOS re-lays the buttons out on resize/fullscreen/key. NEEDS LIVE
+  VERIFICATION: the OS lights don't render in the headless `--screenshot` harness, so `TRAFFIC_LIGHT_DROP`
+  magnitude AND vertical direction are eyeball-only. Enabled objc2-app-kit `NSButton`/`NSControl`/`NSView`.
+
 ## 1.4.0 - restore splits, graceful Claude resume, scroll speed, window-mode polish
 Bundled batch (details in the sections below / agent notes lower in this file):
 - **Split restore**: SavedTab gains an optional pane tree (serde-default; old sessions load as
@@ -1517,6 +1558,9 @@ builder agent; implementation + integration here.
   launches, which is the common case.
 
 ## Claude Code auto-resume (uncommitted)
+> **REMOVED in 1.4.1** as unstable (cwd-scoped `--resume` + orphaned/moved sessions made it
+> unreliable). This section is kept for historical context only - the code, config, and tests
+> described below no longer exist. Split/pane restore survives; only the Claude resume layer is gone.
 - **What**: when you quit with Claude running in one or more tabs, next launch reattaches each of
   those tabs to its prior conversation. Scope: CLAUDE tabs only (the `procwatch` CLI detection
   already tells us which tabs run claude). QoL on top of session restore.
@@ -1572,6 +1616,9 @@ builder agent; implementation + integration here.
   (toggle), `config.example.toml`, `PARITY.md`. Version NOT bumped, NOT committed.
 
 ## Claude auto-resume hardening + split restore + window-mode tab centering (uncommitted)
+> **PARTLY REMOVED in 1.4.1**: the Claude-resume half (Issue A / graceful resume / `locate_session`)
+> was deleted as unstable. Split restore (Issue B) survives with the `claude` leaf field dropped;
+> window-mode centering (Issue C) was redone by re-anchoring the traffic lights, not growing the strip.
 - **GOTCHA (verified on this machine, contradicts an easy assumption): `claude --resume <uuid>` is
   CWD-SCOPED, not a global by-id lookup.** Resuming the same uuid from `/tmp` errors `No conversation
   found with session ID: <uuid>`; from the transcript's original cwd it resumes fine. So a MOVED repo

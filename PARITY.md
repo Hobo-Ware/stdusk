@@ -46,7 +46,8 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Notify-when-done | ✅ | `terminal.notify_on_done`; osascript notification when a >10s command finishes while hidden. Notify-on-activity ✅ (per-tab menu toggle, one shot per unviewed stretch, re-armed on view) |
 | Current-process display in menu | ✅ | disabled "Running: <name>" first row, fed by the ~1 Hz procwatch cache (needs `detect_clis` on) |
 | Drag-reorder tabs | ✅ | midpoint-crossing swaps, mixed widths; between-windows N/A (single window) |
-| Warn when closing a tab with a running process | ✅ | `terminal.warn_on_close_running` (default on) + confirm modal |
+| Warn when closing a tab with a running process | ✅ | `terminal.warn_on_close_running` (default on) + confirm modal. The modal states HOW MANY child processes will be terminated and names a few (e.g. "It will terminate 3 running processes (claude, node, npm)"). On confirm, the pane's whole process group is killed (`killpg` SIGTERM->SIGKILL) so nothing leaks as an orphan (1.4.1) |
+| Confirm quit while processes run | ✅ | `[session] confirm_quit_running` (default on). Beyond Tabby: quitting (tray Quit / palette Quit / red button / Cmd+Q / window-mode last-window close) confirms first when child processes run, stating "This will terminate X processes across N tabs"; on confirm every pane's process group is killed, then the app exits. Nothing but bare shells running = quit immediately, no nag (1.4.1) |
 | `toggle-fullscreen` | ⬜ | |
 | Save-as-profile / save-layout-as-profile | ⛔ | depends on profiles (deferred) |
 
@@ -168,7 +169,7 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Feature | State | Notes |
 |---|---|---|
 | Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ✅ | `[session] restore`; cwd/title/color, saved every 3s; also window geometry in `quake.mode = "window"` |
-| Auto-resume Claude Code tabs | ✅ | `[session] resume_claude` (default on, needs `restore`). Beyond Tabby: on restore, each claude tab reattaches to its prior conversation. The session id is captured from the running claude process's argv (`--resume <uuid>`, per-process) at save time and replayed as `claude --resume <uuid>` - so parallel same-cwd tabs resume their OWN distinct sessions (never `--continue`, which would collide). Fallback (fresh bare claude): the cwd's most-recent transcript, only for a lone claude tab there; else bare `claude` |
+| Auto-resume Claude Code tabs | ❌ removed (1.4.1) | Shipped briefly then removed as unstable: `claude --resume` is cwd-scoped, and orphaned / moved sessions made reattach unreliable. Split/pane restore is unaffected - restored panes just spawn a fresh shell in their cwd |
 | Behavior on session end (keep/close/restart) | ✅ | `terminal.on_exit` (0.3.0): close (default) / keep with overlay / restart + crash-loop guard |
 | Dynamic title from shell (OSC 0/2) + disable toggle | ✅ | `dynamic_title` (0.3.0); 1.0.2 moved parsing to the Term's Title events, adding the xterm title STACK (`CSI 22/23 t`) - a popped title restores instead of sticking |
 | Save/load terminal output & state (debug) | ⛔ | niche debug tooling |
