@@ -6,10 +6,11 @@ use eframe::egui;
 
 use crate::tabs::spawn_opts;
 use crate::terminal::PtyTerm;
-use crate::ui::{self, collect_input, render_grid, style_menu};
+use crate::ui::{self, collect_input, render_grid};
+use crate::widgets::style_menu;
 use crate::{COLS, ROWS, Stdusk, colors, pane};
 
-/// The raw byte a Ctrl+V keypress sends (matches `ui::ctrl_letter(Key::V)`). Forwarding it makes
+/// The raw byte a Ctrl+V keypress sends (matches `keys::ctrl_letter(Key::V)`). Forwarding it makes
 /// an app that reads the system clipboard on ^V - Claude Code's image ingestion - pick up a
 /// pasted image without us encoding anything.
 const CTRL_V: u8 = 0x16;
@@ -67,12 +68,12 @@ fn pane_menu(
 ) {
     style_menu(ui);
     ui.add_enabled_ui(has_selection, |ui| {
-        if ui::menu_item(ui, "Copy", "Cmd+C").clicked() {
+        if crate::widgets::menu_item(ui, "Copy", "Cmd+C").clicked() {
             *action = Some(PaneAction::Copy(path.to_vec()));
         }
     });
     ui.add_enabled_ui(cwd.is_some(), |ui| {
-        if ui::menu_item(ui, "Copy current path", "").clicked() {
+        if crate::widgets::menu_item(ui, "Copy current path", "").clicked() {
             *action = Some(PaneAction::CopyPath(path.to_vec()));
         }
     });
@@ -80,24 +81,24 @@ fn pane_menu(
     ui.menu_button("Split", |ui| {
         use pane::SplitDir::{Column, Row};
         style_menu(ui);
-        if ui::menu_item(ui, "Right", "Cmd+D").clicked() {
+        if crate::widgets::menu_item(ui, "Right", "Cmd+D").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Row, false));
         }
-        if ui::menu_item(ui, "Down", "Cmd+Shift+D").clicked() {
+        if crate::widgets::menu_item(ui, "Down", "Cmd+Shift+D").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Column, false));
         }
-        if ui::menu_item(ui, "Left", "").clicked() {
+        if crate::widgets::menu_item(ui, "Left", "").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Row, true));
         }
-        if ui::menu_item(ui, "Up", "").clicked() {
+        if crate::widgets::menu_item(ui, "Up", "").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Column, true));
         }
     });
     ui.separator();
-    if ui::menu_item(ui, "New tab", "Cmd+T").clicked() {
+    if crate::widgets::menu_item(ui, "New tab", "Cmd+T").clicked() {
         *action = Some(PaneAction::NewTab);
     }
-    if ui::menu_item(ui, "Close pane", "Cmd+W").clicked() {
+    if crate::widgets::menu_item(ui, "Close pane", "Cmd+W").clicked() {
         *action = Some(PaneAction::Close(path.to_vec()));
     }
 }
@@ -144,7 +145,7 @@ impl Stdusk {
                 let bold_font = self.bold_font_ready.then(|| {
                     egui::FontId::new(
                         self.cfg.appearance.font_size * self.zoom,
-                        egui::FontFamily::Name(crate::BOLD_FONT_FAMILY.into()),
+                        egui::FontFamily::Name(crate::fonts::BOLD_FONT_FAMILY.into()),
                     )
                 });
                 let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
@@ -296,7 +297,7 @@ impl Stdusk {
                                 // Alt+wheel sends arrow keys instead of scrolling, one per line
                                 // (Tabby's mousewheel handler - gated on Alt alone). An explicit
                                 // user override, so it wins even over app mouse reporting.
-                                term.send(&ui::alt_scroll_bytes(lines));
+                                term.send(&crate::keys::alt_scroll_bytes(lines));
                             } else if mr.reports_buttons() && mr.sgr {
                                 // The app asked for real mouse reporting: wheel -> SGR 1006 events
                                 // at the pointer's cell, so its fullscreen TUI scrolls (Claude
@@ -308,13 +309,13 @@ impl Stdusk {
                                 // Clamp the report count: unlike local scroll (which alacritty
                                 // caps to available history), the app has no backstop, so an
                                 // accelerated frame of many lines would over-scroll its TUI.
-                                let reports = crate::terminal::wheel_report_lines(lines);
-                                term.send(&crate::terminal::wheel_sgr(reports, col, row));
+                                let reports = crate::mouse::wheel_report_lines(lines);
+                                term.send(&crate::mouse::wheel_sgr(reports, col, row));
                             } else if mr.alternate_scroll && term.is_alt_screen() {
                                 // Alt-screen app without real mouse reporting (less/pager): wheel
                                 // emits arrow keys (xterm alternateScroll), since the alt grid has
                                 // no scrollback to move.
-                                term.send(&ui::alt_scroll_bytes(lines));
+                                term.send(&crate::keys::alt_scroll_bytes(lines));
                             } else {
                                 term.scroll(lines);
                             }
@@ -369,12 +370,8 @@ impl Stdusk {
                         && !term.mouse_reporting().reports_buttons()
                         && let Some(p) = resp.interact_pointer_pos()
                     {
-                        let lines = crate::terminal::drag_autoscroll_lines(
-                            p.y,
-                            rect.top(),
-                            rect.bottom(),
-                            ch,
-                        );
+                        let lines =
+                            crate::mouse::drag_autoscroll_lines(p.y, rect.top(), rect.bottom(), ch);
                         if lines != 0 {
                             term.scroll(lines);
                             ctx.request_repaint();

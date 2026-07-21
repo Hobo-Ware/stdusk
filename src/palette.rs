@@ -178,10 +178,16 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(ui::overlay_frame())
+            .frame(crate::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 64.0))
             .show(ctx, |ui| {
-                let r = ui::text_field(ui, &mut st.query, "Type a command", ROW_W, colors::fg());
+                let r = crate::widgets::text_field(
+                    ui,
+                    &mut st.query,
+                    "Type a command",
+                    ROW_W,
+                    colors::fg(),
+                );
                 // Focus ONCE on open. Re-requesting every frame would stop egui from ever
                 // reporting lost_focus (same bug as rename/find - see ui.md).
                 if st.focus {

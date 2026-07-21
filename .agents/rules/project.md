@@ -28,11 +28,16 @@ drop-down, theming, tab management) plus a first-party AI agent Tabby lacks.
 ```
 src/
   main.rs        Stdusk app state + eframe::App loop (keybinds, quake window/hotkey, tray, session/CLI polling)
+  macos.rs       objc2/AppKit glue: dock policy, unified titlebar, traffic-light centering, window alpha, Cmd+V image monitor, notifications
+  fonts.rs       font resolution (core-text family lookup, bold face, Nerd Fonts) + egui FontDefinitions build
   tabs.rs        Tab model + spawn, tab-bar panel, tab menu, tab-management methods
   workspace.rs   central panel: pane tiling/render, input/paste routing, splitters, pane menu
   finder.rs      Cmd+F scrollback-search bar + multiline paste-confirm modal
-  ui.rs          pure UI helpers extracted from the render loop (testable)
+  ui.rs          pure UI helpers extracted from the render loop (grid render, draw_tab, pos_to_cell)
+  widgets.rs     design-system egui primitives (text_field, num_field, slider, chip, toggle_switch, focus_ring, icon buttons)
+  keys.rs        keyboard input encoding (key_to_bytes, ctrl/alt sequences, hotkey parse/match)
   terminal.rs    PtyTerm: pty spawn, reader thread, alacritty Term, grid snapshot, selection
+  mouse.rs       SGR 1006 mouse reporting (wheel/click encoding, drag autoscroll) gated on TermMode
   pane.rs        binary split tree: layout, focus paths, splitters, neighbor navigation
   config.rs      TOML config + hotkey string parsing
   colors.rs      Theme + alacritty Color -> Color32 + derived chrome colors

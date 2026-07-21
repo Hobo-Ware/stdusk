@@ -454,7 +454,7 @@ fn row_new_tabs(ui: &mut egui::Ui, name: &str, desc: &str, control: impl FnOnce(
 
 /// A fraction slider displayed as a live percentage chip ("85%"). Returns true while changed.
 fn pct_slider(ui: &mut egui::Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
-    ui::slider(ui, value, range, |v| format!("{:.0}%", v * 100.0)).changed()
+    crate::widgets::slider(ui, value, range, |v| format!("{:.0}%", v * 100.0)).changed()
 }
 
 /// A link-style row (About section): icon + title + dim subtitle, whole row clickable.
@@ -487,7 +487,7 @@ fn link_row(ui: &mut egui::Ui, icon: &str, name: &str, desc: &str) -> egui::Resp
         egui::FontId::proportional(11.0),
         colors::dim(),
     );
-    ui::focus_ring(ui, &resp, 9.0);
+    crate::widgets::focus_ring(ui, &resp, 9.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -523,7 +523,7 @@ fn nav_row(ui: &mut egui::Ui, section: Section, selected: bool) -> egui::Respons
         egui::FontId::proportional(14.0),
         text_col,
     );
-    ui::focus_ring(ui, &resp, 8.0);
+    crate::widgets::focus_ring(ui, &resp, 8.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -688,7 +688,7 @@ fn scheme_row(ui: &mut egui::Ui, name: &str, t: &Theme, active: bool) -> egui::R
         );
         sx += sw + gap;
     }
-    ui::focus_ring(ui, &resp, 9.0);
+    crate::widgets::focus_ring(ui, &resp, 9.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -762,7 +762,7 @@ fn searchable_dropdown(
         egui::FontId::proportional(12.0),
         colors::dim(),
     );
-    ui::focus_ring(ui, &resp, 7.0);
+    crate::widgets::focus_ring(ui, &resp, 7.0);
     if resp.clicked() {
         st.dropdown_open = if open { None } else { Some(id) };
         st.dropdown_filter.clear();
@@ -788,9 +788,15 @@ fn searchable_dropdown(
         .order(egui::Order::Foreground)
         .fixed_pos(rect.left_bottom() + egui::vec2(0.0, 4.0))
         .show(ui.ctx(), |ui| {
-            ui::overlay_frame().show(ui, |ui| {
+            crate::widgets::overlay_frame().show(ui, |ui| {
                 ui.set_width(280.0);
-                let r = ui::text_field(ui, &mut st.dropdown_filter, hint, 264.0, colors::fg());
+                let r = crate::widgets::text_field(
+                    ui,
+                    &mut st.dropdown_filter,
+                    hint,
+                    264.0,
+                    colors::fg(),
+                );
                 if st.dropdown_focus {
                     r.request_focus();
                     st.dropdown_focus = false;
@@ -840,7 +846,7 @@ fn dropdown_row(ui: &mut egui::Ui, text: &str, active: bool, highlighted: bool) 
         egui::FontId::proportional(13.0),
         if active { colors::accent() } else { colors::fg() },
     );
-    ui::focus_ring(ui, &resp, 6.0);
+    crate::widgets::focus_ring(ui, &resp, 6.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -868,7 +874,7 @@ fn scheme_dropdown(
                 ("Light", BrightFilter::Light),
                 ("Dark", BrightFilter::Dark),
             ] {
-                if ui::chip(ui, label, bright == f).clicked() {
+                if crate::widgets::chip(ui, label, bright == f).clicked() {
                     st.dropdown_bright = Some(f);
                     bright = f; // applies this frame, not next
                 }
@@ -938,7 +944,7 @@ fn font_dropdown(
     value: &mut String,
 ) -> bool {
     const DEFAULT_LABEL: &str = "Default (bundled)";
-    let all = crate::installed_families();
+    let all = crate::fonts::installed_families();
     let label = if value.is_empty() { DEFAULT_LABEL.to_owned() } else { value.clone() };
     let hint = format!("Search {} font families", all.len());
     searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st, field| {
@@ -1018,7 +1024,7 @@ fn appearance_section(
     let a = &mut cfg.appearance;
     rows(ui, |ui| {
         row(ui, "Follow system appearance", "Switch themes with the macOS light/dark mode", |ui| {
-            ui::toggle_switch(ui, &mut a.follow_system);
+            crate::widgets::toggle_switch(ui, &mut a.follow_system);
         });
         if a.follow_system {
             row(ui, "Light theme", "Applied while macOS is light", |ui| {
@@ -1055,7 +1061,7 @@ fn appearance_section(
             ui.horizontal(|ui| {
                 for (label, value) in [("Fixed", "fixed"), ("Dynamic", "dynamic")] {
                     let selected = ui::tab_width_mode(&a.tab_width) == ui::tab_width_mode(value);
-                    if ui::chip(ui, label, selected).clicked() {
+                    if crate::widgets::chip(ui, label, selected).clicked() {
                         a.tab_width = value.into();
                     }
                 }
@@ -1072,7 +1078,7 @@ fn appearance_section(
             "Terminal font family - Nerd Fonts supported",
             "Empty uses the bundled default; applies when the field loses focus",
             |ui| {
-                let r = ui::text_field(
+                let r = crate::widgets::text_field(
                     ui,
                     &mut a.font,
                     "e.g. JetBrainsMono Nerd Font",
@@ -1090,10 +1096,10 @@ fn appearance_section(
             }
         });
         row(ui, "Font size", "", |ui| {
-            ui::slider(ui, &mut a.font_size, 9.0..=24.0, |v| format!("{v:.0} pt"));
+            crate::widgets::slider(ui, &mut a.font_size, 9.0..=24.0, |v| format!("{v:.0} pt"));
         });
         row(ui, "Line padding", "Extra pixels added to each line's height", |ui| {
-            ui::slider(ui, &mut a.line_padding, 0.0..=8.0, |v| format!("{v:.0} px"));
+            crate::widgets::slider(ui, &mut a.line_padding, 0.0..=8.0, |v| format!("{v:.0} px"));
         });
         row_full(
             ui,
@@ -1101,11 +1107,13 @@ fn appearance_section(
             "Nudge text toward black/white until it meets a WCAG contrast ratio",
             "1 = off (the default); Tabby ships 4; 4.5 = WCAG AA",
             |ui| {
-                ui::slider(ui, &mut t.minimum_contrast, 1.0..=21.0, |v| format!("{v:.1}"));
+                crate::widgets::slider(ui, &mut t.minimum_contrast, 1.0..=21.0, |v| {
+                    format!("{v:.1}")
+                });
             },
         );
         row(ui, "Ligatures", "Draw common code sequences as single glyphs", |ui| {
-            ui::toggle_switch(ui, &mut t.ligatures);
+            crate::widgets::toggle_switch(ui, &mut t.ligatures);
             ui.add_space(10.0);
             lig_preview(ui, t.ligatures);
         });
@@ -1114,7 +1122,7 @@ fn appearance_section(
             "Bold in bright colors",
             "Draw bold text with the bright ANSI palette",
             |ui| {
-                ui::toggle_switch(ui, &mut t.bold_bright);
+                crate::widgets::toggle_switch(ui, &mut t.bold_bright);
             },
         );
     });
@@ -1127,14 +1135,14 @@ fn appearance_section(
                     [("Block", "block"), ("Underline", "underline"), ("Beam", "beam")]
                 {
                     let selected = ui::cursor_style(&t.cursor) == ui::cursor_style(value);
-                    if ui::chip(ui, label, selected).clicked() {
+                    if crate::widgets::chip(ui, label, selected).clicked() {
                         t.cursor = value.into();
                     }
                 }
             });
         });
         row(ui, "Blink the cursor", "", |ui| {
-            ui::toggle_switch(ui, &mut t.cursor_blink);
+            crate::widgets::toggle_switch(ui, &mut t.cursor_blink);
         });
     });
     fx
@@ -1159,21 +1167,34 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
     subheading(ui, "Behavior");
     rows(ui, |ui| {
         row_new_tabs(ui, "Scrollback lines", "History kept per pane", |ui| {
-            ui::num_field(ui, "scrollback", &mut t.scrollback_lines, 100..=1_000_000, 1000, 110.0);
+            crate::widgets::num_field(
+                ui,
+                "scrollback",
+                &mut t.scrollback_lines,
+                100..=1_000_000,
+                1000,
+                110.0,
+            );
         });
         row_new_tabs(
             ui,
             "Shell integration",
             "OSC 133 command marks for done/failed state",
             |ui| {
-                ui::toggle_switch(ui, &mut t.shell_integration);
+                crate::widgets::toggle_switch(ui, &mut t.shell_integration);
             },
         );
         row_new_tabs(ui, "Detect progress", "Track % output as a tab progress bar", |ui| {
-            ui::toggle_switch(ui, &mut t.detect_progress);
+            crate::widgets::toggle_switch(ui, &mut t.detect_progress);
         });
         row_new_tabs(ui, "Word separators", "Characters that end a double-click selection", |ui| {
-            ui::text_field(ui, &mut t.word_separators, "separators", 180.0, colors::fg());
+            crate::widgets::text_field(
+                ui,
+                &mut t.word_separators,
+                "separators",
+                180.0,
+                colors::fg(),
+            );
         });
         row(ui, "On shell exit", "Close the pane, keep it with a banner, or respawn", |ui| {
             ui.horizontal(|ui| {
@@ -1181,30 +1202,30 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 {
                     let selected =
                         terminal::on_exit_mode(&t.on_exit) == terminal::on_exit_mode(value);
-                    if ui::chip(ui, label, selected).clicked() {
+                    if crate::widgets::chip(ui, label, selected).clicked() {
                         t.on_exit = value.into();
                     }
                 }
             });
         });
         row(ui, "Dynamic tab title", "Follow the title the shell sets (OSC 0/2)", |ui| {
-            ui::toggle_switch(ui, &mut t.dynamic_title);
+            crate::widgets::toggle_switch(ui, &mut t.dynamic_title);
         });
         row(ui, "AI CLI badges", "Badge tabs running a known AI CLI", |ui| {
-            ui::toggle_switch(ui, &mut t.detect_clis);
+            crate::widgets::toggle_switch(ui, &mut t.detect_clis);
         });
         row(ui, "Notify when done", "Long command finishes while hidden", |ui| {
-            ui::toggle_switch(ui, &mut t.notify_on_done);
+            crate::widgets::toggle_switch(ui, &mut t.notify_on_done);
         });
         row(ui, "Option sends Meta", "ESC-prefixed keys instead of composed chars", |ui| {
-            ui::toggle_switch(ui, &mut t.alt_is_meta);
+            crate::widgets::toggle_switch(ui, &mut t.alt_is_meta);
         });
         row(
             ui,
             "Confirm closing busy tabs",
             "Ask before closing a tab with a running process",
             |ui| {
-                ui::toggle_switch(ui, &mut t.warn_on_close_running);
+                crate::widgets::toggle_switch(ui, &mut t.warn_on_close_running);
             },
         );
     });
@@ -1212,26 +1233,26 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
     subheading(ui, "Paste");
     rows(ui, |ui| {
         row(ui, "Warn on multiline paste", "Confirm before pasting multiple lines", |ui| {
-            ui::toggle_switch(ui, &mut t.warn_on_multiline_paste);
+            crate::widgets::toggle_switch(ui, &mut t.warn_on_multiline_paste);
         });
         row(ui, "Trim whitespace", "Strip leading/trailing whitespace from pastes", |ui| {
-            ui::toggle_switch(ui, &mut t.trim_whitespace_on_paste);
+            crate::widgets::toggle_switch(ui, &mut t.trim_whitespace_on_paste);
         });
         row(ui, "Newlines to spaces", "Collapse pasted newlines into single spaces", |ui| {
-            ui::toggle_switch(ui, &mut t.replace_newlines_on_paste);
+            crate::widgets::toggle_switch(ui, &mut t.replace_newlines_on_paste);
         });
     });
 
     subheading(ui, "Mouse");
     rows(ui, |ui| {
         row(ui, "Clickable links", "Open URLs and file paths on click", |ui| {
-            ui::toggle_switch(ui, &mut t.clickable_links);
+            crate::widgets::toggle_switch(ui, &mut t.clickable_links);
         });
         row(ui, "Copy on select", "Clipboard updates when a selection finishes", |ui| {
-            ui::toggle_switch(ui, &mut t.copy_on_select);
+            crate::widgets::toggle_switch(ui, &mut t.copy_on_select);
         });
         row(ui, "Paste on middle click", "", |ui| {
-            ui::toggle_switch(ui, &mut t.paste_on_middle_click);
+            crate::widgets::toggle_switch(ui, &mut t.paste_on_middle_click);
         });
         row(ui, "Right click", "Paste/Copy act on a quick tap; holding opens the menu", |ui| {
             ui.horizontal(|ui| {
@@ -1240,14 +1261,14 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 {
                     let selected =
                         ui::right_click_mode(&t.right_click) == ui::right_click_mode(value);
-                    if ui::chip(ui, label, selected).clicked() {
+                    if crate::widgets::chip(ui, label, selected).clicked() {
                         t.right_click = value.into();
                     }
                 }
             });
         });
         row(ui, "Focus follows mouse", "Hovering a split pane focuses it (no click)", |ui| {
-            ui::toggle_switch(ui, &mut t.focus_follows_mouse);
+            crate::widgets::toggle_switch(ui, &mut t.focus_follows_mouse);
         });
     });
 
@@ -1287,7 +1308,7 @@ fn inline_icon(ui: &mut egui::Ui, id: egui::Id, center: egui::Pos2, icon: &str, 
         egui::FontId::proportional(14.0),
         if hovered { colors::fg() } else { colors::dim() },
     );
-    ui::focus_ring(ui, &resp, 6.0);
+    crate::widgets::focus_ring(ui, &resp, 6.0);
     resp.clicked()
 }
 
@@ -1339,7 +1360,7 @@ fn profile_row(
         egui::FontId::proportional(11.0),
         colors::dim(),
     );
-    ui::focus_ring(ui, &resp, 9.0);
+    crate::widgets::focus_ring(ui, &resp, 9.0);
     // Trailing icons, right to left: Delete, Duplicate, Launch.
     let mut x = rect.right() - 22.0;
     let mut hits = [false; 3];
@@ -1371,11 +1392,11 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
     subheading(ui, "Edit profile");
     rows(ui, |ui| {
         row(ui, "Name", "", |ui| {
-            ui::text_field(ui, &mut p.name, "profile name", 200.0, colors::fg());
+            crate::widgets::text_field(ui, &mut p.name, "profile name", 200.0, colors::fg());
         });
         row_full(ui, "Shell", "Command run for this profile's tabs", "Empty uses $SHELL", |ui| {
             let mut buf = p.shell.clone().unwrap_or_default();
-            if ui::text_field(ui, &mut buf, "/bin/zsh", 200.0, colors::fg()).changed() {
+            if crate::widgets::text_field(ui, &mut buf, "/bin/zsh", 200.0, colors::fg()).changed() {
                 p.shell = (!buf.is_empty()).then_some(buf);
             }
         });
@@ -1385,7 +1406,14 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
             "Extra shell arguments",
             "Space-separated; quote to keep spaces",
             |ui| {
-                if ui::text_field(ui, &mut st.profile_args, "-l -i", 200.0, colors::fg()).changed()
+                if crate::widgets::text_field(
+                    ui,
+                    &mut st.profile_args,
+                    "-l -i",
+                    200.0,
+                    colors::fg(),
+                )
+                .changed()
                 {
                     p.args = split_args(&st.profile_args);
                 }
@@ -1393,13 +1421,13 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
         );
         row_full(ui, "Working directory", "", "~ expands to your home", |ui| {
             let mut buf = p.cwd.clone().unwrap_or_default();
-            if ui::text_field(ui, &mut buf, "~/Git", 200.0, colors::fg()).changed() {
+            if crate::widgets::text_field(ui, &mut buf, "~/Git", 200.0, colors::fg()).changed() {
                 p.cwd = (!buf.is_empty()).then_some(buf);
             }
         });
         row(ui, "Tab color", "", |ui| {
             ui.vertical(|ui| {
-                if ui::chip(ui, "No color", p.color.is_none()).clicked() {
+                if crate::widgets::chip(ui, "No color", p.color.is_none()).clicked() {
                     p.color = None;
                 }
                 ui.add_space(4.0);
@@ -1408,8 +1436,12 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for &c in swatch_row {
                             let hex = crate::session::color_to_hex(c);
-                            if ui::color_swatch(ui, c, p.color.as_deref() == Some(hex.as_str()))
-                                .clicked()
+                            if crate::widgets::color_swatch(
+                                ui,
+                                c,
+                                p.color.as_deref() == Some(hex.as_str()),
+                            )
+                            .clicked()
                             {
                                 p.color = Some(hex);
                             }
@@ -1425,10 +1457,11 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
     let mut remove: Option<usize> = None;
     for (ri, (k, v)) in st.profile_env.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            env_changed |= ui::text_field(ui, k, "NAME", 150.0, colors::fg()).changed();
+            env_changed |= crate::widgets::text_field(ui, k, "NAME", 150.0, colors::fg()).changed();
             ui.label(egui::RichText::new("=").color(colors::dim()));
-            env_changed |= ui::text_field(ui, v, "value", 200.0, colors::fg()).changed();
-            if ui::icon_button(ui, icons::TRASH, "Remove variable").clicked() {
+            env_changed |=
+                crate::widgets::text_field(ui, v, "value", 200.0, colors::fg()).changed();
+            if crate::widgets::icon_button(ui, icons::TRASH, "Remove variable").clicked() {
                 remove = Some(ri);
             }
         });
@@ -1438,7 +1471,7 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
         env_changed = true;
     }
     ui.add_space(4.0);
-    if ui::action_button(ui, "Add variable", false).clicked() {
+    if crate::widgets::action_button(ui, "Add variable", false).clicked() {
         st.profile_env.push((String::new(), String::new()));
     }
     if env_changed {
@@ -1488,7 +1521,7 @@ fn profiles_section(
         ui.label(egui::RichText::new("No profiles yet.").color(colors::dim()));
     }
     ui.add_space(8.0);
-    if ui::action_button(ui, "Add profile", true).clicked() {
+    if crate::widgets::action_button(ui, "Add profile", true).clicked() {
         act = Some(ProfileAct::Add);
     }
     match act {
@@ -1545,9 +1578,9 @@ fn hotkey_row(
     fx: &mut HotkeysFx,
 ) {
     row(ui, name, &format!("Default {default}"), |ui| {
-        let invalid = !value.trim().is_empty() && ui::parse_hotkey_spec(value).is_none();
+        let invalid = !value.trim().is_empty() && crate::keys::parse_hotkey_spec(value).is_none();
         let color = if invalid { colors::red() } else { colors::fg() };
-        let r = ui::text_field(ui, value, "unbound", 160.0, color);
+        let r = crate::widgets::text_field(ui, value, "unbound", 160.0, color);
         if r.lost_focus() && invalid {
             fx.invalid = Some(value.clone());
         }
@@ -1599,7 +1632,7 @@ fn hotkeys_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> HotkeysFx {
         hotkey_row(ui, "Settings", &d.settings, &mut h.settings, &mut fx);
     });
     ui.add_space(14.0);
-    if ui::action_button(ui, "Reset to defaults", false).clicked() {
+    if crate::widgets::action_button(ui, "Reset to defaults", false).clicked() {
         *h = d;
     }
     fx
@@ -1631,7 +1664,7 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
                     for (label, value) in [("Dropdown", "dropdown"), ("Window", "window")] {
                         let selected =
                             config::window_mode(&cfg.quake.mode) == config::window_mode(value);
-                        if ui::chip(ui, label, selected).clicked() && !selected {
+                        if crate::widgets::chip(ui, label, selected).clicked() && !selected {
                             cfg.quake.mode = value.into();
                             fx.mode_changed = true;
                         }
@@ -1646,8 +1679,13 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     rows(ui, |ui| {
         row(ui, "Global hotkey", "Applies when the field loses focus", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
-                let r =
-                    ui::text_field(ui, &mut q.hotkey, "e.g. Ctrl+Grave, F13", 180.0, colors::fg());
+                let r = crate::widgets::text_field(
+                    ui,
+                    &mut q.hotkey,
+                    "e.g. Ctrl+Grave, F13",
+                    180.0,
+                    colors::fg(),
+                );
                 if r.lost_focus() {
                     fx.hotkey_commit = true;
                 }
@@ -1664,7 +1702,7 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     rows(ui, |ui| {
         row(ui, "Hide on focus loss", "Hide when another app takes focus", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
-                ui::toggle_switch(ui, &mut q.hide_on_focus_loss);
+                crate::widgets::toggle_switch(ui, &mut q.hide_on_focus_loss);
             });
         });
         row(
@@ -1673,21 +1711,21 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
             "Drop onto whichever Space is active when summoned",
             |ui| {
                 ui.add_enabled_ui(!window_mode, |ui| {
-                    ui::toggle_switch(ui, &mut q.follow_active_space);
+                    crate::widgets::toggle_switch(ui, &mut q.follow_active_space);
                 });
             },
         );
         row(ui, "Hide from Dock", "Run as an accessory app (no Dock icon)", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
-                ui::toggle_switch(ui, &mut q.hide_from_dock);
+                crate::widgets::toggle_switch(ui, &mut q.hide_from_dock);
             });
         });
         row(ui, "Menu-bar icon", "Status item with Show/Hide and Quit", |ui| {
-            ui::toggle_switch(ui, &mut q.menu_bar_icon);
+            crate::widgets::toggle_switch(ui, &mut q.menu_bar_icon);
         });
         row(ui, "Dock icon while visible", "Show the Dock icon only while shown", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
-                ui::toggle_switch(ui, &mut q.dock_when_visible);
+                crate::widgets::toggle_switch(ui, &mut q.dock_when_visible);
             });
         });
     });
@@ -1703,7 +1741,7 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
             "Restore session",
             "Reopen last session's tabs (cwd, title, color) on launch",
             |ui| {
-                ui::toggle_switch(ui, &mut cfg.session.restore);
+                crate::widgets::toggle_switch(ui, &mut cfg.session.restore);
             },
         );
     });
@@ -1717,7 +1755,7 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
             "Git remote for config.toml + custom schemes",
             "Keep it private - e.g. gh repo create stdusk-settings --private",
             |ui| {
-                ui::text_field(
+                crate::widgets::text_field(
                     ui,
                     &mut cfg.sync.repo,
                     "git@github.com:you/stdusk-settings.git",
@@ -1733,17 +1771,17 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
             "Needs a sync repo above",
             |ui| {
                 ui.add_enabled_ui(!cfg.sync.repo.trim().is_empty(), |ui| {
-                    ui::toggle_switch(ui, &mut cfg.sync.auto);
+                    crate::widgets::toggle_switch(ui, &mut cfg.sync.auto);
                 });
             },
         );
         row(ui, "Sync now", "Uses your own git credentials (SSH key / helper)", |ui| {
             ui.add_enabled_ui(!busy && !cfg.sync.repo.trim().is_empty(), |ui| {
                 ui.horizontal(|ui| {
-                    if ui::action_button(ui, "Push", true).clicked() {
+                    if crate::widgets::action_button(ui, "Push", true).clicked() {
                         op = Some(sync::Op::Push);
                     }
-                    if ui::action_button(ui, "Pull", false)
+                    if crate::widgets::action_button(ui, "Pull", false)
                         .on_hover_text("Overwrites local settings with the repo's")
                         .clicked()
                     {
@@ -1884,7 +1922,7 @@ impl Stdusk {
         let mut bright = self.settings.scheme_bright.unwrap_or(auto);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(icons::MAGNIFYING_GLASS).size(15.0).color(colors::dim()));
-            ui::text_field(
+            crate::widgets::text_field(
                 ui,
                 &mut self.settings.filter,
                 &format!("Search {} color schemes", all.len()),
@@ -1897,7 +1935,7 @@ impl Stdusk {
                 ("Light", BrightFilter::Light),
                 ("Dark", BrightFilter::Dark),
             ] {
-                if ui::chip(ui, label, bright == f).clicked() {
+                if crate::widgets::chip(ui, label, bright == f).clicked() {
                     self.settings.scheme_bright = Some(f);
                     bright = f; // applies this frame, not next
                 }
@@ -1986,13 +2024,13 @@ impl Stdusk {
     fn settings_footer(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         let mut close = false;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui::action_button(ui, "Save", true).clicked() {
+            if crate::widgets::action_button(ui, "Save", true).clicked() {
                 self.save_settings(ctx);
             }
-            if ui::action_button(ui, "Close", false).clicked() {
+            if crate::widgets::action_button(ui, "Close", false).clicked() {
                 close = true;
             }
-            if ui::action_button(ui, "Revert", false).clicked() {
+            if crate::widgets::action_button(ui, "Revert", false).clicked() {
                 self.cfg = config::Config::load();
                 self.settings.baseline = Some(self.cfg.clone());
                 self.settings.profile_loaded = None; // buffers reload from the restored config
@@ -2251,7 +2289,7 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(ui::overlay_frame())
+            .frame(crate::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Unsaved changes").strong().color(colors::fg()));
@@ -2262,13 +2300,13 @@ impl Stdusk {
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui::action_button(ui, "Save", true).clicked() {
+                    if crate::widgets::action_button(ui, "Save", true).clicked() {
                         save = true;
                     }
-                    if ui::action_button(ui, "Discard", false).clicked() {
+                    if crate::widgets::action_button(ui, "Discard", false).clicked() {
                         discard = true;
                     }
-                    if ui::action_button(ui, "Keep editing", false).clicked() {
+                    if crate::widgets::action_button(ui, "Keep editing", false).clicked() {
                         keep = true;
                     }
                 });

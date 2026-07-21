@@ -8,12 +8,14 @@ use eframe::egui;
 use crate::config::{Config, Profile};
 use crate::progress::Progress;
 use crate::terminal::{self, PtyTerm};
-use crate::ui::{self, color_swatch, draw_tab, icon_button, icons, style_menu, tint};
+use crate::ui::{self, draw_tab, icons, tint};
+use crate::widgets::{color_swatch, icon_button, style_menu};
 use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch, session};
 
 /// Width the bar's right-side controls need: "+", the Tabs popup, the gear, and their
 /// spacing/spacer - reserved when splitting the rest into equal fixed-width tabs.
-const BAR_CONTROLS_W: f32 = 6.0 + ui::ICON_BTN_W * 2.0 + ui::ICON_TOGGLE_W + 3.0 * 4.0;
+const BAR_CONTROLS_W: f32 =
+    6.0 + crate::widgets::ICON_BTN_W * 2.0 + crate::widgets::ICON_TOGGLE_W + 3.0 * 4.0;
 
 /// Monotonic tab identity - stable across reorders/closes (used to target deferred actions).
 static NEXT_TAB_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -235,7 +237,7 @@ fn drag_swap_target(rects: &[egui::Rect], from: usize, pointer_x: f32) -> Option
 /// submenu and the "+" button's right-click menu.
 fn profile_menu_rows(ui: &mut egui::Ui, profiles: &[Profile], action: &mut Option<TabAction>) {
     for (pi, p) in profiles.iter().enumerate() {
-        if ui::menu_item(ui, &p.name, "").clicked() {
+        if crate::widgets::menu_item(ui, &p.name, "").clicked() {
             *action = Some(TabAction::NewWithProfile(pi));
         }
     }
@@ -261,11 +263,11 @@ fn tab_menu(
     // running child from the ~1 Hz procwatch cache - never a synchronous scan on menu open.
     if let Some(name) = proc {
         ui.add_enabled_ui(false, |ui| {
-            ui::menu_item(ui, &format!("Running: {name}"), "");
+            crate::widgets::menu_item(ui, &format!("Running: {name}"), "");
         });
         ui.separator();
     }
-    if ui::menu_item(ui, "New tab", &cfg.hotkeys.new_tab).clicked() {
+    if crate::widgets::menu_item(ui, "New tab", &cfg.hotkeys.new_tab).clicked() {
         *action = Some(TabAction::New);
     }
     if !cfg.profiles.is_empty() {
@@ -274,22 +276,26 @@ fn tab_menu(
             profile_menu_rows(ui, &cfg.profiles, action);
         });
     }
-    if ui::menu_item(ui, "Duplicate", "").clicked() {
+    if crate::widgets::menu_item(ui, "Duplicate", "").clicked() {
         *action = Some(TabAction::Duplicate(i));
     }
-    if ui::menu_item(ui, "Rename…", "double-click").clicked() {
+    if crate::widgets::menu_item(ui, "Rename…", "double-click").clicked() {
         *action = Some(TabAction::Rename(i));
     }
-    if ui::menu_item(ui, "Restart", "").clicked() {
+    if crate::widgets::menu_item(ui, "Restart", "").clicked() {
         *action = Some(TabAction::Restart(i));
     }
-    if ui::menu_item(ui, if pinned { "Unpin" } else { "Pin" }, "").clicked() {
+    if crate::widgets::menu_item(ui, if pinned { "Unpin" } else { "Pin" }, "").clicked() {
         *action = Some(TabAction::TogglePin(i));
     }
     // Notify on activity (Tabby's checkbox row): checked = the Phosphor check in the
     // shortcut slot. Per-tab, not persisted; one notification per unviewed stretch.
-    if ui::menu_item(ui, "Notify on activity", if notify_activity { icons::CHECK } else { "" })
-        .clicked()
+    if crate::widgets::menu_item(
+        ui,
+        "Notify on activity",
+        if notify_activity { icons::CHECK } else { "" },
+    )
+    .clicked()
     {
         *action = Some(TabAction::ToggleNotifyActivity(i));
     }
@@ -323,23 +329,23 @@ fn tab_menu(
         }
     });
     ui.separator();
-    if ui::menu_item(ui, "Move left", "Cmd+Shift+←").clicked() {
+    if crate::widgets::menu_item(ui, "Move left", "Cmd+Shift+←").clicked() {
         *action = Some(TabAction::MoveLeft(i));
     }
-    if ui::menu_item(ui, "Move right", "Cmd+Shift+→").clicked() {
+    if crate::widgets::menu_item(ui, "Move right", "Cmd+Shift+→").clicked() {
         *action = Some(TabAction::MoveRight(i));
     }
     ui.separator();
-    if ui::menu_item(ui, "Close", &cfg.hotkeys.close).clicked() {
+    if crate::widgets::menu_item(ui, "Close", &cfg.hotkeys.close).clicked() {
         *action = Some(TabAction::Close(i));
     }
-    if ui::menu_item(ui, "Close other tabs", "").clicked() {
+    if crate::widgets::menu_item(ui, "Close other tabs", "").clicked() {
         *action = Some(TabAction::CloseOthers(i));
     }
-    if ui::menu_item(ui, "Close tabs to the right", "").clicked() {
+    if crate::widgets::menu_item(ui, "Close tabs to the right", "").clicked() {
         *action = Some(TabAction::CloseRight(i));
     }
-    if ui::menu_item(ui, "Close tabs to the left", "").clicked() {
+    if crate::widgets::menu_item(ui, "Close tabs to the left", "").clicked() {
         *action = Some(TabAction::CloseLeft(i));
     }
 }
@@ -505,12 +511,12 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(ui::overlay_frame())
+            .frame(crate::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Rename tab").color(colors::dim()));
                 ui.add_space(6.0);
-                let r = ui::text_field(ui, &mut buf, "Tab name", 220.0, colors::fg());
+                let r = crate::widgets::text_field(ui, &mut buf, "Tab name", 220.0, colors::fg());
                 // Focus ONCE on open. Re-requesting every frame would stop egui from ever
                 // reporting the Enter-triggered lost_focus, so Enter would never commit.
                 if focus {
@@ -522,10 +528,10 @@ impl Stdusk {
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui::action_button(ui, "Rename", true).clicked() {
+                    if crate::widgets::action_button(ui, "Rename", true).clicked() {
                         commit = true;
                     }
-                    if ui::action_button(ui, "Cancel", false).clicked() {
+                    if crate::widgets::action_button(ui, "Cancel", false).clicked() {
                         cancel = true;
                     }
                 });
@@ -592,7 +598,7 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(ui::overlay_frame())
+            .frame(crate::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Close tab?").strong().color(colors::fg()));
@@ -600,10 +606,10 @@ impl Stdusk {
                 ui.label(egui::RichText::new(&msg).color(colors::dim()));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui::action_button(ui, "Close", true).clicked() {
+                    if crate::widgets::action_button(ui, "Close", true).clicked() {
                         confirm = true;
                     }
-                    if ui::action_button(ui, "Cancel", false).clicked() {
+                    if crate::widgets::action_button(ui, "Cancel", false).clicked() {
                         cancel = true;
                     }
                 });
@@ -696,7 +702,7 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(ui::overlay_frame())
+            .frame(crate::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Quit stdusk?").strong().color(colors::fg()));
@@ -704,10 +710,10 @@ impl Stdusk {
                 ui.label(egui::RichText::new(&msg).color(colors::dim()));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui::action_button(ui, "Quit", true).clicked() {
+                    if crate::widgets::action_button(ui, "Quit", true).clicked() {
                         confirm = true;
                     }
-                    if ui::action_button(ui, "Cancel", false).clicked() {
+                    if crate::widgets::action_button(ui, "Cancel", false).clicked() {
                         cancel = true;
                     }
                 });
@@ -792,7 +798,7 @@ impl Stdusk {
                     // that REPLACES it. `settings_extra` is the delta the swap adds beyond the
                     // gear the base already budgeted, so fixed tabs shrink by exactly that.
                     let settings_extra = if self.settings_tab {
-                        ui::SETTINGS_TAB_W + 4.0 - ui::ICON_TOGGLE_W
+                        ui::SETTINGS_TAB_W + 4.0 - crate::widgets::ICON_TOGGLE_W
                     } else {
                         0.0
                     };
@@ -928,13 +934,17 @@ impl Stdusk {
                         for (i, tab) in self.tabs.iter().enumerate() {
                             let shortcut =
                                 if i < 9 { format!("Cmd+{}", i + 1) } else { String::new() };
-                            if ui::menu_item(ui, &tab.title, &shortcut).clicked() {
+                            if crate::widgets::menu_item(ui, &tab.title, &shortcut).clicked() {
                                 clicked = Some(i);
                             }
                         }
                         ui.separator();
-                        if ui::menu_item(ui, "Command palette…", &self.cfg.hotkeys.palette)
-                            .clicked()
+                        if crate::widgets::menu_item(
+                            ui,
+                            "Command palette…",
+                            &self.cfg.hotkeys.palette,
+                        )
+                        .clicked()
                         {
                             action = Some(TabAction::OpenPalette);
                         }
@@ -948,7 +958,7 @@ impl Stdusk {
                     let right_w = if self.settings_tab {
                         ui::SETTINGS_TAB_W + 4.0
                     } else {
-                        ui::ICON_TOGGLE_W
+                        crate::widgets::ICON_TOGGLE_W
                     };
                     ui.add_space((ui.available_width() - right_w).max(0.0));
                     if self.settings_tab {
@@ -973,7 +983,8 @@ impl Stdusk {
                         }
                     } else {
                         let gear_tip = ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings);
-                        if ui::icon_toggle(ui, icons::GEAR, false, &gear_tip).clicked() {
+                        if crate::widgets::icon_toggle(ui, icons::GEAR, false, &gear_tip).clicked()
+                        {
                             self.open_settings();
                         }
                     }
