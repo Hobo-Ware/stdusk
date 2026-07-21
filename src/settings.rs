@@ -204,6 +204,11 @@ pub(crate) fn normalize_name(name: &str) -> String {
     name.to_ascii_lowercase().replace([' ', '_'], "-")
 }
 
+/// WCAG-AA legibility floor for the scheme-browser previews. The live grid nudges glyphs to the
+/// user's `terminal.minimum_contrast` (default 4); the browser applies THIS floor unconditionally
+/// so every scheme is readable while you're picking one, regardless of the live setting.
+pub(crate) const PREVIEW_MIN_CONTRAST: f32 = 4.5;
+
 /// Indices of schemes whose name contains `query` (case-insensitive); all when empty.
 pub(crate) fn filter_schemes(all: &[(String, Theme)], query: &str) -> Vec<usize> {
     let q = query.trim().to_ascii_lowercase();
@@ -565,7 +570,13 @@ fn preview_card(ui: &mut egui::Ui, theme: &Theme, opts: &PreviewOpts) {
         let mut x = rect.left() + pad.x;
         let y = rect.top() + pad.y + li as f32 * line_h;
         for run in *line {
-            let color = ink_color(theme, run.ink);
+            // The preview must show what the LIVE grid shows, not raw theme colors: the terminal
+            // nudges every glyph to `minimum_contrast`, so a low-contrast scheme reads fine live
+            // but looked unreadable here. Floor the ink against its actual bg (WCAG AA) so every
+            // scheme previews legibly - no scheme-data mangling needed.
+            let run_bg = run.bg.map_or(theme.bg, |b| ink_color(theme, b));
+            let color =
+                colors::ensure_contrast(ink_color(theme, run.ink), run_bg, PREVIEW_MIN_CONTRAST);
             let text =
                 if opts.ligatures { ui::apply_ligatures(run.text) } else { run.text.to_owned() };
             let galley = painter.layout_no_wrap(text, font.clone(), color);
@@ -660,7 +671,7 @@ fn scheme_row(ui: &mut egui::Ui, name: &str, t: &Theme, active: bool) -> egui::R
         egui::FontId::proportional(13.0),
         // UI label, not preview fidelity: a handful of pack schemes ship fg-vs-bg under 3:1
         // (a11y audit) - nudge so every row name stays readable. The swatches show the truth.
-        colors::ensure_contrast(t.fg, t.bg, 3.0),
+        colors::ensure_contrast(t.fg, t.bg, PREVIEW_MIN_CONTRAST),
     );
     // 16 ANSI swatches, right-aligned.
     let (sw, gap) = (11.0, 3.0);
