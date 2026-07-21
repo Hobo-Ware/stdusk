@@ -261,6 +261,7 @@ struct Stdusk {
     window_top: Option<bool>, // last-applied always-on-top state (re-applied when it changes)
     space_all: Option<bool>, // last-applied "join all Spaces" collectionBehavior (re-applied on change)
     titlebar_unified: Option<bool>, // last-applied unified-titlebar state (window mode; re-applied on change)
+    traffic_baseline: Option<f64>, // captured default y of the macOS window buttons (window mode centering)
     cmdv_paste: Arc<AtomicUsize>, // Cmd+V image-paste requests from the NSEvent monitor, drained in ui()
     fx_opacity: f32, // this frame's effective window opacity (unfocused dim applied); derived
     color_preview: Option<(u64, Option<egui::Color32>)>, // Color-menu swatch hover preview (tab id, color)
@@ -527,6 +528,7 @@ impl Stdusk {
             window_top: None,
             space_all: None,
             titlebar_unified: None,
+            traffic_baseline: None,
             cmdv_paste,
             fx_opacity,
             color_preview: None,
@@ -705,6 +707,43 @@ fn set_unified_titlebar(enabled: bool) {
 }
 #[cfg(not(target_os = "macos"))]
 fn set_unified_titlebar(_enabled: bool) {}
+
+/// How far (points) to lower the traffic lights from their macOS default position so their row
+/// centres on the taller tab strip. Dialed in by eye against a real window-mode window (the
+/// headless harness can't render OS buttons). Unflipped coords: down = subtract.
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHT_DROP: f64 = 6.0;
+
+/// Re-anchor the three standard window buttons onto the tab row. On the FIRST call `baseline`
+/// captures their macOS-default y (before we ever move them); every call then sets an ABSOLUTE
+/// `baseline - DROP`, so re-applying is idempotent (no per-frame drift) and can't fling them
+/// off-screen the way the 1.4.1 window-height math did. Called each window-mode frame because
+/// macOS re-lays the buttons out on resize/fullscreen/key changes. The three buttons share a row
+/// (same y), so one baseline covers all; their x is left untouched.
+#[cfg(target_os = "macos")]
+fn center_window_buttons(baseline: &mut Option<f64>) {
+    use objc2_app_kit::{NSApplication, NSWindowButton};
+    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    let windows = app.windows();
+    for i in 0..windows.count() {
+        let w = windows.objectAtIndex(i);
+        for b in [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ] {
+            if let Some(btn) = w.standardWindowButton(b) {
+                let mut o = btn.frame().origin;
+                let base = *baseline.get_or_insert(o.y);
+                o.y = base - TRAFFIC_LIGHT_DROP;
+                btn.setFrameOrigin(o);
+            }
+        }
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn center_window_buttons(_baseline: &mut Option<f64>) {}
 
 /// Set every app window's alpha (0.0 = invisible, 1.0 = opaque). Used to make the parked quake
 /// sliver invisible while hidden WITHOUT ordering the window out or moving it off-screen (either
@@ -1012,6 +1051,7 @@ impl eframe::App for Stdusk {
                     set_unified_titlebar(true);
                     self.titlebar_unified = Some(true);
                 }
+                center_window_buttons(&mut self.traffic_baseline);
                 // No always-on-top, no forced quake geometry, and it never auto-hides. Mark the
                 // level Normal once; the red close button / last-window-closed quits via winit's
                 // default CloseRequested handling.
@@ -1645,6 +1685,20 @@ fn main() -> eframe::Result<()> {
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("stdusk {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+
+    // `--state-dir DIR`: run fully isolated - config, single-instance socket, and session live
+    // under DIR instead of $HOME, so a dev instance coexists with the stable install without
+    // tripping its single-instance guard. Must run BEFORE anything reads $HOME (Config::load,
+    // socket_path). Single-threaded here, so the edition-2024 `set_var` is sound.
+    #[allow(unsafe_code)]
+    unsafe {
+        if let Some(dir) =
+            args.iter().position(|a| a == "--state-dir").and_then(|i| args.get(i + 1))
+        {
+            std::env::set_var("HOME", dir);
+            std::env::set_var("XDG_RUNTIME_DIR", dir);
+        }
     }
 
     let mut cfg = Config::load();
