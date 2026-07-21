@@ -706,54 +706,22 @@ fn set_unified_titlebar(enabled: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_unified_titlebar(_enabled: bool) {}
 
-/// Extra points to lower the traffic-light cluster BELOW the computed tab-row centre. macOS pins
-/// the three window buttons near the very top of the titlebar (centre ~y=14), higher than the
-/// TAB_H-tall pills, so we re-anchor them onto the tab row instead of fighting it with strip
-/// height. Positive = lower. Eyeball-tuned starting at 0 (centre exactly on the row midpoint).
-///
-/// NEEDS LIVE VERIFICATION: the OS-drawn lights do NOT render in the headless `--screenshot`
-/// harness, so neither this magnitude nor the vertical DIRECTION can be checked in CI - confirm on
-/// a real macOS window and flip the sign in `center_window_buttons` if they end up too high/low.
+/// Set every app window's alpha (0.0 = invisible, 1.0 = opaque). Used to make the parked quake
+/// sliver invisible while hidden WITHOUT ordering the window out or moving it off-screen (either
+/// of which parks eframe's run loop so the hotkey can't reshow it - see `apply_visibility`). An
+/// alpha-0 window still occupies its rect on-screen and keeps drawing, so the loop stays warm.
 #[cfg(target_os = "macos")]
-const TRAFFIC_LIGHT_DROP: f32 = 0.0;
-
-/// Re-anchor the three standard window buttons (close/miniaturize/zoom) so the cluster's vertical
-/// centre lands on the tab strip's centre. Called every window-mode frame from the same reconcile
-/// as the other window-chrome tweaks, because macOS re-lays these buttons out on resize /
-/// fullscreen / key changes - a one-shot move wouldn't stick. `strip_h` is the full tab-strip
-/// height in points. No-op off macOS / in dropdown mode (the caller only invokes it in window mode).
-#[cfg(target_os = "macos")]
-fn center_window_buttons(strip_h: f32) {
-    use objc2_app_kit::{NSApplication, NSWindowButton};
+fn set_window_alpha(alpha: f64) {
+    use objc2_app_kit::NSApplication;
     let Some(mtm) = objc2::MainThreadMarker::new() else { return };
     let app = NSApplication::sharedApplication(mtm);
     let windows = app.windows();
     for i in 0..windows.count() {
-        let w = windows.objectAtIndex(i);
-        // Unflipped titlebar coords: y grows UP from the window bottom. With FullSizeContentView the
-        // content view (and its tab strip) reaches the window top at y = win_h, so the tab-row
-        // centre sits strip_h/2 below that. Placing a button's centre there => origin.y = win_h -
-        // strip_h/2 - btn_h/2. Computed absolutely (never a per-frame decrement) so re-applying is
-        // idempotent and can't drift. TRAFFIC_LIGHT_DROP lowers it further (direction: verify live).
-        let win_h = w.frame().size.height;
-        for b in [
-            NSWindowButton::CloseButton,
-            NSWindowButton::MiniaturizeButton,
-            NSWindowButton::ZoomButton,
-        ] {
-            if let Some(btn) = w.standardWindowButton(b) {
-                let mut origin = btn.frame().origin;
-                origin.y = win_h
-                    - f64::from(strip_h) / 2.0
-                    - btn.frame().size.height / 2.0
-                    - f64::from(TRAFFIC_LIGHT_DROP);
-                btn.setFrameOrigin(origin);
-            }
-        }
+        windows.objectAtIndex(i).setAlphaValue(alpha);
     }
 }
 #[cfg(not(target_os = "macos"))]
-fn center_window_buttons(_strip_h: f32) {}
+fn set_window_alpha(_alpha: f64) {}
 
 /// Whether the whole app is the active (frontmost) macOS app. This stays TRUE when a *system*
 /// panel (the emoji/character viewer, Ctrl+Cmd+Space) takes the key window - unlike winit's
@@ -843,16 +811,18 @@ fn notify_done(title: &str, code: i32) {
     notify(&format!("{title}: command {status}"));
 }
 
-/// Show (drop to the top edge, focused) or hide the quake window by parking it just off the
-/// BOTTOM edge, leaving a ~2px sliver on-screen. DO NOT "fully hide" this: a window with zero
-/// pixels on-screen (whether via `orderOut:`/`set_visible(false)` OR parked fully off-screen)
-/// stops receiving vsync/redraws, which PARKS eframe's run loop - `ui()` stops ticking and the
-/// summon hotkey can never bring it back. The 2px on-screen sliver is load-bearing: it keeps the
-/// run loop warm so `request_repaint` + the 120ms tick reshow the window. Broke twice (1.3.0
-/// orderOut, 1.3.2 fully-offscreen-park) before this was understood - leave it be.
+/// Show (drop to the top edge, focused) or hide the quake window. Hide parks it just off the
+/// BOTTOM edge (a ~2px sliver stays on-screen) AND drops the window alpha to 0 so that sliver is
+/// invisible. DO NOT "fully hide" this: a window with zero pixels on-screen (via
+/// `orderOut:`/`set_visible(false)` OR parked fully off-screen) stops receiving vsync/redraws,
+/// which PARKS eframe's run loop - `ui()` stops ticking and the summon hotkey can never bring it
+/// back (broke twice: 1.3.0 orderOut, 1.3.2 fully-offscreen-park). The on-screen sliver is
+/// load-bearing for the run loop; alpha=0 (a compositor property, NOT occlusion) hides it visually
+/// while the window keeps drawing. Restore alpha to 1 on show.
 pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
     if visible {
+        set_window_alpha(1.0);
         if let Some(m) = mon {
             let h = (m.y * height_pct).round();
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(m.x, h)));
@@ -860,6 +830,7 @@ pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
+        set_window_alpha(0.0);
         // Park just off the bottom edge - keeps a ~2px sliver on-screen so the run loop stays warm.
         let y = mon.map_or(2000.0, |m| m.y - 2.0);
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
@@ -1041,10 +1012,6 @@ impl eframe::App for Stdusk {
                     set_unified_titlebar(true);
                     self.titlebar_unified = Some(true);
                 }
-                // Re-anchor the traffic lights onto the tab row EVERY frame (macOS re-lays them out
-                // on resize/fullscreen/key changes, so a one-shot move wouldn't hold). Idempotent:
-                // it sets an absolute origin, never a running offset.
-                center_window_buttons(ui::TAB_H + 6.0 + ui::WINDOW_TAB_H_EXTRA);
                 // No always-on-top, no forced quake geometry, and it never auto-hides. Mark the
                 // level Normal once; the red close button / last-window-closed quits via winit's
                 // default CloseRequested handling.

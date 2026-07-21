@@ -1231,11 +1231,10 @@ fn paint_cli_chip(p: &egui::Painter, rect: egui::Rect, cli: crate::procwatch::Cl
 
 /// Tab geometry: shared with the tab bar so the row height / spacer math can't rot.
 pub(crate) const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (flush underline)
-/// Extra tab-strip height in macOS window mode. Now 0: the OS traffic-light cluster is actively
-/// re-anchored onto the tab row (see `main::center_window_buttons`), so the strip no longer needs
-/// to GROW to make room - growing it as well would double-compensate. Kept as a tunable const (the
-/// `tabs.rs` centering path still honors a non-zero value) in case the window-mode strip ever wants
-/// a taller look; leave it 0 unless you also re-check the button anchor by eye on a real window.
+/// Extra tab-strip height in macOS window mode. 0 = the OS traffic lights keep their default
+/// position (top-left). Repositioning them to center on the tab row was reverted (an absolute-Y
+/// move in the wrong coord space flung them off-screen). Kept as a tunable const - `tabs.rs`
+/// honors a non-zero value if the window-mode strip ever wants a taller look.
 #[cfg(target_os = "macos")]
 pub(crate) const WINDOW_TAB_H_EXTRA: f32 = 0.0;
 #[cfg(not(target_os = "macos"))]
