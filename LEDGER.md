@@ -582,6 +582,19 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.4.2 - fix vanished traffic lights + invisible quake sliver
+- **Traffic lights vanished (1.4.1 regression)**: `center_window_buttons` set an ABSOLUTE
+  button y from the WINDOW height, but the buttons' frame is relative to their titlebar
+  superview - the absolute value threw them off-screen. Reverted the reposition entirely
+  (buttons back to macOS default = visible). Re-anchoring traffic lights reliably needs live
+  iteration the headless harness can't do; deferred to a guided nudge, not a blind absolute move.
+- **Invisible hide sliver (user idea)**: the hidden quake window must stay a live on-screen
+  viewport (parked 2px off-bottom) or the run loop dies and it can't reshow. Instead of hiding
+  those 2px by moving off-screen (which killed reshow twice), drop the window ALPHA to 0 on hide
+  (`set_window_alpha`, NSWindow.setAlphaValue) and back to 1 on show. Alpha is a compositor
+  property (not occlusion), so the window keeps drawing/vsync - loop stays warm, sliver invisible.
+261 tests.
+
 ## 1.4.1 - drop Claude auto-resume, kill orphans on close/quit, traffic-light re-anchor (uncommitted)
 Bundled batch (details + rationale below). Version NOT bumped, NOT committed. 261 tests
 (270 -> 261: removed the resume tests, added kill / running-children / confirm-message tests).
