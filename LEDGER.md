@@ -582,6 +582,23 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.4.3 - every scheme readable + true dedup
+The recurring "unreadable themes" complaint, root-caused at last: the LIVE grid nudges glyphs to
+`terminal.minimum_contrast` (default 4) so live text is fine, but the scheme-browser PREVIEW
+(`settings::preview_card`) painted RAW theme colors with no floor - so browsing showed
+low-contrast schemes (blazer/chalkboard/dotgov/...) as unreadable even though the terminal would
+render them fine. Fix: the preview floors every ink to `PREVIEW_MIN_CONTRAST` (4.5, WCAG AA)
+against its actual bg - matches live reality, no scheme-data mangling. `scheme_row` name floor
+bumped 3.0 -> 4.5 to match. Test `every_scheme_is_legible_after_the_preview_floor` asserts fg +
+all 16 ANSI, floored, clear AA on EVERY scheme.
+Dedup: `all_schemes` now collapses by a strong `dedup_key` (lowercase, alphanumerics only), so a
+pack re-spelling of a built-in ("TokyoNight"/"OneHalfDark"/"OneHalfLight"/"Dracula") no longer
+shows as a duplicate row - the canonical built-in wins. Those 4 redundant pack files + the stray
+"Solarized Dark - Patched" (a 1.0.3 leftover) were DELETED (205 -> 200 files). `by_name` maps
+every spelling of a built-in to that built-in. Test `all_schemes_have_no_duplicate_names` locks
+it (no two rows share a dedup_key). 263 tests. (Traffic-light centering deferred - user asked for
+themes first.)
+
 ## 1.4.2 - fix vanished traffic lights + invisible quake sliver
 - **Traffic lights vanished (1.4.1 regression)**: `center_window_buttons` set an ABSOLUTE
   button y from the WINDOW height, but the buttons' frame is relative to their titlebar
