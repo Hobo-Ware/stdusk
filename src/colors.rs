@@ -389,11 +389,13 @@ pub(crate) fn tokyo_night() -> Theme {
 pub(crate) fn by_name(name: &str) -> Theme {
     let norm = name.to_ascii_lowercase().replace([' ', '_'], "-");
     match norm.as_str() {
+        // Every spelling of a built-in collapses to the one canonical built-in (1.4.3 de-dup):
+        // the redundant pack re-spellings ("Dracula"/"TokyoNight"/"OneHalfDark"/"OneHalfLight")
+        // were deleted, so there's a single source per theme.
         "dracula" => dracula(),
-        // Canonical spellings only: the pack ships distinct "tokyonight"/"onehalflight"
-        // variants whose rows must apply the PACK palette, not the built-in namesake.
-        "tokyo-night" => tokyo_night(),
-        "one-half-light" | "light" => one_half_light(),
+        "tokyo-night" | "tokyonight" => tokyo_night(),
+        "one-half-dark" | "onehalfdark" => one_half_dark(),
+        "one-half-light" | "onehalflight" | "light" => one_half_light(),
         // Rename alias (1.0.3): the pack's "Parasio Dark" was an identical typo-dupe of
         // "Paraiso Dark" and was dropped; saved configs must keep resolving.
         "parasio-dark" => crate::themes::lookup("paraiso-dark").unwrap_or_else(one_half_dark),
@@ -432,6 +434,22 @@ mod tests {
         }
         for t in [one_half_dark(), one_half_light(), dracula(), tokyo_night()] {
             assert!(contrast_ratio(legible_dim(&t), t.bg) >= 2.99);
+        }
+    }
+
+    #[test]
+    fn every_scheme_is_legible_after_the_preview_floor() {
+        // The scheme-browser preview floors ink at PREVIEW_MIN_CONTRAST (4.5). Prove that makes
+        // the default text (fg) AND every ANSI colour readable on EVERY scheme's own bg - so no
+        // scheme (blazer/chalkboard/dotgov/...) previews as unreadable, no data mangling needed.
+        let floor = crate::settings::PREVIEW_MIN_CONTRAST;
+        for (name, t) in crate::themes::all_schemes() {
+            let fg_r = contrast_ratio(ensure_contrast(t.fg, t.bg, floor), t.bg);
+            assert!(fg_r >= floor - 0.1, "{name}: fg floored to {fg_r}, want {floor}");
+            for (i, c) in t.ansi.iter().enumerate() {
+                let r = contrast_ratio(ensure_contrast(*c, t.bg, floor), t.bg);
+                assert!(r >= floor - 0.1, "{name}: ansi[{i}] floored to {r}, want {floor}");
+            }
         }
     }
 
@@ -496,18 +514,19 @@ mod tests {
     }
 
     #[test]
-    fn pack_variant_spellings_apply_the_pack_not_the_builtin() {
-        // Browser rows for the pack's TokyoNight/OneHalfLight write those names to config;
-        // the built-in namesakes must not shadow them. Canonical spellings stay built-in.
-        // Compare every palette field: the pack TokyoNight differs from the built-in only
-        // in the cursor color.
+    fn variant_spellings_collapse_to_the_canonical_builtin() {
+        // De-dup (1.4.3): a pack re-spelling of a built-in ("TokyoNight" -> tokyo-night,
+        // "OneHalfLight" -> one-half-light, "Dracula", "OneHalfDark") must NOT appear as a
+        // separate browser row, and any spelling resolves to the single canonical built-in.
         let key = |t: &Theme| (t.bg, t.fg, t.cursor, t.ansi);
-        for (pack, builtin) in [("tokyonight", tokyo_night()), ("onehalflight", one_half_light())] {
-            let picked = by_name(pack);
-            let shipped = scheme(pack);
-            assert_eq!(key(&picked), key(&shipped), "{pack} must resolve to the pack palette");
-            assert_ne!(key(&picked), key(&builtin), "{pack} shadowed by the built-in");
+        let all = crate::themes::all_schemes();
+        for spelling in ["tokyonight", "TokyoNight", "onehalflight", "OneHalfLight", "Dracula"] {
+            assert!(
+                !all.iter().any(|(n, _)| n == spelling),
+                "{spelling} should have been de-duped out of the browser"
+            );
         }
+        assert_eq!(key(&by_name("tokyonight")), key(&tokyo_night()));
         assert_eq!(key(&by_name("tokyo-night")), key(&tokyo_night()));
         assert_eq!(key(&by_name("one-half-light")), key(&one_half_light()));
     }

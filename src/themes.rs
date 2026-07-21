@@ -9,9 +9,15 @@ use std::sync::LazyLock;
 
 include!(concat!(env!("OUT_DIR"), "/schemes.rs"));
 
+/// Aggressive normalization for duplicate detection: lowercase, keep only alphanumerics. Collapses
+/// "Tokyo Night", "tokyo-night", "TokyoNight", "tokyo_night" all to "tokyonight".
+fn dedup_key(name: &str) -> String {
+    name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect()
+}
+
 /// Every browsable scheme (4 built-ins + the embedded pack), parsed once and cached so the
 /// settings scheme list can draw palette previews every frame without re-parsing. Sorted by
-/// normalized name; built-ins shadow same-named pack entries.
+/// normalized name; built-ins shadow same-`dedup_key` pack entries (no duplicate rows).
 pub(crate) fn all_schemes() -> &'static [(String, Theme)] {
     static ALL: LazyLock<Vec<(String, Theme)>> = LazyLock::new(|| {
         let mut v: Vec<(String, Theme)> = vec![
@@ -20,8 +26,14 @@ pub(crate) fn all_schemes() -> &'static [(String, Theme)] {
             ("one-half-light".into(), crate::colors::one_half_light()),
             ("tokyo-night".into(), crate::colors::tokyo_night()),
         ];
+        // Dedup by a STRONG key (lowercase, keep only alphanumerics) so pack files that are just
+        // a re-spelling of a built-in - "TokyoNight" vs "tokyo-night", "OneHalfDark" vs
+        // "one-half-dark", "Dracula" vs "dracula" - collapse to the one canonical (built-in)
+        // entry instead of showing as duplicate rows. Built-ins are seeded first so they win.
+        let mut seen: std::collections::HashSet<String> =
+            v.iter().map(|(n, _)| dedup_key(n)).collect();
         for (name, src) in SCHEMES {
-            if v.iter().any(|(n, _)| n == name) {
+            if !seen.insert(dedup_key(name)) {
                 continue;
             }
             if let Some(theme) = parse_xrdb(src) {
@@ -180,6 +192,23 @@ mod tests {
         }
         for name in ["dracula", "nord", "one-half-dark", "one-half-light", "tokyo-night"] {
             assert!(all.iter().any(|(n, _)| n == name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn all_schemes_have_no_duplicate_names() {
+        // No two rows may share a dedup key - catches "TokyoNight" vs "tokyo-night",
+        // "OneHalfDark" vs "one-half-dark", "Solarized Dark" vs "Solarized Dark - Patched", etc.
+        let all = all_schemes();
+        let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+        for (name, _) in all {
+            if let Some(prev) = seen.insert(dedup_key(name), name) {
+                panic!("duplicate scheme: {prev:?} and {name:?} share key {:?}", dedup_key(name));
+            }
+        }
+        // The built-in canonical spellings must win over any pack re-spelling.
+        for c in ["tokyo-night", "one-half-dark", "one-half-light", "dracula"] {
+            assert!(all.iter().any(|(n, _)| n == c), "canonical {c} missing");
         }
     }
 
