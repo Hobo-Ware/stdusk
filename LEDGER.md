@@ -582,6 +582,19 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.4.4 - center window-mode traffic lights (safe) + `--state-dir` dev flag
+`center_window_buttons` re-anchors the macOS close/miniaturize/zoom buttons onto the tab row in
+window mode. Rewritten to be SAFE after the 1.4.1 vanish (absolute window-height math flung them
+off-screen): now it captures the buttons' macOS-DEFAULT y ONCE into `Stdusk.traffic_baseline`
+and sets an absolute `baseline - TRAFFIC_LIGHT_DROP` (6.0) each window-mode frame - idempotent,
+bounded (a 6px nudge can't vanish them). 6px is an eyeball estimate from the user's screenshots
+(no headless way to verify OS-drawn buttons); tune the one const if it reads high/low.
+Also added `--state-dir DIR` (sets HOME + XDG_RUNTIME_DIR in-process before config/socket load)
+so a dev instance runs fully isolated - own config, single-instance socket, session - and
+coexists with a stable install. NOTE (learned the hard way): local GUI preview of window chrome
+is NOT achievable from the sandboxed tool context (can't launch/screenshot a window; a bare
+binary from a terminal won't surface a window; macOS ignores LSEnvironment for `open`). 263 tests.
+
 ## 1.4.3 - every scheme readable + true dedup
 The recurring "unreadable themes" complaint, root-caused at last: the LIVE grid nudges glyphs to
 `terminal.minimum_contrast` (default 4) so live text is fine, but the scheme-browser PREVIEW
