@@ -598,7 +598,7 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
-## Unreleased (bundling into next wave)
+## 1.4.6 - DECCKM application-cursor-keys arrows
 - DECCKM arrows: arrow keys + Home/End now emit SS3 (`ESC O x`) when the focused term set
   application-cursor-keys mode (`TermMode::APP_CURSOR`), CSI (`ESC [ x`) otherwise. TUIs/pickers
   that bind only the SS3 form were getting a no-op arrow before. `key_to_bytes` gained an
