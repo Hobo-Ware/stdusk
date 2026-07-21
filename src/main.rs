@@ -712,7 +712,7 @@ fn set_unified_titlebar(_enabled: bool) {}
 /// centres on the taller tab strip. Dialed in by eye against a real window-mode window (the
 /// headless harness can't render OS buttons). Unflipped coords: down = subtract.
 #[cfg(target_os = "macos")]
-const TRAFFIC_LIGHT_DROP: f64 = 6.0;
+const TRAFFIC_LIGHT_DROP: f64 = 5.0;
 
 /// Re-anchor the three standard window buttons onto the tab row. On the FIRST call `baseline`
 /// captures their macOS-default y (before we ever move them); every call then sets an ABSOLUTE
@@ -1721,9 +1721,12 @@ fn main() -> eframe::Result<()> {
 
     // Single-instance guard: only one stdusk runs. A second launch connects to the primary over
     // a Unix socket, tells it to surface + open a new tab, and exits(0) without a window of its
-    // own. Skipped under the screenshot harness (it may run alongside a real instance).
+    // own. Skipped under the screenshot harness (it may run alongside a real instance) AND for a
+    // `--state-dir` dev instance (it's meant to run standalone beside a stable install - otherwise
+    // it just pokes the stable app's socket and silently exits with no window).
+    let dev_isolated = args.iter().any(|a| a == "--state-dir");
     #[cfg(unix)]
-    let sock_path = (screenshot.is_none()).then(instance::socket_path).flatten();
+    let sock_path = (screenshot.is_none() && !dev_isolated).then(instance::socket_path).flatten();
     #[cfg(unix)]
     let instance_listener = match sock_path.as_deref() {
         Some(path) => match instance::acquire(path) {
