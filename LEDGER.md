@@ -582,6 +582,16 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.4.5 - traffic lights centered (verified live) + `--state-dir` runs standalone
+Local visual verify finally worked - and it turned out window chrome IS launchable locally (the
+whole product launches; `cargo run` opened it all through dev). The alpha's "opens and closes"
+was NOT a GUI-impossible environment - it was the single-instance guard: a second instance
+connected to the stable app's socket and `return Ok(())`d with no window. Fix: a `--state-dir`
+(dev) instance now SKIPS the single-instance guard entirely (`dev_isolated`), so it opens its own
+window beside a stable install. With that, the user ran the release binary via `--state-dir` and
+eyeballed the traffic lights: tuned `TRAFFIC_LIGHT_DROP` 6 -> 5 (1px up) to their confirmed
+"perfect". Shipping the verified value (1.4.4 had shipped the unverified 6 - not installed).
+
 ## 1.4.4 - center window-mode traffic lights (safe) + `--state-dir` dev flag
 `center_window_buttons` re-anchors the macOS close/miniaturize/zoom buttons onto the tab row in
 window mode. Rewritten to be SAFE after the 1.4.1 vanish (absolute window-height math flung them
