@@ -835,9 +835,13 @@ fn notify_done(title: &str, code: i32) {
     notify(&format!("{title}: command {status}"));
 }
 
-/// Show (drop to the top edge, focused) or hide the quake window by parking it fully above the
-/// top edge (ZERO pixels remain, no sliver). The parked window stays a live viewport so `ui()`
-/// keeps ticking - the hotkey thread's `request_repaint` + the 120ms tick then deliver the summon.
+/// Show (drop to the top edge, focused) or hide the quake window by parking it just off the
+/// BOTTOM edge, leaving a ~2px sliver on-screen. DO NOT "fully hide" this: a window with zero
+/// pixels on-screen (whether via `orderOut:`/`set_visible(false)` OR parked fully off-screen)
+/// stops receiving vsync/redraws, which PARKS eframe's run loop - `ui()` stops ticking and the
+/// summon hotkey can never bring it back. The 2px on-screen sliver is load-bearing: it keeps the
+/// run loop warm so `request_repaint` + the 120ms tick reshow the window. Broke twice (1.3.0
+/// orderOut, 1.3.2 fully-offscreen-park) before this was understood - leave it be.
 pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
     if visible {
@@ -848,13 +852,9 @@ pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
-        // Park the window FULLY above the top edge: zero pixels remain (no sliver), but it stays
-        // a live on-screen viewport so eframe keeps calling `ui()` - which re-arms the 120ms tick
-        // that lets the summon hotkey reshow it. A native `orderOut:` / `set_visible(false)` would
-        // hide it truly but PARK THE RUN LOOP (ui() stops ticking), so the hotkey could never
-        // bring it back - the 1.3.0->1.3.1 quake regression.
-        let h = mon.map_or(1200.0, |m| (m.y * height_pct).round());
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, -(h + 8.0))));
+        // Park just off the bottom edge - keeps a ~2px sliver on-screen so the run loop stays warm.
+        let y = mon.map_or(2000.0, |m| m.y - 2.0);
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
     }
 }
 
