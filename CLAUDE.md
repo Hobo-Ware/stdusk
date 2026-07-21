@@ -8,7 +8,8 @@ domain rules load on demand):
 - Performance work: cell-grid rendering, repaint scheduling, allocation on the hot path
   (`src/main.rs`, `src/terminal.rs`): read performance.md
 - Quake window, global hotkey, monitor sizing, macOS keybinds (`src/main.rs`, `src/config.rs`):
-  read platform.md
+  read platform.md (incl. how to LIVE-verify window chrome via `--state-dir` - the `--screenshot`
+  harness can't)
 - Tests (`#[cfg(test)]`, `tests/`, proptest, insta): testing.md (already loaded as core)
 - All other code: project.md, code-principles.md, implementation.md (always-on baseline).
 

@@ -63,6 +63,29 @@ toml::from_str(&s).unwrap_or_else(|e| {
 mid-lock), and a poisoned terminal state is unrecoverable here. Leave a one-line
 `// poisoned => reader thread died; nothing to recover` at the first such site.
 
+## Ground work in real behavior, not assumptions
+
+**Before implementing against an external tool / library / OS API, VERIFY its real behavior.**
+Read the vendored source in `~/.cargo`, run the real CLI's `--help`, inspect a live
+process/argv, read the actual crash log or the real data files on disk. Assuming the contract
+and coding to it is the single biggest source of rework in this repo's history - **the wins
+were grounded; the losses were assumed.**
+
+Concrete misfires (all shipped, all had to be undone):
+
+- `claude --resume` was assumed **global**; it is **CWD-scoped**, so a moved repo broke resume
+  - the feature degraded, then was pulled entirely.
+- The scheme-browser preview was assumed to apply the live contrast floor; it rendered **raw**
+  theme colors, so "unreadable themes" recurred for releases until someone read the paint path.
+- "Local GUI launch is impossible in this env" was assumed; the second instance was silently
+  `return Ok(())`-ing on the single-instance guard - a window was launchable all along.
+- egui-winit 0.35 was assumed to surface Cmd+C/X/V as key events; it **folds** them into
+  `Event::{Copy,Cut,Paste}` and drops empty/image paste (found by reading `egui-winit/lib.rs`).
+
+Wins came the same way: parsing the session id from the live process argv, reading the
+egui-winit source, real-pty round-trips of the actual CLIs. When two behaviors are plausible,
+go look - don't pick one silently.
+
 ## Lints & formatting
 
 Formatting is pinned in `rustfmt.toml`; lints in `Cargo.toml` `[lints]` (crate-wide, the
@@ -81,5 +104,6 @@ Before every PR: `cargo fmt --check` and `cargo clippy --all-targets -- -D warni
 - [ ] New items `pub(crate)` unless truly re-exported.
 - [ ] File under ~1000 lines and single-concern; pure helpers live in `ui.rs`.
 - [ ] `//!` header present; `///` states the why/invariant, tersely.
+- [ ] External tool/lib/OS contract VERIFIED (vendored source / `--help` / live argv), not assumed.
 - [ ] No new error-handling crates unless the multi-source-`Result` trigger is hit.
 - [ ] `cargo fmt --check` + `cargo clippy -- -D warnings` clean.

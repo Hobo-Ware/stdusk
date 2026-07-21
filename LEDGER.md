@@ -513,6 +513,22 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   injects raw `^V` (0x16) to the focused pane (same ingestion path as Ctrl+V). Non-image Cmd+V is
   returned unchanged, so egui's normal text paste is untouched. Pure decision `decide_cmd_v_image_paste`
   is unit-tested; the live swallow+inject needs a real window. Skipped under `--screenshot`.
+- **The `--screenshot` harness CANNOT verify window chrome** (quake show/hide, traffic-light /
+  titlebar geometry, activation policy, Spaces) - it runs headless + skips window management.
+  Verify those LIVE: run the binary with `--state-dir <DIR>` (own config/socket/session, skips
+  the single-instance guard) beside a stable install and eyeball it. See `platform.md`.
+- **The quake hide sliver is LOAD-BEARING** - it must stay on-screen or the run loop parks and
+  the hotkey can't reshow (broke 3x: orderOut + fully-offscreen park). Hide it with alpha=0,
+  not by moving it off-screen.
+- **`claude --resume` is CWD-scoped, not global** - a moved repo breaks resume (feature was
+  pulled as unstable). Don't assume any CLI flag's scope; check it.
+- **egui-winit 0.35 folds Cmd+C/X/V into `Event::{Copy,Cut,Paste}`** and drops empty/image
+  paste - they never arrive as key events (verified by reading `egui-winit/lib.rs`).
+- **A silent `return Ok(())` on the single-instance guard looks like a GUI-launch failure** -
+  the alpha's "opens and closes" was the second instance connecting to the socket, not a
+  GUI-impossible env. A window IS launchable locally.
+- **The wins were grounded; the losses were assumed** - verify external tool/lib/OS behavior
+  (vendored source, `--help`, live argv, real crash logs) before coding to it. See `implementation.md`.
 
 ## Decisions log
 - Splits (M8) + scrollback search (M7) are v1 must-haves (user).
