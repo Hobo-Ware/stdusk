@@ -51,6 +51,34 @@ pub(crate) fn basename(p: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
+/// Text inserted when files are dropped on a pane: each path POSIX single-quoted (so spaces
+/// and shell metacharacters are literal) and space-joined, with a trailing space so the next
+/// dropped/typed token stays separated. Empty when no path-backed files were dropped (a drop
+/// with only in-memory bytes, e.g. from a browser, has no filesystem path to insert).
+pub(crate) fn drop_paste_string(paths: &[std::path::PathBuf]) -> String {
+    let mut out = String::new();
+    for p in paths {
+        out.push_str(&shell_single_quote(&p.to_string_lossy()));
+        out.push(' ');
+    }
+    out
+}
+
+/// POSIX single-quote a string: wrap in `'...'`, and render any embedded `'` as `'\''`.
+fn shell_single_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 /// Auto-title for an unrenamed tab: the shell's OSC 0/2 title (when dynamic titles are on
 /// and it's non-empty) beats the cwd basename; `None` = leave the current title alone.
 pub(crate) fn auto_title(dynamic: bool, osc: Option<&str>, cwd: Option<&str>) -> Option<String> {
@@ -1287,6 +1315,22 @@ mod tests {
         assert_eq!(trim_paste("  a\rb  \r", true), "  a\rb");
         // Disabled: untouched.
         assert_eq!(trim_paste("  x  ", false), "  x  ");
+    }
+
+    #[test]
+    fn dropped_files_become_quoted_space_joined_paths() {
+        use std::path::PathBuf;
+        // Single path with a space is single-quoted; trailing space separates the next token.
+        assert_eq!(drop_paste_string(&[PathBuf::from("/tmp/my file.txt")]), "'/tmp/my file.txt' ");
+        // Multiple paths join with spaces, each quoted.
+        assert_eq!(
+            drop_paste_string(&[PathBuf::from("/a/b"), PathBuf::from("/c/d")]),
+            "'/a/b' '/c/d' "
+        );
+        // An embedded single quote is escaped as '\'' so the shell reads it literally.
+        assert_eq!(drop_paste_string(&[PathBuf::from("/tmp/it's here")]), "'/tmp/it'\\''s here' ");
+        // No path-backed files -> nothing to insert.
+        assert_eq!(drop_paste_string(&[]), "");
     }
 
     #[test]

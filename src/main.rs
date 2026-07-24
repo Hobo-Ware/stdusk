@@ -544,6 +544,21 @@ impl eframe::App for Stdusk {
             tab.focused_term_mut().send(&[0x16]);
         }
 
+        // File drop: insert the dropped paths (POSIX-quoted, space-joined) at the focused
+        // pane's prompt, via the bracketed-paste path so nothing auto-executes.
+        if self.screenshot.is_none() {
+            let paths: Vec<std::path::PathBuf> =
+                ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+            if !paths.is_empty()
+                && let Some(tab) = self.tabs.get_mut(self.active)
+            {
+                let text = ui::drop_paste_string(&paths);
+                if !text.is_empty() {
+                    tab.focused_term_mut().paste(&text);
+                }
+            }
+        }
+
         // Quake window management is skipped in the screenshot harness.
         if self.screenshot.is_none() {
             // Intercept an OS window close (red button / Cmd+Q / window-mode last-window close) so
