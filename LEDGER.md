@@ -598,6 +598,15 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.4.7 - drag-and-drop files insert paths at the prompt
+- Dropping files onto a pane inserts their paths at the focused prompt, POSIX single-quoted and
+  space-joined (spaces/metachars literal), through the bracketed-paste path so nothing auto-runs.
+  `ui::drop_paste_string` builds the text (unit-tested: quoting, multi-file, embedded `'`, empty);
+  the reader sits in the update loop by the Cmd+V injection, skipped in the screenshot harness.
+  Grounded on winit 0.30.13 (`registerForDraggedTypes` + `DroppedFile(path)` on macOS). Verified
+  live via a `--state-dir` alpha before shipping. Tab completion inside Claude CLI was declined:
+  the emulator only transmits Tab (`0x09`); completion is owned by the program on the pty.
+
 ## 1.4.6 - DECCKM application-cursor-keys arrows
 - DECCKM arrows: arrow keys + Home/End now emit SS3 (`ESC O x`) when the focused term set
   application-cursor-keys mode (`TermMode::APP_CURSOR`), CSI (`ESC [ x`) otherwise. TUIs/pickers
