@@ -62,6 +62,7 @@ pub(crate) fn spawn_opts(cfg: &Config, cwd: Option<String>) -> terminal::SpawnOp
         detect_progress: cfg.terminal.detect_progress,
         profile: None,
         shell_integration: cfg.terminal.shell_integration,
+        autosuggestions: cfg.terminal.autosuggestions,
         scrollback_lines: cfg.terminal.scrollback_lines,
         word_separators: cfg.terminal.word_separators.clone(),
         bold_bright: cfg.terminal.bold_bright,

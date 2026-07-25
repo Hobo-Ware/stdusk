@@ -222,10 +222,12 @@ impl EventListener for EventProxy {
 }
 
 /// Everything a terminal spawn needs from the user config (one bag instead of a positional list).
+#[allow(clippy::struct_excessive_bools)] // independent config toggles, not a mode
 #[derive(Clone)]
 pub(crate) struct SpawnOpts {
     pub(crate) detect_progress: bool,
     pub(crate) shell_integration: bool,
+    pub(crate) autosuggestions: bool,
     pub(crate) scrollback_lines: usize,
     pub(crate) word_separators: String,
     pub(crate) bold_bright: bool,
@@ -262,7 +264,8 @@ pub(crate) struct PtyTerm {
 
 impl PtyTerm {
     pub(crate) fn spawn(cols: usize, rows: usize, ctx: egui::Context, opts: &SpawnOpts) -> Self {
-        let SpawnOpts { detect_progress, shell_integration, cwd, profile, .. } = opts.clone();
+        let SpawnOpts { detect_progress, shell_integration, autosuggestions, cwd, profile, .. } =
+            opts.clone();
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -291,7 +294,7 @@ impl PtyTerm {
             cmd.cwd(dir);
         }
         // Spawn login+interactive (so PATH-setting profile files run) + optional OSC 133 hooks.
-        crate::shell::configure(&mut cmd, &shell, shell_integration);
+        crate::shell::configure(&mut cmd, &shell, shell_integration, autosuggestions);
         if let Some(p) = &profile {
             for a in &p.args {
                 cmd.arg(a);
@@ -943,6 +946,7 @@ mod tests {
         let opts = SpawnOpts {
             detect_progress: false,
             shell_integration: false,
+            autosuggestions: false,
             scrollback_lines: 500,
             word_separators: " ".into(),
             bold_bright: false,

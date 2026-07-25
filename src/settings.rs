@@ -1184,6 +1184,14 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 crate::widgets::toggle_switch(ui, &mut t.shell_integration);
             },
         );
+        row_new_tabs(
+            ui,
+            "History autosuggestions",
+            "Fish-style inline suggestions from history (zsh; Right-arrow accepts)",
+            |ui| {
+                crate::widgets::toggle_switch(ui, &mut t.autosuggestions);
+            },
+        );
         row_new_tabs(ui, "Detect progress", "Track % output as a tab progress bar", |ui| {
             crate::widgets::toggle_switch(ui, &mut t.detect_progress);
         });

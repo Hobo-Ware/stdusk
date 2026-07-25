@@ -71,12 +71,33 @@ case "$PROMPT_COMMAND" in
 esac
 "#;
 
-fn write_files(dir: &Path) -> std::io::Result<()> {
+// Vendored fish-style history autosuggestions (zsh-users/zsh-autosuggestions v0.7.1, MIT - the
+// license header is kept inside the file). Opt-in; sourced from our .zshrc only when the config
+// flag is on. Right-arrow / End accept the suggestion (its default ACCEPT_WIDGETS).
+const ZSH_AUTOSUGGEST: &str = include_str!("assets/zsh-autosuggestions.zsh");
+
+/// The line appended to our `.zshrc` that loads the vendored plugin. Guarded so a user who
+/// already sources their own copy (oh-my-zsh, brew) doesn't double-load it.
+fn autosuggest_source_line(plugin: &Path) -> String {
+    format!(
+        "\n# stdusk: fish-style history autosuggestions ([terminal] autosuggestions = true).\n\
+         (( ${{+functions[_zsh_autosuggest_start]}} )) || source {:?}\n",
+        plugin.to_string_lossy()
+    )
+}
+
+fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     std::fs::write(dir.join(".zshenv"), ZSHENV)?;
     std::fs::write(dir.join(".zprofile"), ZPROFILE)?;
     std::fs::write(dir.join(".zlogin"), ZLOGIN)?;
-    std::fs::write(dir.join(".zshrc"), ZSHRC)?;
+    let mut zshrc = ZSHRC.to_string();
+    if autosuggest {
+        let plugin = dir.join("zsh-autosuggestions.zsh");
+        std::fs::write(&plugin, ZSH_AUTOSUGGEST)?;
+        zshrc.push_str(&autosuggest_source_line(&plugin));
+    }
+    std::fs::write(dir.join(".zshrc"), zshrc)?;
     std::fs::write(dir.join("bashrc"), BASHRC)?;
     Ok(())
 }
@@ -84,13 +105,20 @@ fn write_files(dir: &Path) -> std::io::Result<()> {
 /// Configure `cmd` (args + env) to spawn a login+interactive shell, optionally wiring OSC 133
 /// integration. Always spawns login+interactive so PATH-setting profile files run (the reason
 /// `starship` etc. resolve like they do in Terminal.app). Integration is best-effort: unknown
-/// shells or a failed file write just skip the OSC 133 hooks.
-pub(crate) fn configure(cmd: &mut CommandBuilder, shell: &str, integration: bool) {
+/// shells or a failed file write just skip the OSC 133 hooks. `autosuggest` (zsh-only, and only
+/// when `integration` is on since it reuses the ZDOTDIR redirect) sources the vendored
+/// fish-style history-suggestion plugin from our generated `.zshrc`.
+pub(crate) fn configure(
+    cmd: &mut CommandBuilder,
+    shell: &str,
+    integration: bool,
+    autosuggest: bool,
+) {
     match shell_kind(shell) {
         ShellKind::Zsh => {
             if integration
                 && let Some(dir) = dir()
-                && write_files(&dir).is_ok()
+                && write_files(&dir, autosuggest).is_ok()
             {
                 let real =
                     std::env::var("ZDOTDIR").or_else(|_| std::env::var("HOME")).unwrap_or_default();
@@ -106,7 +134,7 @@ pub(crate) fn configure(cmd: &mut CommandBuilder, shell: &str, integration: bool
             let mut rc_injected = false;
             if integration
                 && let Some(dir) = dir()
-                && write_files(&dir).is_ok()
+                && write_files(&dir, false).is_ok()
             {
                 cmd.arg("--rcfile");
                 cmd.arg(dir.join("bashrc").to_string_lossy().to_string());
@@ -159,5 +187,34 @@ mod tests {
         assert!(ZSHRC.contains(".zshrc"));
         assert!(BASHRC.contains(".bash_profile") && BASHRC.contains(".profile"));
         assert!(BASHRC.contains(".bashrc"));
+    }
+
+    #[test]
+    fn vendored_autosuggestions_is_the_real_plugin() {
+        // include_str! actually pulled the plugin in, and the guard references its start function.
+        assert!(ZSH_AUTOSUGGEST.contains("_zsh_autosuggest_start"));
+        assert!(ZSH_AUTOSUGGEST.contains("forward-char")); // Right-arrow accepts the suggestion
+        assert!(autosuggest_source_line(Path::new("/x/p.zsh")).contains("_zsh_autosuggest_start"));
+    }
+
+    #[test]
+    fn write_files_sources_plugin_only_when_autosuggest_on() {
+        let base = std::env::temp_dir().join(format!("stdusk-shtest-{}", std::process::id()));
+        let on = base.join("on");
+        let off = base.join("off");
+
+        write_files(&on, true).unwrap();
+        let zshrc_on = std::fs::read_to_string(on.join(".zshrc")).unwrap();
+        assert!(zshrc_on.contains("zsh-autosuggestions.zsh"));
+        assert!(on.join("zsh-autosuggestions.zsh").exists());
+
+        write_files(&off, false).unwrap();
+        let zshrc_off = std::fs::read_to_string(off.join(".zshrc")).unwrap();
+        assert!(!zshrc_off.contains("zsh-autosuggestions.zsh"));
+        assert!(!off.join("zsh-autosuggestions.zsh").exists());
+        // OSC 133 marks survive in both.
+        assert!(zshrc_on.contains("133;A") && zshrc_off.contains("133;A"));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
