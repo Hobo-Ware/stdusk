@@ -598,6 +598,18 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.4.8 - opt-in fish-style history autosuggestions (zsh)
+- Warp-style inline history suggestions: grey ghost text of the most recent matching command as
+  you type, Right-arrow / End to accept. Correct layer - the shell owns line editing, so it's the
+  vendored zsh-users/zsh-autosuggestions v0.7.1 (MIT) sourced from the `.zshrc` we regenerate on
+  launch (embedded via `include_str!`), not emulator-painted overlay.
+- `[terminal] autosuggestions` flag, default OFF, zsh-only, requires shell_integration (reuses the
+  ZDOTDIR redirect). Source line guarded against double-load. Settings toggle + config.example doc.
+- Live-verified via a `--state-dir` alpha seeded with the real `.zshrc` (so compinit runs): Tab
+  dir/file completion + ghost suggestions coexist. Note learned: a bare-HOME alpha has no compinit,
+  so its Tab completion is the dumb builtin (looked like a regression but wasn't) - seed real
+  dotfiles when testing shell behavior.
+
 ## 1.4.7 - drag-and-drop files insert paths at the prompt
 - Dropping files onto a pane inserts their paths at the focused prompt, POSIX single-quoted and
   space-joined (spaces/metachars literal), through the bracketed-paste path so nothing auto-runs.
