@@ -598,6 +598,27 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.4.9 - ligature z-order, SGR 2 dim, nested-launch ZDOTDIR
+- Ligature glyphs painted BEFORE the row's per-cell bg fills, so any cell with an explicit
+  background covered them: `!=` / `...` were blank gaps in diffs and highlighted regions (cells on
+  the default bg were fine - `bg == None` draws no rect - hence "intermittent"). Spans are now
+  collected during the row scan and painted after the cell loop.
+- `Flags::DIM` (SGR 2) was never read: TUI hint/ghost text rendered at full brightness. `CellSnap`
+  carries `dim`; the renderer blends 45% toward the effective bg. NOT alacritty's `fg * 0.66`
+  multiply - a multiply darkens, so on a LIGHT theme faint text would gain contrast and read bolder.
+  Applied after the contrast floor so the floor can't cancel the fade.
+- Nested launch (stdusk opened from a stdusk shell) broke every new pane: the child inherits the
+  ZDOTDIR we export, so `STDUSK_REAL_ZDOTDIR` pointed at our own generated dir and each bridge file
+  sourced itself -> zsh "recursion limit exceeded", no PATH/prompt/integration. `real_zdotdir` falls
+  back to `$HOME` when the inherited value is our own dir (kept pure - the crate forbids unsafe, so
+  a test can't mutate the env).
+- NOT a bug: the "light band" contrast report is SGR 7 reverse video (Claude Code inverts that
+  line, so the theme fg becomes the bg). Rendered per spec - confirmed with a probe capture.
+- Verification note: the `--screenshot` harness CAN self-verify grid rendering by driving real SGR
+  through `$SHELL` - stage an isolated `--state-dir` whose `.zshrc` prints the probe, capture, and
+  read the PNG. No user round-trip needed for cell-level visual bugs. (Launch with `env -u ZDOTDIR`
+  when running it from inside stdusk, or pre-1.4.9 recursion eats the probe.)
+
 ## 1.4.8 - opt-in fish-style history autosuggestions (zsh)
 - Warp-style inline history suggestions: grey ghost text of the most recent matching command as
   you type, Right-arrow / End to accept. Correct layer - the shell owns line editing, so it's the
