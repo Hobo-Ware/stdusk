@@ -86,6 +86,19 @@ fn autosuggest_source_line(plugin: &Path) -> String {
     )
 }
 
+/// The user's REAL zsh dotfile dir, which our generated bridges source. Inherited `ZDOTDIR` wins
+/// over `$HOME` - EXCEPT when it already points at our own generated dir, which happens whenever
+/// stdusk is launched from inside a stdusk shell (the child inherits the ZDOTDIR we exported).
+/// Bridging to ourselves makes every rc file source itself: zsh dies with "recursion limit
+/// exceeded" and the pane comes up with no PATH, no prompt, no integration.
+/// Pure so the nested case is testable without mutating the environment.
+fn real_zdotdir(inherited: &str, home: &str, ours: &Path) -> String {
+    if !inherited.is_empty() && Path::new(inherited) != ours {
+        return inherited.to_owned();
+    }
+    home.to_owned()
+}
+
 fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     std::fs::write(dir.join(".zshenv"), ZSHENV)?;
@@ -120,9 +133,9 @@ pub(crate) fn configure(
                 && let Some(dir) = dir()
                 && write_files(&dir, autosuggest).is_ok()
             {
-                let real =
-                    std::env::var("ZDOTDIR").or_else(|_| std::env::var("HOME")).unwrap_or_default();
-                cmd.env("STDUSK_REAL_ZDOTDIR", real);
+                let inherited = std::env::var("ZDOTDIR").unwrap_or_default();
+                let home = std::env::var("HOME").unwrap_or_default();
+                cmd.env("STDUSK_REAL_ZDOTDIR", real_zdotdir(&inherited, &home, &dir));
                 cmd.env("ZDOTDIR", dir.to_string_lossy().to_string());
             }
             // ZDOTDIR (if set) redirects the rc files; -l/-i still make zsh read the *profile*
@@ -187,6 +200,22 @@ mod tests {
         assert!(ZSHRC.contains(".zshrc"));
         assert!(BASHRC.contains(".bash_profile") && BASHRC.contains(".profile"));
         assert!(BASHRC.contains(".bashrc"));
+    }
+
+    #[test]
+    fn real_zdotdir_never_bridges_to_our_own_dir() {
+        // Nested launch (stdusk opened from a stdusk shell): the inherited ZDOTDIR IS our
+        // generated dir, so bridging to it would make each rc file source itself.
+        let ours = Path::new("/tmp/stdusk-shell");
+        // Self-referential (nested launch): fall back to HOME instead of bridging to ourselves.
+        assert_eq!(real_zdotdir("/tmp/stdusk-shell", "/Users/me", ours), "/Users/me");
+        // A genuine user ZDOTDIR is still honored.
+        assert_eq!(
+            real_zdotdir("/Users/me/dotfiles/zsh", "/Users/me", ours),
+            "/Users/me/dotfiles/zsh"
+        );
+        // Unset: HOME.
+        assert_eq!(real_zdotdir("", "/Users/me", ours), "/Users/me");
     }
 
     #[test]
