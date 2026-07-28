@@ -1020,17 +1020,25 @@ pub(crate) fn render_grid(
     // Minimum contrast (terminal.minimum_contrast): nudge each glyph's fg toward black/white
     // until it meets the WCAG ratio against its effective bg. Applied before the dim fade so
     // an unfocused pane keeps the same relative treatment; free when off (<= 1).
-    let ink = |fg: egui::Color32, bg: Option<egui::Color32>| {
-        if min_contrast > 1.0 {
-            colors::ensure_contrast(fg, bg.unwrap_or_else(colors::bg), min_contrast)
+    // SGR 2 (faint) fades toward the effective bg AFTER the floor, so hint/ghost text stays
+    // visibly dimmer than normal text instead of being pulled back to full contrast.
+    let ink = |cell: &crate::terminal::CellSnap| {
+        let eff_bg = cell.bg.unwrap_or_else(colors::bg);
+        let fg = if min_contrast > 1.0 {
+            colors::ensure_contrast(cell.fg, eff_bg, min_contrast)
         } else {
-            fg
-        }
+            cell.fg
+        };
+        if cell.dim { colors::faint(fg, eff_bg) } else { fg }
     };
     for r in 0..snap.rows {
         // Symbol ligatures: cells covered by a span skip their own glyph; the span's single
-        // glyph is drawn centered across the covered cells (bg/selection stay per-cell).
+        // glyph spans the covered cells (bg/selection stay per-cell). Spans are COLLECTED here
+        // but painted after the cell loop - painting them first let the per-cell bg rects cover
+        // them, which made every ligature invisible on any cell with an explicit background
+        // (diff views, highlighted regions).
         let mut lig_skip = vec![false; if ligatures { snap.cols } else { 0 }];
+        let mut lig_spans = Vec::new();
         if ligatures {
             let row_chars: Vec<char> =
                 (0..snap.cols).map(|c| snap.cells[r * snap.cols + c].c).collect();
@@ -1038,18 +1046,7 @@ pub(crate) fn render_grid(
                 for f in &mut lig_skip[start..start + len] {
                     *f = true;
                 }
-                let cell = &snap.cells[r * snap.cols + start];
-                let span = egui::Rect::from_min_size(
-                    origin + egui::vec2(start as f32 * cw, r as f32 * ch),
-                    egui::vec2(len as f32 * cw, ch),
-                );
-                painter.text(
-                    span.center(),
-                    egui::Align2::CENTER_CENTER,
-                    glyph,
-                    cell_font(cell.bold).clone(),
-                    fade(ink(cell.fg, cell.bg)),
-                );
+                lig_spans.push((start, len, glyph));
             }
         }
         // Index-driven on purpose: c addresses three parallel sources (cells, pixel x, lig_skip).
@@ -1065,10 +1062,10 @@ pub(crate) fn render_grid(
                 painter.rect_filled(cell_rect, 0.0, fade(colors::selection()));
             }
             if ligatures && lig_skip[c] {
-                continue; // glyph drawn by the span above
+                continue; // glyph drawn by the span pass below
             }
             if cell.c != ' ' && cell.c != '\0' {
-                let fg = fade(ink(cell.fg, cell.bg));
+                let fg = fade(ink(cell));
                 let f = cell_font(cell.bold);
                 if cell.wide {
                     // A wide glyph (CJK/emoji) owns this cell AND the spacer after it: draw it
@@ -1084,6 +1081,21 @@ pub(crate) fn render_grid(
                     painter.text(pos, egui::Align2::LEFT_TOP, cell.c, f.clone(), fg);
                 }
             }
+        }
+        // Ligature glyphs last, so the row's bg / selection fills can't paint over them.
+        for (start, len, glyph) in lig_spans {
+            let cell = &snap.cells[r * snap.cols + start];
+            let span = egui::Rect::from_min_size(
+                origin + egui::vec2(start as f32 * cw, r as f32 * ch),
+                egui::vec2(len as f32 * cw, ch),
+            );
+            painter.text(
+                span.center(),
+                egui::Align2::CENTER_CENTER,
+                glyph,
+                cell_font(cell.bold).clone(),
+                fade(ink(cell)),
+            );
         }
     }
 
