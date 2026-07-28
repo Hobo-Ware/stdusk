@@ -106,7 +106,9 @@ pub(crate) fn exit_action(mode: OnExit, uptime_secs: f32, rapid_exits: u32) -> E
 /// `wide` marks a double-width glyph (CJK/emoji) - the renderer draws it across two cells; the
 /// spacer cell that follows carries `c == '\0'` so no glyph is drawn there (bg/selection stay).
 /// `bold` is the raw SGR BOLD flag - the renderer switches to the real bold face when one is
-/// registered; independent of the `bold_bright` color treatment.
+/// registered; independent of the `bold_bright` color treatment. `dim` is SGR 2 (faint): the
+/// renderer blends the text toward the background, which is how TUIs draw hint/ghost text.
+#[allow(clippy::struct_excessive_bools)] // independent SGR attributes, not a mode
 pub(crate) struct CellSnap {
     pub(crate) c: char,
     pub(crate) fg: Color32,
@@ -114,6 +116,7 @@ pub(crate) struct CellSnap {
     pub(crate) selected: bool,
     pub(crate) wide: bool,
     pub(crate) bold: bool,
+    pub(crate) dim: bool,
 }
 
 /// Map a grid cell's char + flags to what the renderer draws: spacer cells (the second column
@@ -665,8 +668,17 @@ impl PtyTerm {
             let selected = selection.as_ref().is_some_and(|r| r.contains(indexed.point));
             let bold = cell.flags.contains(Flags::BOLD);
             let bright = self.bold_bright && bold;
+            let dim = cell.flags.contains(Flags::DIM);
             let (c, wide) = snap_glyph(cell.c, cell.flags);
-            cells.push(CellSnap { c, fg: colors::cell_fg(fg_c, bright), bg, selected, wide, bold });
+            cells.push(CellSnap {
+                c,
+                fg: colors::cell_fg(fg_c, bright),
+                bg,
+                selected,
+                wide,
+                bold,
+                dim,
+            });
         }
         // Cursor only shown at the bottom (not scrolled into history) AND while the app
         // hasn't hidden it (DECTCEM `CSI ?25l` - vim/copilot hide it for their own UI).
@@ -1201,6 +1213,23 @@ mod tests {
             (snap.cells.iter().any(|c| c.c == 'X') && snap.cursor.is_none()).then_some(())
         })
         .expect("hidden cursor must clear the snapshot cursor");
+    }
+
+    #[test]
+    fn real_pty_faint_text_is_marked_dim_in_the_snapshot() {
+        // SGR 2 (faint) is how TUIs draw hint / ghost text (Claude Code's suggestions). The
+        // flag used to be dropped on the floor, so faint text rendered at full brightness.
+        // `N` is normal, `D` is faint, and SGR 22 must cancel it again (`E` normal).
+        let term = e2e_term("printf 'N\\033[2mD\\033[22mE'; sleep 5");
+        poll_term(&term, |t| {
+            let snap = t.grid_snapshot();
+            let at = |ch: char| snap.cells.iter().find(|c| c.c == ch).map(|c| c.dim);
+            match (at('N'), at('D'), at('E')) {
+                (Some(false), Some(true), Some(false)) => Some(()),
+                _ => None,
+            }
+        })
+        .expect("SGR 2 must set dim, SGR 22 must clear it");
     }
 
     #[test]

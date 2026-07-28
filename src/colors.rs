@@ -251,6 +251,15 @@ pub(crate) fn ensure_contrast(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
     }
     target
 }
+/// SGR 2 (faint): blend `fg` 45% toward `bg`. Blend-toward-background rather than alacritty's
+/// `fg * 0.66` multiply because a multiply darkens - on a LIGHT theme that INCREASES contrast
+/// and dim text would read bolder than normal text. Applied after the contrast floor so the
+/// floor can't cancel the fade (the floor guarantees the undimmed color is readable).
+pub(crate) fn faint(fg: Color32, bg: Color32) -> Color32 {
+    let l = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * 0.45).round() as u8;
+    Color32::from_rgb(l(fg.r(), bg.r()), l(fg.g(), bg.g()), l(fg.b(), bg.b()))
+}
+
 /// Swatches offered by the right-click Color menu - a curated vivid palette (2 rows of 6),
 /// theme-independent so tab underlines read cleanly on any background.
 pub(crate) fn tab_colors() -> [Color32; 12] {
@@ -592,6 +601,25 @@ mod tests {
                 contrast_ratio(out, bg)
             );
         }
+    }
+
+    #[test]
+    fn faint_fades_toward_the_background_on_both_polarities() {
+        // Dark theme: faint text gets DARKER (closer to bg), never brighter.
+        let (fg, bg) = (Color32::WHITE, rgb(0x1a, 0x1b, 0x26));
+        let f = faint(fg, bg);
+        assert!(contrast_ratio(f, bg) < contrast_ratio(fg, bg));
+        assert!(f.r() < fg.r() && f.r() > bg.r(), "between fg and bg, got {f:?}");
+
+        // Light theme: faint text gets LIGHTER. This is why we blend toward bg instead of
+        // alacritty's `fg * 0.66` multiply - a multiply would darken and read BOLDER here.
+        let (fg, bg) = (Color32::BLACK, Color32::WHITE);
+        let f = faint(fg, bg);
+        assert!(contrast_ratio(f, bg) < contrast_ratio(fg, bg));
+        assert!(f.r() > fg.r(), "must lighten on a light bg, got {f:?}");
+
+        // fg == bg is already invisible: the blend is a no-op, not an amplifier.
+        assert_eq!(faint(bg, bg), bg);
     }
 
     #[test]
