@@ -598,6 +598,31 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.5.0 - pending-update affordance (gear dot / tray / About) + TCC prompt docs
+- Update detection compares the compiled-in version against the .app bundle's `Info.plist`, which
+  is exactly what changes when `brew reinstall --cask` swaps the bundle while we keep running the
+  old inode. No network, no entitlements. Any difference counts, so a ROLLBACK is offered too - the
+  claim is "disk differs from running", never "an update exists". Dev builds (no bundle) never offer.
+- Surfaces: a dot on the settings gear (+ tooltip naming the version), a tray item whose label
+  follows the pending state (`MenuItem` handle kept so it can be relabeled - the menu is built once
+  at launch but brew can land mid-session), and a Settings > About row with a Restart button.
+  No toasts, no modals - a terminal must not nag over a live session.
+- Restart reuses the quit path, so the running-processes confirmation still guards it and shells are
+  still killed (session restore returns the layout, not the processes). The successor CANNOT be
+  spawned first: the single-instance guard would hand its request to our socket and exit windowless
+  (same trap `--state-dir` hit), so a detached watcher polls `kill -0` on our pid and then `open`s
+  the bundle. `open` on the bundle, not the inner binary - launchd is what gets you a window.
+- TCC: the Desktop/Photos/Music/other-app-data prompts are NOT Gatekeeper and signing does not
+  silence them; they fire because a terminal hosts your shell (a `$HOME` tab-completion stats
+  protected dirs). Ad-hoc signing makes them RECUR - with no stable Team ID, grants key to the code
+  hash, so every release re-asks. Added the 6 usage-description keys (incl. `NSAppDataUsageDescription`,
+  macOS 14+, for the "data from other apps" prompt) + a README section on Full Disk Access as the
+  one-time escape hatch. `NSAppleMusicUsageDescription` is documented macOS 15+, ignored below that.
+- Session handoff (keeping shells ALIVE across an update) is phase 1 only and parked on the
+  `feat/session-handoff` branch, NOT on main: it has no callers yet (dead code fails the clippy
+  gate) and it should wait for Developer ID signing, since it relaunches on every update and would
+  re-trigger the very prompts it is meant to feel seamless through.
+
 ## 1.4.9 - ligature z-order, SGR 2 dim, nested-launch ZDOTDIR
 - Ligature glyphs painted BEFORE the row's per-cell bg fills, so any cell with an explicit
   background covered them: `!=` / `...` were blank gaps in diffs and highlighted regions (cells on
