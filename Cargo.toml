@@ -18,6 +18,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 portable-pty = "0.9.0"
 regex = "1.13.0"
 resvg = { version = "0.45", default-features = false } # CLI-badge brand SVGs -> egui textures (paths only; no text/fonts needed)
+rustix = { version = "1.1.4", features = ["net", "termios"] } # session handoff: SCM_RIGHTS fd passing + tcsetwinsize, both SAFE (the crate forbids unsafe)
 serde = { version = "1.0.228", features = ["derive"] }
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 toml = "1.1.3"

@@ -13,6 +13,7 @@ mod colors;
 mod config;
 mod finder;
 mod fonts;
+mod handoff;
 mod instance;
 mod keys;
 mod links;
