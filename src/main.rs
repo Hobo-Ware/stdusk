@@ -33,6 +33,7 @@ mod terminal;
 mod themes;
 mod tray;
 mod ui;
+mod update;
 mod widgets;
 mod workspace;
 use config::Config;
@@ -106,6 +107,9 @@ struct Stdusk {
     launch_pull_cfg: Option<String>, // config TOML when the launch autosync pull spawned (staleness gate)
     new_tab_req: Arc<AtomicUsize>,   // new-tab requests from other launches (single-instance)
     screenshot: Option<String>,      // --screenshot PATH: demo tabs, capture, exit
+    pending_update: Option<String>, // version installed on disk when it differs from the running one
+    next_update_check: f64,         // egui time of the next throttled bundle-version check
+    restart_on_quit: bool,          // relaunch the bundle after this quit (Restart / update flow)
 }
 
 impl Stdusk {
@@ -373,6 +377,11 @@ impl Stdusk {
             launch_pull_cfg,
             new_tab_req,
             screenshot,
+            // Checked once at launch (brew may have swapped the bundle while we were closed),
+            // then re-checked on the slow tick below.
+            pending_update: update::pending_for_running_exe(),
+            next_update_check: 0.0,
+            restart_on_quit: false,
         }
     }
 
@@ -637,11 +646,14 @@ impl eframe::App for Stdusk {
 
                 // Menu-bar item: Show/Hide toggles the window, Quit exits.
                 if let Some(tray) = &self.tray {
-                    let (show, quit) = tray::poll(tray);
-                    if quit {
+                    let clicks = tray::poll(tray);
+                    if clicks.quit {
                         self.begin_quit(&ctx);
                     }
-                    if show {
+                    if clicks.restart {
+                        self.begin_restart(&ctx);
+                    }
+                    if clicks.show_hide {
                         self.visible = !self.visible;
                         apply_visibility(&ctx, self.visible, height_pct);
                         if self.visible {
@@ -695,11 +707,14 @@ impl eframe::App for Stdusk {
                 self.toggle.store(false, Ordering::SeqCst);
                 // The menu-bar item still works: Show brings us to front, Quit exits.
                 if let Some(tray) = &self.tray {
-                    let (show, quit) = tray::poll(tray);
-                    if quit {
+                    let clicks = tray::poll(tray);
+                    if clicks.quit {
                         self.begin_quit(&ctx);
                     }
-                    if show {
+                    if clicks.restart {
+                        self.begin_restart(&ctx);
+                    }
+                    if clicks.show_hide {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                 }
@@ -787,6 +802,22 @@ impl eframe::App for Stdusk {
                     term.cwd().as_deref(),
                 ) {
                     tab.title = t;
+                }
+            }
+        }
+
+        // Pending-update poll: has the .app bundle been replaced under us (brew reinstall)? A
+        // stat + small read, so a slow tick is plenty - never per frame.
+        if self.screenshot.is_none() {
+            let now = ctx.input(|i| i.time);
+            if now >= self.next_update_check {
+                self.next_update_check = now + 60.0;
+                let found = update::pending_for_running_exe();
+                if found != self.pending_update {
+                    self.pending_update = found;
+                    if let Some(tray) = &self.tray {
+                        tray::set_pending_update(tray, self.pending_update.as_deref());
+                    }
                 }
             }
         }

@@ -1805,7 +1805,8 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
     op
 }
 
-fn about_section(ui: &mut egui::Ui) {
+/// Returns true when the user asked to restart (a pending update, or just a plain restart).
+fn about_section(ui: &mut egui::Ui, pending: Option<&str>) -> bool {
     title(ui, "About");
     ui.label(egui::RichText::new("stdusk").size(26.0).strong().color(colors::fg()));
     ui.label(
@@ -1813,6 +1814,26 @@ fn about_section(ui: &mut egui::Ui) {
             .size(12.0)
             .color(colors::dim()),
     );
+    // A pending version means the bundle on disk was swapped under us (brew), so a restart is
+    // what picks it up. Stated plainly here; the gear only carries a dot.
+    let mut restart = false;
+    if let Some(v) = pending {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{v} installed"))
+                    .size(12.0)
+                    .strong()
+                    .color(colors::accent()),
+            );
+            restart = ui.button("Restart to update").clicked();
+        });
+        ui.label(
+            egui::RichText::new("Running shells are terminated by the restart.")
+                .size(11.0)
+                .color(colors::dim()),
+        );
+    }
     ui.add_space(4.0);
     ui.label(egui::RichText::new("the machine speaks back").italics().color(colors::dim()));
     ui.add_space(20.0);
@@ -1830,6 +1851,7 @@ fn about_section(ui: &mut egui::Ui) {
     {
         let _ = std::process::Command::new("open").arg(dir).spawn();
     }
+    restart
 }
 
 // ---- the view ----
@@ -2071,6 +2093,7 @@ impl Stdusk {
         let mut profiles_fx: Option<ProfilesFx> = None;
         let mut hotkeys_fx: Option<HotkeysFx> = None;
         let mut sync_op: Option<sync::Op> = None;
+        let mut restart_req = false;
 
         let nav = egui::Panel::left("settings_nav")
             .exact_size(NAV_W)
@@ -2200,7 +2223,10 @@ impl Stdusk {
                                             sync_op =
                                                 session_section(ui, &mut self.cfg, self.sync_busy);
                                         }
-                                        Section::About => about_section(ui),
+                                        Section::About => {
+                                            restart_req =
+                                                about_section(ui, self.pending_update.as_deref());
+                                        }
                                         Section::ColorScheme => unreachable!(),
                                     }
                                     ui.add_space(16.0);
@@ -2261,6 +2287,12 @@ impl Stdusk {
                 self.sync_busy = true;
                 sync::spawn(op, self.cfg.sync.repo.trim().to_owned(), &self.sync_slot, ctx.clone());
             }
+        }
+
+        // Restart from About: goes through the normal quit path, so the running-processes
+        // confirmation still guards it.
+        if restart_req {
+            self.begin_restart(ctx);
         }
 
         // Esc closes - but not while a hard modal (rename/paste/close/palette) or the find bar
