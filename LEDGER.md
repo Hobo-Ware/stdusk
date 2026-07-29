@@ -598,6 +598,49 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## unreleased (branch `handoff`) - Restart keeps the shells running
+- **Session handoff is complete** (phases 1-4). Restart no longer kills anything from a bundle: the
+  predecessor binds a unix socket, `open -n -a <bundle> --args --adopt <sock>`, sends a TOML header
+  (protocol version + pane count + the `SavedSession`) and then ONE `SCM_RIGHTS` message per pane in
+  leaf order, each carrying that pane's live pty master fd. The successor adopts every fd via
+  `PtyTerm::adopt`, rebuilds the identical layout through `SavedPane::rebuild`, and ACKs.
+- **The ACK is the whole safety design.** `send_session` returns Ok ONLY after it arrives, so a
+  refused connect, an accept timeout (12s ceiling), a version mismatch, a short read or a successor
+  that hangs up all leave the predecessor byte-for-byte unchanged: window up, every shell armed,
+  toast saying the restart did not happen. `mark_handed_off` (which disarms `kill()` + `Drop`) is
+  unreachable before the ACK. An aborted handoff deliberately does NOT fall through to the old kill
+  path - only a build with no `.app` bundle (dev) still kills + relaunches via the watcher.
+- Quit still KILLS in every direction: Cmd+Q, red button, tray Quit, palette Quit, and the
+  running-processes confirm. Only the restart path disarms, and only after the ACK.
+- `session_snapshot` is now shared by the session-persist tick and the handoff header, so the two
+  can never drift into restoring different layouts. Panes are collected in `Pane::leaves` order,
+  which is `SavedPane::from_tree`'s A-before-B order, so position IS the pairing.
+- `--adopt` bypasses the single-instance guard by force (`instance::take_over`): `acquire` would hand
+  our request to the still-live predecessor and exit us windowless - the trap that burned this repo
+  twice. The predecessor then skips unlinking a socket path the successor owns
+  (`handoff::gave_instance_socket`). A handoff that fails AFTER launch exits quietly when the
+  predecessor still answers its socket, and opens a normal window when nobody does.
+- UX: the confirm modal now follows a `ui::QuitKind` - a handoff restart says it reattaches and warns
+  that scrollback is not restored instead of claiming it terminates processes; a dev build keeps the
+  honest terminate wording. Same split on the Settings > About note. The successor toasts the
+  scrollback loss once after adopting (alacritty's `Term` has no serialization - the grid cannot
+  move, only the shells).
+- Untrusted wire input is clamped, not trusted: `Duration::from_secs_f32` panics on NaN/negative and
+  a hostile `cols` would size a grid that wide (`alive_duration`, `grid_dims`).
+- 302 tests green (+12): the full exchange over a `UnixStream::pair` with pipes standing in for ptys,
+  read back through the RECEIVED fds to prove leaf-order pairing; version/count refusals; "no ACK =
+  no success"; the accept timeout; the clamps; the three confirm wordings.
+- **Verified LIVE** (two `#[ignore]`d tests, `cargo test -- --ignored real_`): the real binary as the
+  successor adopting a live shell and acknowledging, and a real `.app` launched exactly the way
+  `spawn_successor` launches it - which is where "`open` on the BUNDLE, `-n`, `--args`" stops being
+  an assumption. Warm round trip is ~1s, so the 12s ceiling is slack, not a wait.
+- NOT verified end to end: the predecessor's `hand_off` glue as driven by a real Restart CLICK (a GUI
+  click cannot be automated here). Its parts are each covered - `send_session` + `accept_within` by
+  tests, `spawn_successor` by the live bundle test - but the ~20 lines that sequence them are only
+  reasoned about. Known rough edge: `hand_off` blocks the UI thread until the ACK (~1s), so the old
+  window is frozen for that moment; a background handshake would only widen the window in which our
+  reader threads steal the successor's pty bytes, which is why it is synchronous.
+
 ## 1.5.1 - restart confirmation honesty
 - Clicking Restart raised a "Quit stdusk?" modal with a Quit button (the restart flow reuses the
   quit path, and the modal was hardcoded). Title/button/message now follow the armed action, and the

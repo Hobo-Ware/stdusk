@@ -1806,7 +1806,7 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
 }
 
 /// Returns true when the user asked to restart (a pending update, or just a plain restart).
-fn about_section(ui: &mut egui::Ui, pending: Option<&str>) -> bool {
+fn about_section(ui: &mut egui::Ui, pending: Option<&str>, keeps_shells: bool) -> bool {
     title(ui, "About");
     ui.label(egui::RichText::new("stdusk").size(26.0).strong().color(colors::fg()));
     ui.label(
@@ -1829,7 +1829,7 @@ fn about_section(ui: &mut egui::Ui, pending: Option<&str>) -> bool {
             restart = ui.button("Restart to update").clicked();
         });
         ui.label(
-            egui::RichText::new("Running shells are terminated by the restart.")
+            egui::RichText::new(ui::restart_shell_note(keeps_shells))
                 .size(11.0)
                 .color(colors::dim()),
         );
@@ -2225,8 +2225,11 @@ impl Stdusk {
                                                 session_section(ui, &mut self.cfg, self.sync_busy);
                                         }
                                         Section::About => {
-                                            restart_req =
-                                                about_section(ui, self.pending_update.as_deref());
+                                            restart_req = about_section(
+                                                ui,
+                                                self.pending_update.as_deref(),
+                                                crate::handoff::available(),
+                                            );
                                         }
                                         Section::ColorScheme => unreachable!(),
                                     }

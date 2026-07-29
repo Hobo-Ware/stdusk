@@ -189,6 +189,7 @@ impl Stdusk {
         // of `session.restore`: this is not a restore, the processes are the same ones.
         let mut tabs = Vec::new();
         let mut active = 0;
+        let mut adopted = false;
         if let Some(mut inc) = incoming {
             let mut panes = inc.take_panes().into_iter();
             let session = inc.session().clone();
@@ -207,6 +208,7 @@ impl Stdusk {
                 tabs.push(tab);
             }
             active = session.active.min(tabs.len().saturating_sub(1));
+            adopted = !tabs.is_empty();
             // The ACK is the predecessor's release: only now, with live PtyTerms, is it safe. A
             // failed write leaves it running (it keeps its shells) - noisy, but never data loss.
             if let Err(e) = inc.ack() {
@@ -343,7 +345,15 @@ impl Stdusk {
 
         let registered_hotkey = cfg.quake.hotkey.clone();
         let applied_font = cfg.appearance.font.clone();
-        let toast = font_missing.then(|| (format!("Font not found: {}", cfg.appearance.font), 3.0));
+        let toast = if font_missing {
+            Some((format!("Font not found: {}", cfg.appearance.font), 3.0))
+        } else if adopted {
+            // The one thing a handoff cannot carry (alacritty's Term has no serialization), said
+            // once, right after it happened - the shells themselves are the same processes.
+            Some(("Session reattached - scrollback did not carry over".to_owned(), 6.0))
+        } else {
+            None
+        };
         let fx_opacity = cfg.appearance.opacity;
         // Autosync: pull once on launch (in the background - startup never blocks on git).
         // The per-frame sync_done handler applies the result like a manual Pull; a failure
@@ -651,8 +661,10 @@ impl eframe::App for Stdusk {
                 let (procs, tabs) = self.running_summary();
                 if ui::should_confirm_running(self.cfg.session.confirm_quit_running, procs) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                    // An OS close (red button / Cmd+Q) is never a restart.
-                    self.pending_quit = Some(ui::quit_confirm_message(procs, tabs, false));
+                    // An OS close (red button / Cmd+Q) is never a restart: it terminates the
+                    // shells, handoff or not, so it asks the terminate question.
+                    self.pending_quit =
+                        Some(ui::quit_confirm_message(procs, tabs, ui::QuitKind::Quit));
                 } else {
                     // Nothing to confirm: let the close proceed, but kill the groups first so no
                     // shell tree leaks (Drop is the backstop if this path is ever missed).

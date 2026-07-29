@@ -763,6 +763,18 @@ impl Stdusk {
         (total, tabs)
     }
 
+    /// What the pending confirm is about to do, so the modal can't claim a restart kills shells it
+    /// is actually going to hand over (nor promise a handoff a dev build cannot perform).
+    pub(crate) fn quit_kind(&self) -> ui::QuitKind {
+        if !self.restart_on_quit {
+            ui::QuitKind::Quit
+        } else if crate::handoff::available() {
+            ui::QuitKind::RestartKeepingShells
+        } else {
+            ui::QuitKind::Restart
+        }
+    }
+
     /// Entry point for a user-initiated quit (tray Quit, palette Quit). Confirms first when child
     /// processes are running (and the guard is on); otherwise kills the groups and closes now.
     pub(crate) fn begin_quit(&mut self, ctx: &egui::Context) {
@@ -770,7 +782,7 @@ impl Stdusk {
         if self.screenshot.is_none()
             && ui::should_confirm_running(self.cfg.session.confirm_quit_running, procs)
         {
-            self.pending_quit = Some(ui::quit_confirm_message(procs, tabs, self.restart_on_quit));
+            self.pending_quit = Some(ui::quit_confirm_message(procs, tabs, self.quit_kind()));
         } else {
             self.finish_quit(ctx);
         }
@@ -830,7 +842,7 @@ impl Stdusk {
         };
         let mut confirm = false;
         let mut cancel = false;
-        let (title, ok) = ui::quit_confirm_labels(self.restart_on_quit);
+        let (title, ok) = ui::quit_confirm_labels(self.quit_kind());
         egui::Window::new(title)
             .title_bar(false)
             .collapsible(false)

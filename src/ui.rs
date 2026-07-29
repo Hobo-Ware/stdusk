@@ -449,19 +449,55 @@ fn name_preview(names: &[String]) -> String {
     if names.len() > 3 { format!(" ({head}, ...)") } else { format!(" ({head})") }
 }
 
-/// The quit confirm body: how much a quit will kill. `procs` running child processes summed
-/// across `tabs` tabs. Title ("Quit stdusk?") is drawn by the modal; this is the detail line.
-pub(crate) fn quit_confirm_message(procs: usize, tabs: usize, restart: bool) -> String {
+/// What the running-processes confirm is about to do. Three distinct promises, so the modal can't
+/// claim a restart terminates shells it is going to HAND to the successor - nor promise a handoff a
+/// build without an `.app` bundle cannot perform.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QuitKind {
+    Quit,
+    /// Restart without a handoff (dev build): the old behavior, shells die.
+    Restart,
+    /// Restart that moves the live ptys to the successor - the shells keep running.
+    RestartKeepingShells,
+}
+
+/// The quit confirm body: what the action does to what's running. `procs` running child processes
+/// summed across `tabs` tabs. Title ("Quit stdusk?") is drawn by the modal; this is the detail line.
+pub(crate) fn quit_confirm_message(procs: usize, tabs: usize, kind: QuitKind) -> String {
     let p_noun = if procs == 1 { "process" } else { "processes" };
     let t_noun = if tabs == 1 { "tab" } else { "tabs" };
-    let tail = if restart { ", then relaunch stdusk" } else { "" };
-    format!("This will terminate {procs} running {p_noun} across {tabs} {t_noun}{tail}.")
+    match kind {
+        QuitKind::Quit => {
+            format!("This will terminate {procs} running {p_noun} across {tabs} {t_noun}.")
+        }
+        QuitKind::Restart => format!(
+            "This will terminate {procs} running {p_noun} across {tabs} {t_noun}, then relaunch stdusk."
+        ),
+        // Nothing is terminated here, so the line must not say it is. Scrollback is the one real
+        // loss (alacritty's Term has no serialization), so it's stated up front.
+        QuitKind::RestartKeepingShells => format!(
+            "stdusk will relaunch and reattach {procs} running {p_noun} across {tabs} {t_noun}. Scrollback is not restored."
+        ),
+    }
 }
 
 /// `(title, confirm button)` for the running-processes modal. A restart asks its OWN question:
 /// answering "Quit?" when the user clicked Restart is how you get a mis-click.
-pub(crate) fn quit_confirm_labels(restart: bool) -> (&'static str, &'static str) {
-    if restart { ("Restart stdusk?", "Restart") } else { ("Quit stdusk?", "Quit") }
+pub(crate) fn quit_confirm_labels(kind: QuitKind) -> (&'static str, &'static str) {
+    match kind {
+        QuitKind::Quit => ("Quit stdusk?", "Quit"),
+        QuitKind::Restart | QuitKind::RestartKeepingShells => ("Restart stdusk?", "Restart"),
+    }
+}
+
+/// The one-line note under Settings > About's Restart button. Same honesty rule as the confirm
+/// modal: promise a reattach only when the running build can actually hand its ptys over.
+pub(crate) fn restart_shell_note(keeps_shells: bool) -> &'static str {
+    if keeps_shells {
+        "Running shells are reattached; scrollback is not restored."
+    } else {
+        "Running shells are terminated by the restart."
+    }
 }
 
 /// Whether a close/quit should stop to confirm: only when the feature is on AND there is actually
@@ -1471,11 +1507,11 @@ mod tests {
     #[test]
     fn quit_confirm_message_pluralizes() {
         assert_eq!(
-            quit_confirm_message(1, 1, false),
+            quit_confirm_message(1, 1, QuitKind::Quit),
             "This will terminate 1 running process across 1 tab."
         );
         assert_eq!(
-            quit_confirm_message(5, 2, false),
+            quit_confirm_message(5, 2, QuitKind::Quit),
             "This will terminate 5 running processes across 2 tabs."
         );
     }
@@ -1484,15 +1520,37 @@ mod tests {
     fn restart_confirm_asks_about_restarting_not_quitting() {
         // Clicking Restart used to raise a "Quit stdusk?" modal with a Quit button - the wrong
         // question, and a mis-click waiting to happen.
-        assert_eq!(quit_confirm_labels(true), ("Restart stdusk?", "Restart"));
-        assert_eq!(quit_confirm_labels(false), ("Quit stdusk?", "Quit"));
+        assert_eq!(quit_confirm_labels(QuitKind::Restart), ("Restart stdusk?", "Restart"));
+        assert_eq!(
+            quit_confirm_labels(QuitKind::RestartKeepingShells),
+            ("Restart stdusk?", "Restart")
+        );
+        assert_eq!(quit_confirm_labels(QuitKind::Quit), ("Quit stdusk?", "Quit"));
         // The restart wording also has to promise the relaunch, since that's the difference.
-        let m = quit_confirm_message(2, 1, true);
+        let m = quit_confirm_message(2, 1, QuitKind::Restart);
         assert_eq!(
             m,
             "This will terminate 2 running processes across 1 tab, then relaunch stdusk."
         );
-        assert!(!quit_confirm_message(2, 1, false).contains("relaunch"));
+        assert!(!quit_confirm_message(2, 1, QuitKind::Quit).contains("relaunch"));
+    }
+
+    #[test]
+    fn handoff_restart_never_claims_it_terminates_anything() {
+        // A restart that hands the ptys over keeps every shell alive, so the modal must drop the
+        // "terminate" claim entirely - and must name the one thing that IS lost.
+        let m = quit_confirm_message(3, 2, QuitKind::RestartKeepingShells);
+        assert_eq!(
+            m,
+            "stdusk will relaunch and reattach 3 running processes across 2 tabs. Scrollback is not restored."
+        );
+        assert!(!m.contains("terminate"));
+        // Without a handoff the wording stays honest about the kill.
+        assert!(quit_confirm_message(3, 2, QuitKind::Restart).contains("terminate"));
+        // Same split for the About note.
+        assert!(restart_shell_note(true).contains("reattached"));
+        assert!(!restart_shell_note(true).contains("terminated"));
+        assert!(restart_shell_note(false).contains("terminated"));
     }
 
     #[test]
