@@ -123,6 +123,22 @@ Same cert -> same Designated Requirement -> your grants keep persisting, no re-a
 notarized releases ship (see [`packaging/README.md`](./packaging/README.md)) this is obsolete -
 those work everywhere, not just your machine.
 
+## Privacy prompts (Full Disk Access)
+
+Desktop, Documents, Downloads, Photos, Music, "would like to access data from other apps" -
+those dialogs are macOS **TCC** (Transparency, Consent, and Control), not Gatekeeper, and code
+signing does not silence them. They fire because a terminal hosts your shell: an `ls ~/Desktop`
+or a tab-completion in `$HOME` is, as far as macOS is concerned, stdusk touching a protected
+path. Terminal.app and iTerm2 behave the same way.
+
+Ad-hoc builds make it repeat: with no stable Team ID, TCC keys the grants to the code hash, so
+every update replaces the bundle and macOS asks all over again. A proper Developer ID signature
+(or the self-signed cert above) is what makes grants survive updates.
+
+One-time fix for the whole cascade: **System Settings -> Privacy & Security -> Full Disk
+Access** -> add stdusk. That single grant covers the protected folders, so the per-folder
+prompts stop.
+
 ## Lineage
 
 stdusk began as a hard fork of [Tabby](https://github.com/Eugeny/tabby) (MIT) and is now a full Rust rewrite - this repo is the native app at its root. The original Electron Tabby source has been removed from the tree; refer to upstream [Eugeny/tabby](https://github.com/Eugeny/tabby) for it. Credit where it's due - Tabby nailed the vibe, we chased the efficiency.
