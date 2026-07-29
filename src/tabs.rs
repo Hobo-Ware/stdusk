@@ -704,7 +704,7 @@ impl Stdusk {
         if self.screenshot.is_none()
             && ui::should_confirm_running(self.cfg.session.confirm_quit_running, procs)
         {
-            self.pending_quit = Some(ui::quit_confirm_message(procs, tabs));
+            self.pending_quit = Some(ui::quit_confirm_message(procs, tabs, self.restart_on_quit));
         } else {
             self.finish_quit(ctx);
         }
@@ -739,19 +739,20 @@ impl Stdusk {
         };
         let mut confirm = false;
         let mut cancel = false;
-        egui::Window::new("Quit stdusk?")
+        let (title, ok) = ui::quit_confirm_labels(self.restart_on_quit);
+        egui::Window::new(title)
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
             .frame(crate::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new("Quit stdusk?").strong().color(colors::fg()));
+                ui.label(egui::RichText::new(title).strong().color(colors::fg()));
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(&msg).color(colors::dim()));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::widgets::action_button(ui, "Quit", true).clicked() {
+                    if crate::widgets::action_button(ui, ok, true).clicked() {
                         confirm = true;
                     }
                     if crate::widgets::action_button(ui, "Cancel", false).clicked() {
@@ -770,7 +771,10 @@ impl Stdusk {
         }
         if confirm {
             self.finish_quit(ctx);
-        } else if !cancel {
+        } else if cancel {
+            // Disarm: a cancelled restart must not leave the relaunch armed for the NEXT quit.
+            self.restart_on_quit = false;
+        } else {
             self.pending_quit = Some(msg); // keep asking next frame
         }
     }

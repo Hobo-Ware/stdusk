@@ -581,7 +581,8 @@ impl eframe::App for Stdusk {
                 let (procs, tabs) = self.running_summary();
                 if ui::should_confirm_running(self.cfg.session.confirm_quit_running, procs) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                    self.pending_quit = Some(ui::quit_confirm_message(procs, tabs));
+                    // An OS close (red button / Cmd+Q) is never a restart.
+                    self.pending_quit = Some(ui::quit_confirm_message(procs, tabs, false));
                 } else {
                     // Nothing to confirm: let the close proceed, but kill the groups first so no
                     // shell tree leaks (Drop is the backstop if this path is ever missed).

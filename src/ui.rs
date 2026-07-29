@@ -451,10 +451,17 @@ fn name_preview(names: &[String]) -> String {
 
 /// The quit confirm body: how much a quit will kill. `procs` running child processes summed
 /// across `tabs` tabs. Title ("Quit stdusk?") is drawn by the modal; this is the detail line.
-pub(crate) fn quit_confirm_message(procs: usize, tabs: usize) -> String {
+pub(crate) fn quit_confirm_message(procs: usize, tabs: usize, restart: bool) -> String {
     let p_noun = if procs == 1 { "process" } else { "processes" };
     let t_noun = if tabs == 1 { "tab" } else { "tabs" };
-    format!("This will terminate {procs} running {p_noun} across {tabs} {t_noun}.")
+    let tail = if restart { ", then relaunch stdusk" } else { "" };
+    format!("This will terminate {procs} running {p_noun} across {tabs} {t_noun}{tail}.")
+}
+
+/// `(title, confirm button)` for the running-processes modal. A restart asks its OWN question:
+/// answering "Quit?" when the user clicked Restart is how you get a mis-click.
+pub(crate) fn quit_confirm_labels(restart: bool) -> (&'static str, &'static str) {
+    if restart { ("Restart stdusk?", "Restart") } else { ("Quit stdusk?", "Quit") }
 }
 
 /// Whether a close/quit should stop to confirm: only when the feature is on AND there is actually
@@ -1464,13 +1471,28 @@ mod tests {
     #[test]
     fn quit_confirm_message_pluralizes() {
         assert_eq!(
-            quit_confirm_message(1, 1),
+            quit_confirm_message(1, 1, false),
             "This will terminate 1 running process across 1 tab."
         );
         assert_eq!(
-            quit_confirm_message(5, 2),
+            quit_confirm_message(5, 2, false),
             "This will terminate 5 running processes across 2 tabs."
         );
+    }
+
+    #[test]
+    fn restart_confirm_asks_about_restarting_not_quitting() {
+        // Clicking Restart used to raise a "Quit stdusk?" modal with a Quit button - the wrong
+        // question, and a mis-click waiting to happen.
+        assert_eq!(quit_confirm_labels(true), ("Restart stdusk?", "Restart"));
+        assert_eq!(quit_confirm_labels(false), ("Quit stdusk?", "Quit"));
+        // The restart wording also has to promise the relaunch, since that's the difference.
+        let m = quit_confirm_message(2, 1, true);
+        assert_eq!(
+            m,
+            "This will terminate 2 running processes across 1 tab, then relaunch stdusk."
+        );
+        assert!(!quit_confirm_message(2, 1, false).contains("relaunch"));
     }
 
     #[test]
