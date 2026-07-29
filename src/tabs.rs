@@ -105,6 +105,72 @@ pub(crate) fn spawn_saved_tree(
     })
 }
 
+/// Rebuild a live pane tree by ADOPTING panes a predecessor handed over (see `handoff`), popping one
+/// per leaf in the same A-before-B order the sender collected them in. A pane the queue can't supply
+/// (or whose fd won't adopt) degrades to a FRESH shell in the saved cwd: one restarted pane beats a
+/// hole in the layout, and beats a panic in either case.
+fn adopt_saved_tree(
+    cfg: &Config,
+    ctx: &egui::Context,
+    sp: &session::SavedPane,
+    panes: &mut std::vec::IntoIter<(crate::handoff::PaneMeta, std::os::fd::OwnedFd)>,
+) -> pane::Pane<PtyTerm> {
+    // RefCell because `rebuild` takes a `Fn` (it's shared down the recursion), and popping the
+    // queue for each leaf is exactly the mutation that has to happen inside it.
+    let queue = std::cell::RefCell::new(panes);
+    sp.rebuild(&|leaf| {
+        let cwd = match leaf {
+            session::SavedPane::Leaf { cwd, .. } => cwd.clone(),
+            session::SavedPane::Split { .. } => None,
+        };
+        let opts = spawn_opts(cfg, cwd);
+        let fresh = || {
+            eprintln!("stdusk: no pane to adopt for a leaf; starting a fresh shell");
+            PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts)
+        };
+        let Some((meta, fd)) = queue.borrow_mut().next() else { return fresh() };
+        let (cols, rows) = crate::handoff::grid_dims(meta.cols, meta.rows);
+        PtyTerm::adopt(
+            cols,
+            rows,
+            ctx.clone(),
+            fd,
+            meta.pgid,
+            crate::handoff::alive_duration(meta.alive_secs),
+            &opts,
+        )
+        .unwrap_or_else(|_| fresh())
+    })
+}
+
+/// A tab whose panes are ADOPTED from a predecessor instead of spawned. Mirrors `spawn_saved_tab`
+/// (same layout rebuild, same caller-applied title/color/pinned) so the successor's window comes
+/// back identical - only the shells are the very same processes.
+pub(crate) fn adopt_saved_tab(
+    cfg: &Config,
+    ctx: &egui::Context,
+    sp: &session::SavedPane,
+    panes: &mut std::vec::IntoIter<(crate::handoff::PaneMeta, std::os::fd::OwnedFd)>,
+) -> Tab {
+    let root = adopt_saved_tree(cfg, ctx, sp, panes);
+    let focused = root.first_leaf_path();
+    Tab {
+        id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
+        title: "zsh".into(),
+        color: None,
+        renamed: false,
+        root: Some(root),
+        focused,
+        cli: None,
+        proc: None,
+        maximized: false,
+        pinned: false,
+        broadcast: false,
+        notify_activity: false,
+        activity_notified: false,
+    }
+}
+
 /// A tab restored from a saved split layout: rebuild the whole pane tree and focus its first leaf.
 /// Title/color/pinned are applied by the caller (same as the single-pane restore path).
 pub(crate) fn spawn_saved_tab(cfg: &Config, ctx: &egui::Context, sp: &session::SavedPane) -> Tab {
@@ -710,21 +776,46 @@ impl Stdusk {
         }
     }
 
-    /// Entry point for a restart (tray / Settings > About / palette): same confirmation and group
-    /// kill as a quit, with a relaunch armed. Sessions do NOT survive this - the layout comes back
-    /// via session restore, the processes don't.
+    /// Entry point for a restart (tray / Settings > About / palette): the same confirmation as a
+    /// quit, with a relaunch armed. From a bundle the shells are HANDED OVER and keep running (see
+    /// `finish_quit`); a dev build falls back to the old kill + relaunch-watcher restart.
     pub(crate) fn begin_restart(&mut self, ctx: &egui::Context) {
         self.restart_on_quit = true;
         self.begin_quit(ctx);
     }
 
     /// Actually quit: kill every pane's group, then close the window. `quit_confirmed` lets the
-    /// resulting OS `CloseRequested` pass the interception unchallenged. When a restart was armed,
-    /// a relaunch watcher is spawned FIRST so it's running before we start tearing down.
+    /// resulting OS `CloseRequested` pass the interception unchallenged.
+    ///
+    /// A restart tries the session handoff FIRST: on success the successor owns the shells, so this
+    /// process closes without killing anything and does nothing else on the way out. A handoff that
+    /// aborts changes nothing at all - the window STAYS UP with every shell intact and a toast
+    /// saying so, because silently killing a session the user asked to keep is the one outcome
+    /// worth failing loudly over. Only a build that cannot hand off (no `.app` bundle) still takes
+    /// the old path: kill the groups and let a detached watcher relaunch us.
     pub(crate) fn finish_quit(&mut self, ctx: &egui::Context) {
         self.pending_quit = None;
         self.quit_confirmed = true;
         if std::mem::take(&mut self.restart_on_quit) {
+            if crate::handoff::available() {
+                match self.hand_off(ctx) {
+                    Ok(()) => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
+                    Err(why) => {
+                        eprintln!("stdusk: session handoff aborted ({why})");
+                        let now = ctx.input(|i| i.time);
+                        let (msg, _) = ui::ellipsize(&format!("Restart cancelled: {why}"), 90);
+                        self.toast = Some((msg.replace('\n', " "), now + 5.0));
+                        // Re-arm the quit guard: this quit did not happen, so the next Cmd+Q must
+                        // confirm again instead of sailing through the interception.
+                        self.quit_confirmed = false;
+                        ctx.request_repaint();
+                        return;
+                    }
+                }
+            }
             spawn_relaunch_watcher();
         }
         self.kill_all_panes();

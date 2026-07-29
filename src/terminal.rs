@@ -264,6 +264,8 @@ pub(crate) struct PtyTerm {
     rapid_exits: u32,       // consecutive <RAPID_EXIT_SECS deaths, carried across respawns
     killed: bool,           // kill() ran (idempotency guard; Drop calls kill() too)
     handed_off: bool,       // the pty was passed to a successor process - kill()/Drop must NOT reap
+    started: std::time::Instant, // when THIS owner took the pty (spawn or adopt)
+    uptime_base: std::time::Duration, // how long the shell had run under previous owners
 }
 
 /// How this pane's pty master is owned. A spawned pane keeps `portable_pty`'s master (its proven
@@ -552,6 +554,8 @@ impl PtyTerm {
             rapid_exits: 0,
             killed: false,
             handed_off: false,
+            started: std::time::Instant::now(),
+            uptime_base: std::time::Duration::ZERO,
         }
     }
 
@@ -620,9 +624,17 @@ impl PtyTerm {
             rapid_exits: 0,
             killed: false,
             handed_off: false,
+            started: std::time::Instant::now(),
+            uptime_base: alive,
         };
         me.nudge_redraw();
         Ok(me)
+    }
+
+    /// How long this shell has been running, counting time under previous owners - what a further
+    /// handoff must carry so the crash-loop guard never reads a long-lived shell as freshly spawned.
+    pub(crate) fn alive(&self) -> std::time::Duration {
+        self.uptime_base + self.started.elapsed()
     }
 
     /// The master fd to hand to a successor, and the process group it must inherit responsibility
@@ -955,6 +967,11 @@ impl PtyTerm {
     /// Visible row count (for page scrolling).
     pub(crate) fn rows(&self) -> usize {
         self.rows
+    }
+
+    /// Visible column count (handed to a successor so an adopted pty keeps its geometry).
+    pub(crate) fn cols(&self) -> usize {
+        self.cols
     }
 
     /// Selected text (for Cmd+C), or None when there's no non-empty selection.

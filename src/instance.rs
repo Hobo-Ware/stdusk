@@ -126,6 +126,20 @@ pub(crate) fn acquire(path: &std::path::Path) -> Acquired {
     }
 }
 
+/// Claim the lock UNCONDITIONALLY, unlinking whatever is there. For the successor of a session
+/// handoff: the predecessor is still alive at this moment (it only lets go once we acknowledge), so
+/// `acquire` would hand it a new-tab request and exit us windowless. It knows not to unlink this
+/// path on its way out. `None` when the bind fails - a missing listener costs a later launch's
+/// single-instance check, never this window.
+#[cfg(unix)]
+pub(crate) fn take_over(path: &std::path::Path) -> Option<UnixListener> {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::remove_file(path);
+    UnixListener::bind(path).ok()
+}
+
 /// Spawn the primary's accept loop: each incoming connection's command bumps `pending` and wakes
 /// the UI via `request_repaint`. It only touches an atomic + the egui context - never the pty
 /// lock - so it can't deadlock the render loop.

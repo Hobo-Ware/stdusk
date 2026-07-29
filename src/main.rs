@@ -13,6 +13,7 @@ mod colors;
 mod config;
 mod finder;
 mod fonts;
+mod handoff;
 mod instance;
 mod keys;
 mod links;
@@ -119,6 +120,7 @@ impl Stdusk {
         screenshot: Option<String>,
         settings_shot: bool,
         instance_listener: Option<instance::Listener>,
+        incoming: Option<handoff::Incoming>,
     ) -> Self {
         // Fonts: the shared builder (Phosphor icons + `appearance.font` at the top of Monospace
         // + emoji/symbol fallbacks). An unresolvable family keeps the bundled default + toasts.
@@ -181,10 +183,39 @@ impl Stdusk {
         #[cfg(not(unix))]
         let _ = instance_listener;
 
-        // Session restore: reopen last session's tabs (cwd/title/color); else one fresh tab.
+        // Session HANDOFF (--adopt): a predecessor handed us its live ptys. Rebuild its exact
+        // layout by ADOPTING each pane instead of spawning a shell, then acknowledge - it only
+        // stops guarding the shells once we confirm they are live here. Deliberately independent
+        // of `session.restore`: this is not a restore, the processes are the same ones.
         let mut tabs = Vec::new();
         let mut active = 0;
-        if cfg.session.restore && screenshot.is_none() {
+        if let Some(mut inc) = incoming {
+            let mut panes = inc.take_panes().into_iter();
+            let session = inc.session().clone();
+            for st in &session.tabs {
+                // Every handed-over tab carries a pane tree (the sender always writes one); the
+                // flat-cwd fallback only exists for session files written before split-restore.
+                let single = session::SavedPane::Leaf { cwd: st.cwd.clone() };
+                let sp = st.pane.as_ref().unwrap_or(&single);
+                let mut tab = tabs::adopt_saved_tab(&cfg, &cc.egui_ctx, sp, &mut panes);
+                if let Some(title) = st.title.as_deref().and_then(ui::commit_rename) {
+                    tab.title = title;
+                    tab.renamed = true;
+                }
+                tab.color = st.color.as_deref().and_then(session::hex_to_color);
+                tab.pinned = st.pinned;
+                tabs.push(tab);
+            }
+            active = session.active.min(tabs.len().saturating_sub(1));
+            // The ACK is the predecessor's release: only now, with live PtyTerms, is it safe. A
+            // failed write leaves it running (it keeps its shells) - noisy, but never data loss.
+            if let Err(e) = inc.ack() {
+                eprintln!("stdusk: could not confirm the session handoff ({e})");
+            }
+        }
+
+        // Session restore: reopen last session's tabs (cwd/title/color); else one fresh tab.
+        if tabs.is_empty() && cfg.session.restore && screenshot.is_none() {
             let saved = session::load();
             for st in &saved.tabs {
                 // Rebuild the split layout when present; else a single pane in the saved cwd.
@@ -382,6 +413,45 @@ impl Stdusk {
             pending_update: update::pending_for_running_exe(),
             next_update_check: 0.0,
             restart_on_quit: false,
+        }
+    }
+
+    /// The session exactly as it stands: every tab's title/color/pinning and its whole pane tree
+    /// (a cwd per leaf), plus the window rect in window mode. Shared by the throttled session
+    /// persist and the handoff header, so a handed-over window rebuilds an identical layout - the
+    /// two must never drift, or a handoff would restore a different session than a restart does.
+    pub(crate) fn session_snapshot(&self, ctx: &egui::Context) -> session::SavedSession {
+        // Dropdown mode uses the fixed top-edge quake geometry, so it never persists a rect.
+        let window = config::is_window_mode(&self.cfg)
+            .then(|| {
+                ctx.input(|i| {
+                    let vp = i.viewport();
+                    vp.inner_rect.map(|r| {
+                        let pos = vp.outer_rect.map_or(r.min, |o| o.min);
+                        session::WindowGeom { x: pos.x, y: pos.y, w: r.width(), h: r.height() }
+                    })
+                })
+            })
+            .flatten();
+        session::SavedSession {
+            tabs: self
+                .tabs
+                .iter()
+                .map(|t| session::SavedTab {
+                    title: t.renamed.then(|| t.title.clone()),
+                    color: t.color.map(session::color_to_hex),
+                    cwd: t.focused_term().cwd(),
+                    pinned: t.pinned,
+                    // The whole split layout, so re-open restores every pane in its cwd (a fresh
+                    // shell per leaf - nothing is replayed into it) and a handoff can pair one
+                    // passed fd per leaf.
+                    pane: Some(session::SavedPane::from_tree(t.root(), &|term: &PtyTerm| {
+                        session::SavedPane::Leaf { cwd: term.cwd() }
+                    })),
+                })
+                .collect(),
+            active: self.active,
+            window,
         }
     }
 
@@ -829,44 +899,7 @@ impl eframe::App for Stdusk {
             let now = ctx.input(|i| i.time);
             if now >= self.next_session_save {
                 self.next_session_save = now + 3.0;
-                // Remember window geometry in window mode (restored next launch); dropdown mode
-                // uses the fixed top-edge quake geometry, so it never persists a rect.
-                let window = config::is_window_mode(&self.cfg)
-                    .then(|| {
-                        ctx.input(|i| {
-                            let vp = i.viewport();
-                            vp.inner_rect.map(|r| {
-                                let pos = vp.outer_rect.map_or(r.min, |o| o.min);
-                                session::WindowGeom {
-                                    x: pos.x,
-                                    y: pos.y,
-                                    w: r.width(),
-                                    h: r.height(),
-                                }
-                            })
-                        })
-                    })
-                    .flatten();
-                let snap = session::SavedSession {
-                    tabs: self
-                        .tabs
-                        .iter()
-                        .map(|t| session::SavedTab {
-                            title: t.renamed.then(|| t.title.clone()),
-                            color: t.color.map(session::color_to_hex),
-                            cwd: t.focused_term().cwd(),
-                            pinned: t.pinned,
-                            // Persist the whole split layout so re-open restores every pane in its
-                            // cwd (a fresh shell per leaf - nothing is replayed into it).
-                            pane: Some(session::SavedPane::from_tree(
-                                t.root(),
-                                &|term: &PtyTerm| session::SavedPane::Leaf { cwd: term.cwd() },
-                            )),
-                        })
-                        .collect(),
-                    active: self.active,
-                    window,
-                };
+                let snap = self.session_snapshot(&ctx);
                 if snap != self.last_session {
                     session::save(&snap);
                     self.last_session = snap;
@@ -1379,6 +1412,38 @@ fn main() -> eframe::Result<()> {
         cfg.appearance.theme = "one-half-dark".into();
     }
 
+    // `--adopt SOCK`: a predecessor stdusk is handing us its LIVE pty masters over that socket (a
+    // restart that keeps the shells running). Received HERE, before the window: the transport needs
+    // no egui context, and having the fds in hand first means `Stdusk::new` can adopt them during
+    // startup. It only gets acknowledged once every pane is live, so a failure here costs nothing -
+    // the predecessor is still up, still holding the session.
+    let adopting = args.iter().any(|a| a == "--adopt");
+    let incoming =
+        args.iter().position(|a| a == "--adopt").and_then(|i| args.get(i + 1)).and_then(|p| {
+            match handoff::Incoming::receive(std::path::Path::new(p)) {
+                Ok(inc) => Some(inc),
+                Err(e) => {
+                    eprintln!("stdusk: could not receive the handed-over session ({e})");
+                    None
+                }
+            }
+        });
+    // The handoff we were launched for did not happen. If the predecessor is still alive it kept
+    // the whole session (it never got an ACK), so a second window would only fight it for the
+    // instance socket - exit and let it explain itself with a toast. If nobody answers, launch
+    // normally: never leave the user with NO window after they clicked Restart.
+    #[cfg(unix)]
+    if adopting
+        && incoming.is_none()
+        && handoff::fallback(
+            instance::socket_path()
+                .is_some_and(|p| std::os::unix::net::UnixStream::connect(p).is_ok()),
+        ) == handoff::Fallback::ExitQuietly
+    {
+        eprintln!("stdusk: handoff failed but the previous instance is still running; exiting");
+        return Ok(());
+    }
+
     // Single-instance guard: only one stdusk runs. A second launch connects to the primary over
     // a Unix socket, tells it to surface + open a new tab, and exits(0) without a window of its
     // own. Skipped under the screenshot harness (it may run alongside a real instance) AND for a
@@ -1389,6 +1454,11 @@ fn main() -> eframe::Result<()> {
     let sock_path = (screenshot.is_none() && !dev_isolated).then(instance::socket_path).flatten();
     #[cfg(unix)]
     let instance_listener = match sock_path.as_deref() {
+        // A successful `--adopt` MUST bypass the guard: `acquire` would find the (still live)
+        // predecessor, hand it a new-tab request and exit us windowless - the trap that has burned
+        // this repo twice. We are the new primary instead, so take the socket over; the predecessor
+        // is exiting and knows not to unlink it (`handoff::gave_instance_socket`).
+        Some(path) if incoming.is_some() => instance::take_over(path),
         Some(path) => match instance::acquire(path) {
             instance::Acquired::Secondary => return Ok(()),
             instance::Acquired::Primary(l) => Some(l),
@@ -1423,9 +1493,14 @@ fn main() -> eframe::Result<()> {
         .with_inner_size(size);
     if window_mode {
         viewport = viewport.with_resizable(true);
-        // Restore the remembered geometry (window mode only); else the OS places the window.
+        // Restore the remembered geometry (window mode only); else the OS places the window. A
+        // handed-over session carries its rect in the header, which beats the session file - that
+        // one is only written every few seconds, so it can be a stale rect.
         if screenshot.is_none()
-            && let Some(g) = session::load().window
+            && let Some(g) = incoming
+                .as_ref()
+                .and_then(|i| i.session().window)
+                .or_else(|| session::load().window)
         {
             viewport = viewport.with_inner_size([g.w, g.h]).with_position([g.x, g.y]);
         }
@@ -1467,13 +1542,23 @@ fn main() -> eframe::Result<()> {
         "stdusk",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(Stdusk::new(cc, cfg, screenshot, settings_shot, instance_listener)))
+            Ok(Box::new(Stdusk::new(
+                cc,
+                cfg,
+                screenshot,
+                settings_shot,
+                instance_listener,
+                incoming,
+            )))
         }),
     );
     // Clean up our single-instance socket on graceful exit (a crash leaves it stale, which the
-    // next launch detects and takes over).
+    // next launch detects and takes over). NOT after a session handoff: the successor rebound that
+    // exact path and is the primary now, so unlinking it would strand it.
     #[cfg(unix)]
-    if let Some(p) = sock_path {
+    if let Some(p) = sock_path
+        && !handoff::gave_instance_socket()
+    {
         let _ = std::fs::remove_file(p);
     }
     result

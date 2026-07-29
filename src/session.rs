@@ -107,6 +107,15 @@ impl SavedPane {
         }
     }
 
+    /// Leaves in this saved tree - how many terminals re-opening it needs. The handoff pairs one
+    /// passed fd per leaf, so this is what its count check compares against.
+    pub(crate) fn leaf_count(&self) -> usize {
+        match self {
+            SavedPane::Leaf { .. } => 1,
+            SavedPane::Split { a, b, .. } => a.leaf_count() + b.leaf_count(),
+        }
+    }
+
     /// Rebuild a live pane tree, constructing each leaf's payload from its saved `Leaf` node via
     /// `make`. The recursion order (A then B) matches `Pane::leaf_paths`, so a rebuilt tree's
     /// `leaf_paths()` lines up 1:1 with the saved tree's leaves left-to-right.
