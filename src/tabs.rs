@@ -351,6 +351,34 @@ fn tab_menu(
     }
 }
 
+/// Relaunch the bundle once THIS process is gone. The successor can't just be spawned now: the
+/// single-instance guard would have it hand its request to our socket and exit windowless (the
+/// exact trap `--state-dir` hit). So a detached `sh` polls `kill -0` on our pid and only then
+/// `open`s the bundle - `open` because launching the bundle through launchd is the verified way to
+/// get a window, unlike exec'ing the inner binary. No-op outside a bundle (dev builds).
+fn spawn_relaunch_watcher() {
+    let Some(app) = std::env::current_exe().ok().as_deref().and_then(crate::update::bundle_path)
+    else {
+        eprintln!("stdusk: not running from an .app bundle; skipping relaunch");
+        return;
+    };
+    let script = format!(
+        "while kill -0 {pid} 2>/dev/null; do sleep 0.2; done; exec open -a {app}",
+        pid = std::process::id(),
+        app = shell_quote(&app.to_string_lossy()),
+    );
+    // Detached on purpose: it must outlive us, which is why it waits on our pid instead of
+    // being reaped with us.
+    if let Err(e) = std::process::Command::new("/bin/sh").arg("-c").arg(&script).spawn() {
+        eprintln!("stdusk: could not arm relaunch ({e})");
+    }
+}
+
+/// POSIX single-quote for the relaunch script (a bundle path can contain spaces).
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 impl Stdusk {
     pub(crate) fn new_tab(&mut self, ctx: &egui::Context) {
         let cwd = self.tabs.get(self.active).and_then(|t| t.focused_term().cwd());
@@ -682,11 +710,23 @@ impl Stdusk {
         }
     }
 
+    /// Entry point for a restart (tray / Settings > About / palette): same confirmation and group
+    /// kill as a quit, with a relaunch armed. Sessions do NOT survive this - the layout comes back
+    /// via session restore, the processes don't.
+    pub(crate) fn begin_restart(&mut self, ctx: &egui::Context) {
+        self.restart_on_quit = true;
+        self.begin_quit(ctx);
+    }
+
     /// Actually quit: kill every pane's group, then close the window. `quit_confirmed` lets the
-    /// resulting OS `CloseRequested` pass the interception unchallenged.
+    /// resulting OS `CloseRequested` pass the interception unchallenged. When a restart was armed,
+    /// a relaunch watcher is spawned FIRST so it's running before we start tearing down.
     pub(crate) fn finish_quit(&mut self, ctx: &egui::Context) {
         self.pending_quit = None;
         self.quit_confirmed = true;
+        if std::mem::take(&mut self.restart_on_quit) {
+            spawn_relaunch_watcher();
+        }
         self.kill_all_panes();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -983,9 +1023,22 @@ impl Stdusk {
                             self.open_settings();
                         }
                     } else {
-                        let gear_tip = ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings);
-                        if crate::widgets::icon_toggle(ui, icons::GEAR, false, &gear_tip).clicked()
-                        {
+                        // A pending update adds a passive dot on the gear (Settings > About spells
+                        // it out). Deliberately not a toast or modal - a terminal must never nag
+                        // over a running session.
+                        let gear_tip = match &self.pending_update {
+                            Some(v) => format!("Settings - update to {v} ready"),
+                            None => ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings),
+                        };
+                        let gear = crate::widgets::icon_toggle(ui, icons::GEAR, false, &gear_tip);
+                        if self.pending_update.is_some() {
+                            ui.painter().circle_filled(
+                                ui::update_dot_center(gear.rect),
+                                ui::UPDATE_DOT_R,
+                                colors::accent(),
+                            );
+                        }
+                        if gear.clicked() {
                             self.open_settings();
                         }
                     }

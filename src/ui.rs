@@ -51,6 +51,16 @@ pub(crate) fn basename(p: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
+/// Radius of the pending-update dot painted on the settings gear.
+pub(crate) const UPDATE_DOT_R: f32 = 3.0;
+
+/// Center for the pending-update dot: inset from the icon's top-right so it reads as a badge on
+/// the gear rather than a stray pixel, and stays inside the rect (never clipped by the tab bar).
+pub(crate) fn update_dot_center(icon: egui::Rect) -> egui::Pos2 {
+    let inset = UPDATE_DOT_R + 1.0;
+    egui::pos2(icon.right() - inset, icon.top() + inset)
+}
+
 /// Text inserted when files are dropped on a pane: each path POSIX single-quoted (so spaces
 /// and shell metacharacters are literal) and space-joined, with a trailing space so the next
 /// dropped/typed token stays separated. Empty when no path-backed files were dropped (a drop
@@ -1327,6 +1337,18 @@ mod tests {
         assert_eq!(trim_paste("  a\rb  \r", true), "  a\rb");
         // Disabled: untouched.
         assert_eq!(trim_paste("  x  ", false), "  x  ");
+    }
+
+    #[test]
+    fn update_dot_sits_inside_the_icon_it_badges() {
+        // Clipped or overflowing dots read as rendering glitches, so pin containment: the whole
+        // circle must stay within the gear's rect, in its top-right corner.
+        let icon = egui::Rect::from_min_size(egui::pos2(100.0, 4.0), egui::vec2(28.0, 26.0));
+        let c = update_dot_center(icon);
+        assert!(c.x + UPDATE_DOT_R <= icon.right(), "overflows right");
+        assert!(c.y - UPDATE_DOT_R >= icon.top(), "overflows top");
+        assert!(c.x - UPDATE_DOT_R > icon.center().x, "should hug the right half");
+        assert!(c.y + UPDATE_DOT_R < icon.center().y, "should hug the top half");
     }
 
     #[test]
