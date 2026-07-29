@@ -255,7 +255,7 @@ fn resolve_cwd(
 pub(crate) struct PtyTerm {
     term: Arc<FairMutex<Term<EventProxy>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>, // shared with the reader thread (query replies)
-    master: Box<dyn MasterPty + Send>,         // kept for resize
+    pty: Pty,                                  // owns the master fd; resize goes through it
     state: Arc<Mutex<TabState>>,
     cols: usize,
     rows: usize,
@@ -263,6 +263,205 @@ pub(crate) struct PtyTerm {
     bold_bright: bool,      // draw bold text in bright ANSI colors
     rapid_exits: u32,       // consecutive <RAPID_EXIT_SECS deaths, carried across respawns
     killed: bool,           // kill() ran (idempotency guard; Drop calls kill() too)
+    handed_off: bool,       // the pty was passed to a successor process - kill()/Drop must NOT reap
+}
+
+/// How this pane's pty master is owned. A spawned pane keeps `portable_pty`'s master (its proven
+/// resize path); an ADOPTED pane only ever had a bare fd handed to it over a socket, so it resizes
+/// with `tcsetwinsize` directly. Both are just a pty master fd underneath.
+enum Pty {
+    Spawned(Box<dyn MasterPty + Send>),
+    Adopted(std::os::fd::OwnedFd),
+}
+
+impl Pty {
+    /// The master fd, for handing this pane to a successor process. `portable_pty` only exposes a
+    /// bare `RawFd`, and there is no safe way to type one - `BorrowedFd::borrow_raw` is the single
+    /// conversion available, hence the local allow (same justification as the killpg FFI below).
+    #[allow(unsafe_code)]
+    fn as_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
+        use std::os::fd::{AsFd, BorrowedFd};
+        match self {
+            // SAFETY: portable-pty owns this fd for as long as the master lives, and the returned
+            // BorrowedFd is bound to `&self`, so it cannot outlive that owner.
+            Self::Spawned(m) => m.as_raw_fd().map(|raw| unsafe { BorrowedFd::borrow_raw(raw) }),
+            Self::Adopted(fd) => Some(fd.as_fd()),
+        }
+    }
+}
+
+/// Everything the reader thread owns. Bundled because it is built from two very different places:
+/// a fresh spawn (with a `Child` to reap) and an ADOPTED pty handed over by a predecessor process
+/// (no child - we are not its parent, so EOF is the only exit signal we get).
+struct ReaderCtx {
+    reader: Box<dyn Read + Send>,
+    term: Arc<FairMutex<Term<EventProxy>>>,
+    state: Arc<Mutex<TabState>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    replies: Arc<Mutex<Vec<Reply>>>,
+    ctx: egui::Context,
+    detect_progress: bool,
+    /// `None` for an adopted pty: a non-child cannot be `wait()`ed, so its exit code is unknown
+    /// (-1, the value a failed wait already yields) and EOF is the only signal that it died.
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    /// How long this shell had already been alive when we adopted it, so `uptime_secs` (and the
+    /// crash-loop guard reading it) stays honest across a handoff instead of resetting to zero.
+    uptime_base: std::time::Duration,
+}
+
+/// The pty pump: parse output into the `Term`, answer queries, track progress/OSC state, and on
+/// EOF record the exit. Shared verbatim by `spawn` and `adopt` - the ONLY difference between them
+/// is whether there is a child to reap.
+fn spawn_reader(c: ReaderCtx) {
+    let ReaderCtx {
+        mut reader,
+        term: term_reader,
+        state: state_reader,
+        writer: writer_reader,
+        replies,
+        ctx,
+        detect_progress,
+        mut child,
+        uptime_base,
+    } = c;
+    thread::spawn(move || {
+        let spawned = std::time::Instant::now(); // for ExitInfo.uptime_secs
+        let mut parser: Processor = Processor::new();
+        let mut prog = ProgressScanner::new(detect_progress);
+        let mut osc = OscScanner::new();
+        let mut buf = [0u8; 8192];
+        let mut cmd_started: Option<std::time::Instant> = None; // for notify-when-done
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let chunk = &buf[..n];
+                    let osc_events = osc.feed(chunk);
+                    let prompt_started = osc_events
+                        .iter()
+                        .any(|e| matches!(e, OscEvent::Shell(ShellEvent::PromptStart)));
+                    // Advance the terminal; then, still under the lock: answer queued
+                    // queries (color reads may need app-set OSC 4 overrides from
+                    // `term.colors()`), heal leaked modes, read the alt-screen flag.
+                    let (alt, reply, healed_alt) = {
+                        let mut term = term_reader.lock();
+                        parser.advance(&mut *term, chunk);
+                        let mut reply = Vec::new();
+                        for r in replies.lock().unwrap().drain(..) {
+                            match r {
+                                Reply::Text(t) => reply.extend_from_slice(t.as_bytes()),
+                                Reply::Color(i, format) => {
+                                    // An app-set palette entry (OSC 4/10/11 set) wins;
+                                    // otherwise report the live theme's color.
+                                    let rgb = term.colors()[i].unwrap_or_else(|| {
+                                        let c = colors::query_color(i);
+                                        Rgb { r: c.r(), g: c.g(), b: c.b() }
+                                    });
+                                    reply.extend_from_slice(format(rgb).as_bytes());
+                                }
+                            }
+                        }
+                        // A TUI killed without cleanup (SIGKILL, crash) leaves the alt
+                        // screen + a hidden cursor behind and the pane looks frozen. The
+                        // prompt mark (OSC 133;A) proves the shell owns the pty again:
+                        // reset exactly those two leaks. Deliberately NOT reset:
+                        // bracketed paste (zsh arms it for its own prompt), DECCKM /
+                        // kitty / modifyOtherKeys (`key_to_bytes` is a static table that
+                        // never consults them), mouse modes (we send no reports).
+                        let mut healed_alt = false;
+                        if prompt_started {
+                            if term.mode().contains(TermMode::ALT_SCREEN) {
+                                term.swap_alt();
+                                healed_alt = true;
+                            }
+                            if !term.mode().contains(TermMode::SHOW_CURSOR) {
+                                term.set_private_mode(NamedPrivateMode::ShowCursor.into());
+                            }
+                        }
+                        (term.mode().contains(TermMode::ALT_SCREEN), reply, healed_alt)
+                    };
+                    let text = String::from_utf8_lossy(chunk);
+                    let mut progress = prog.feed(&text, alt);
+                    let mut cwd_update = None;
+                    let mut clip_update = None;
+                    let mut cmd_update = None;
+                    let mut notify = None; // Some(exit) when a long command just finished
+                    for ev in osc_events {
+                        match ev {
+                            OscEvent::Progress(p) => progress = p, // OSC 9;4 wins over %-scrape
+                            // Titles flow through the Term's Title/ResetTitle events
+                            // (EventProxy), which also cover the CSI 22/23 t title stack.
+                            OscEvent::Title(_) => {}
+                            OscEvent::Cwd(c) => cwd_update = Some(c),
+                            OscEvent::Clipboard(b64) => {
+                                if let Ok(bytes) =
+                                    base64::engine::general_purpose::STANDARD.decode(b64)
+                                    && let Ok(s) = String::from_utf8(bytes)
+                                {
+                                    clip_update = Some(s);
+                                }
+                            }
+                            OscEvent::Shell(s) => match s {
+                                ShellEvent::CommandStart => {
+                                    cmd_update = Some(CmdState::Running);
+                                    cmd_started = Some(std::time::Instant::now());
+                                }
+                                ShellEvent::CommandEnd(code) => {
+                                    cmd_update = Some(cmd_from_exit(code));
+                                    // Flag a "done" notification only for long-running commands.
+                                    // Notify only for commands that ran a while (a "long" job).
+                                    if cmd_started.take().is_some_and(|t| {
+                                        t.elapsed() >= std::time::Duration::from_secs(10)
+                                    }) {
+                                        notify = Some(code.unwrap_or(0));
+                                    }
+                                }
+                                // PromptStart: keep the last result visible at the prompt.
+                                ShellEvent::PromptStart => {}
+                            },
+                        }
+                    }
+                    {
+                        let mut s = state_reader.lock().unwrap();
+                        s.progress = progress;
+                        s.activity = true; // any output chunk counts (notify-on-activity)
+                        if let Some(c) = cwd_update {
+                            s.cwd = Some(c);
+                        }
+                        if let Some(c) = clip_update {
+                            s.clipboard = Some(c);
+                        }
+                        if let Some(c) = cmd_update {
+                            s.cmd = c;
+                        }
+                        if let Some(code) = notify {
+                            s.done_notify = Some(code);
+                        }
+                    }
+                    // Query answers go straight back to the pty; after an alt-screen
+                    // heal, a Ctrl-L asks the shell to repaint the prompt it may have
+                    // drawn on the (now abandoned) alt grid.
+                    if !reply.is_empty() || healed_alt {
+                        let mut w = writer_reader.lock().unwrap();
+                        let _ = w.write_all(&reply);
+                        if healed_alt {
+                            let _ = w.write_all(b"\x0c");
+                        }
+                        let _ = w.flush();
+                    }
+                    // Defer (don't paint per read): coalesce the burst so a clear+redraw
+                    // lands atomically before the UI snapshots. See REPAINT_COALESCE_WINDOW.
+                    ctx.request_repaint_after(REPAINT_COALESCE_WINDOW);
+                }
+            }
+        }
+        // EOF/err: the shell's side of the pty closed, so the shell is gone. A spawned pane reaps
+        // the real code; an adopted one has no child to wait on and reports -1.
+        let code = child.as_mut().map_or(-1, |ch| ch.wait().map_or(-1, |st| st.exit_code() as i32));
+        state_reader.lock().unwrap().exited =
+            Some(ExitInfo { code, uptime_secs: (uptime_base + spawned.elapsed()).as_secs_f32() });
+        ctx.request_repaint();
+    });
 }
 
 impl PtyTerm {
@@ -308,11 +507,11 @@ impl PtyTerm {
         }
         // The child handle moves into the reader thread so the real exit status can be reaped
         // when the pty EOFs (dropping it would lose the exit code to a detached zombie wait).
-        let mut child = pair.slave.spawn_command(cmd).expect("spawn shell");
+        let child = pair.slave.spawn_command(cmd).expect("spawn shell");
         let shell_pid = child.process_id();
         drop(pair.slave);
 
-        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let reader = pair.master.try_clone_reader().expect("reader");
         // Shared with the reader thread, which writes query answers back to the pty.
         let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("writer")));
 
@@ -329,152 +528,22 @@ impl PtyTerm {
             EventProxy { state: state.clone(), replies: replies.clone() },
         )));
 
-        let term_reader = term.clone();
-        let state_reader = state.clone();
-        let writer_reader = writer.clone();
-        thread::spawn(move || {
-            let spawned = std::time::Instant::now(); // for ExitInfo.uptime_secs
-            let mut parser: Processor = Processor::new();
-            let mut prog = ProgressScanner::new(detect_progress);
-            let mut osc = OscScanner::new();
-            let mut buf = [0u8; 8192];
-            let mut cmd_started: Option<std::time::Instant> = None; // for notify-when-done
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let chunk = &buf[..n];
-                        let osc_events = osc.feed(chunk);
-                        let prompt_started = osc_events
-                            .iter()
-                            .any(|e| matches!(e, OscEvent::Shell(ShellEvent::PromptStart)));
-                        // Advance the terminal; then, still under the lock: answer queued
-                        // queries (color reads may need app-set OSC 4 overrides from
-                        // `term.colors()`), heal leaked modes, read the alt-screen flag.
-                        let (alt, reply, healed_alt) = {
-                            let mut term = term_reader.lock();
-                            parser.advance(&mut *term, chunk);
-                            let mut reply = Vec::new();
-                            for r in replies.lock().unwrap().drain(..) {
-                                match r {
-                                    Reply::Text(t) => reply.extend_from_slice(t.as_bytes()),
-                                    Reply::Color(i, format) => {
-                                        // An app-set palette entry (OSC 4/10/11 set) wins;
-                                        // otherwise report the live theme's color.
-                                        let rgb = term.colors()[i].unwrap_or_else(|| {
-                                            let c = colors::query_color(i);
-                                            Rgb { r: c.r(), g: c.g(), b: c.b() }
-                                        });
-                                        reply.extend_from_slice(format(rgb).as_bytes());
-                                    }
-                                }
-                            }
-                            // A TUI killed without cleanup (SIGKILL, crash) leaves the alt
-                            // screen + a hidden cursor behind and the pane looks frozen. The
-                            // prompt mark (OSC 133;A) proves the shell owns the pty again:
-                            // reset exactly those two leaks. Deliberately NOT reset:
-                            // bracketed paste (zsh arms it for its own prompt), DECCKM /
-                            // kitty / modifyOtherKeys (`key_to_bytes` is a static table that
-                            // never consults them), mouse modes (we send no reports).
-                            let mut healed_alt = false;
-                            if prompt_started {
-                                if term.mode().contains(TermMode::ALT_SCREEN) {
-                                    term.swap_alt();
-                                    healed_alt = true;
-                                }
-                                if !term.mode().contains(TermMode::SHOW_CURSOR) {
-                                    term.set_private_mode(NamedPrivateMode::ShowCursor.into());
-                                }
-                            }
-                            (term.mode().contains(TermMode::ALT_SCREEN), reply, healed_alt)
-                        };
-                        let text = String::from_utf8_lossy(chunk);
-                        let mut progress = prog.feed(&text, alt);
-                        let mut cwd_update = None;
-                        let mut clip_update = None;
-                        let mut cmd_update = None;
-                        let mut notify = None; // Some(exit) when a long command just finished
-                        for ev in osc_events {
-                            match ev {
-                                OscEvent::Progress(p) => progress = p, // OSC 9;4 wins over %-scrape
-                                // Titles flow through the Term's Title/ResetTitle events
-                                // (EventProxy), which also cover the CSI 22/23 t title stack.
-                                OscEvent::Title(_) => {}
-                                OscEvent::Cwd(c) => cwd_update = Some(c),
-                                OscEvent::Clipboard(b64) => {
-                                    if let Ok(bytes) =
-                                        base64::engine::general_purpose::STANDARD.decode(b64)
-                                        && let Ok(s) = String::from_utf8(bytes)
-                                    {
-                                        clip_update = Some(s);
-                                    }
-                                }
-                                OscEvent::Shell(s) => match s {
-                                    ShellEvent::CommandStart => {
-                                        cmd_update = Some(CmdState::Running);
-                                        cmd_started = Some(std::time::Instant::now());
-                                    }
-                                    ShellEvent::CommandEnd(code) => {
-                                        cmd_update = Some(cmd_from_exit(code));
-                                        // Flag a "done" notification only for long-running commands.
-                                        // Notify only for commands that ran a while (a "long" job).
-                                        if cmd_started.take().is_some_and(|t| {
-                                            t.elapsed() >= std::time::Duration::from_secs(10)
-                                        }) {
-                                            notify = Some(code.unwrap_or(0));
-                                        }
-                                    }
-                                    // PromptStart: keep the last result visible at the prompt.
-                                    ShellEvent::PromptStart => {}
-                                },
-                            }
-                        }
-                        {
-                            let mut s = state_reader.lock().unwrap();
-                            s.progress = progress;
-                            s.activity = true; // any output chunk counts (notify-on-activity)
-                            if let Some(c) = cwd_update {
-                                s.cwd = Some(c);
-                            }
-                            if let Some(c) = clip_update {
-                                s.clipboard = Some(c);
-                            }
-                            if let Some(c) = cmd_update {
-                                s.cmd = c;
-                            }
-                            if let Some(code) = notify {
-                                s.done_notify = Some(code);
-                            }
-                        }
-                        // Query answers go straight back to the pty; after an alt-screen
-                        // heal, a Ctrl-L asks the shell to repaint the prompt it may have
-                        // drawn on the (now abandoned) alt grid.
-                        if !reply.is_empty() || healed_alt {
-                            let mut w = writer_reader.lock().unwrap();
-                            let _ = w.write_all(&reply);
-                            if healed_alt {
-                                let _ = w.write_all(b"\x0c");
-                            }
-                            let _ = w.flush();
-                        }
-                        // Defer (don't paint per read): coalesce the burst so a clear+redraw
-                        // lands atomically before the UI snapshots. See REPAINT_COALESCE_WINDOW.
-                        ctx.request_repaint_after(REPAINT_COALESCE_WINDOW);
-                    }
-                }
-            }
-            // EOF/err: the shell's side of the pty closed, so the shell is gone and wait()
-            // returns promptly. Reap the real exit code and flag the pane as exited.
-            let code = child.wait().map_or(-1, |st| st.exit_code() as i32);
-            state_reader.lock().unwrap().exited =
-                Some(ExitInfo { code, uptime_secs: spawned.elapsed().as_secs_f32() });
-            ctx.request_repaint();
+        spawn_reader(ReaderCtx {
+            reader,
+            term: term.clone(),
+            state: state.clone(),
+            writer: writer.clone(),
+            replies,
+            ctx,
+            detect_progress,
+            child: Some(child),
+            uptime_base: std::time::Duration::ZERO,
         });
 
         Self {
             term,
             writer,
-            master: pair.master,
+            pty: Pty::Spawned(pair.master),
             state,
             cols,
             rows,
@@ -482,7 +551,91 @@ impl PtyTerm {
             bold_bright: opts.bold_bright,
             rapid_exits: 0,
             killed: false,
+            handed_off: false,
         }
+    }
+
+    /// Take over a LIVE pty handed to us by a predecessor stdusk (see `handoff`). No spawn happens:
+    /// the shell keeps running, unaware that its master fd changed owner. `pgid` is the group we
+    /// must be able to kill later - it comes across the wire because we are not the shell's parent
+    /// and cannot look it up. `alive` is how long it had been running, so the crash-loop guard is
+    /// not fooled into thinking a long-lived shell just started.
+    ///
+    /// The grid starts EMPTY: alacritty's `Term` has no serialization, so scrollback does not
+    /// survive. `nudge_redraw` recovers the visible screen for anything that repaints on SIGWINCH.
+    ///
+    /// Only ONE reader may pump a pty: bytes are consumed, not broadcast. While the predecessor's
+    /// reader thread is still alive it competes for output and whatever it wins is LOST to us, so
+    /// the handover must be the last thing the predecessor does before exiting. The window is
+    /// milliseconds on an idle prompt, and the SIGWINCH nudge repaints anything that redraws.
+    pub(crate) fn adopt(
+        cols: usize,
+        rows: usize,
+        ctx: egui::Context,
+        fd: std::os::fd::OwnedFd,
+        pgid: Option<u32>,
+        alive: std::time::Duration,
+        opts: &SpawnOpts,
+    ) -> std::io::Result<Self> {
+        // Separate dups for the reader thread and the writer: both sides of the same pty master,
+        // independently owned, exactly like `try_clone_reader` + `take_writer` give us on a spawn.
+        let reader = std::fs::File::from(fd.try_clone()?);
+        let writer: Box<dyn Write + Send> = Box::new(std::fs::File::from(fd.try_clone()?));
+        let writer = Arc::new(Mutex::new(writer));
+
+        let state = Arc::new(Mutex::new(TabState::default()));
+        let replies = Arc::new(Mutex::new(Vec::new()));
+        let term_config = Config {
+            scrolling_history: opts.scrollback_lines,
+            semantic_escape_chars: opts.word_separators.clone(),
+            ..Config::default()
+        };
+        let term = Arc::new(FairMutex::new(Term::new(
+            term_config,
+            &Dims { cols, rows },
+            EventProxy { state: state.clone(), replies: replies.clone() },
+        )));
+
+        spawn_reader(ReaderCtx {
+            reader: Box::new(reader),
+            term: term.clone(),
+            state: state.clone(),
+            writer: writer.clone(),
+            replies,
+            ctx,
+            detect_progress: opts.detect_progress,
+            child: None, // not our child: EOF is the only exit signal, code stays unknown
+            uptime_base: alive,
+        });
+
+        let me = Self {
+            term,
+            writer,
+            pty: Pty::Adopted(fd),
+            state,
+            cols,
+            rows,
+            shell_pid: pgid,
+            bold_bright: opts.bold_bright,
+            rapid_exits: 0,
+            killed: false,
+            handed_off: false,
+        };
+        me.nudge_redraw();
+        Ok(me)
+    }
+
+    /// The master fd to hand to a successor, and the process group it must inherit responsibility
+    /// for. `None` when the fd cannot be borrowed (non-unix), which aborts the handoff for this pane.
+    pub(crate) fn handoff_fd(&self) -> Option<(std::os::fd::BorrowedFd<'_>, Option<u32>)> {
+        self.pty.as_fd().map(|fd| (fd, self.shell_pid))
+    }
+
+    /// Mark this pane as handed over: the successor owns the shell now, so `kill()` and `Drop` must
+    /// NOT reap the process group. Without this the handoff is a silent no-op - the shells would be
+    /// killed on our way out, milliseconds after the successor adopted them.
+    pub(crate) fn mark_handed_off(&mut self) {
+        self.handed_off = true;
     }
 
     /// PID of the tab's shell process - the root for CLI-awareness descendant scans.
@@ -497,7 +650,9 @@ impl PtyTerm {
     /// Idempotent (the `killed` guard) and safe on an already-dead group (killpg ESRCH is ignored).
     /// No-op off unix (no POSIX process groups) or when the pid is unknown / not a leader.
     pub(crate) fn kill(&mut self) {
-        if self.killed {
+        // A handed-off pane's shell belongs to the successor process now - reaping it here is
+        // exactly the bug that would make session handoff look like it does nothing.
+        if self.killed || self.handed_off {
             return;
         }
         self.killed = true;
@@ -533,13 +688,43 @@ impl PtyTerm {
         }
         self.cols = cols;
         self.rows = rows;
-        let _ = self.master.resize(PtySize {
-            rows: rows as u16,
-            cols: cols as u16,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        self.set_pty_size(cols, rows);
         self.term.lock().resize(Dims { cols, rows });
+    }
+
+    /// Push the window size to the pty master, which is what delivers SIGWINCH to the foreground
+    /// process group. Spawned panes keep `portable_pty`'s proven path; an adopted pane only has a
+    /// bare fd, so it goes through `tcsetwinsize` (the same ioctl underneath).
+    fn set_pty_size(&self, cols: usize, rows: usize) {
+        match &self.pty {
+            Pty::Spawned(master) => {
+                let _ = master.resize(PtySize {
+                    rows: rows as u16,
+                    cols: cols as u16,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+            Pty::Adopted(fd) => {
+                let _ = rustix::termios::tcsetwinsize(
+                    fd,
+                    rustix::termios::Winsize {
+                        ws_row: rows as u16,
+                        ws_col: cols as u16,
+                        ws_xpixel: 0,
+                        ws_ypixel: 0,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Re-send the CURRENT size to the pty. Adopting a live shell gives us an empty `Term` (the
+    /// predecessor's scrollback cannot be moved), so nudging SIGWINCH makes whatever is running
+    /// (vim, claude, less) repaint its screen instead of leaving the pane blank until the next
+    /// keystroke.
+    pub(crate) fn nudge_redraw(&self) {
+        self.set_pty_size(self.cols, self.rows);
     }
 
     pub(crate) fn scroll(&self, delta_lines: i32) {
@@ -1030,6 +1215,85 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(25));
         };
         assert!(gone, "process group must be dead after kill()");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[allow(unsafe_code)] // killpg existence probe, mirroring the test above
+    fn real_pty_handed_off_pane_survives_kill_and_drop() {
+        // The exact inverse of the test above, and the whole point of session handoff: once a pane
+        // is marked handed off, NEITHER kill() nor Drop may reap its group - the successor owns it.
+        let pid = {
+            let mut term = e2e_term("sleep 300 & sleep 60");
+            let pid = poll_term(&term, PtyTerm::shell_pid).expect("no shell pid") as i32;
+            // SAFETY: signal 0 only probes existence.
+            assert_eq!(unsafe { libc::killpg(pid, 0) }, 0, "group must be alive to start");
+            term.mark_handed_off();
+            term.kill(); // must be a no-op now
+            pid
+        }; // Drop runs here - also must not kill.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // SAFETY: same probe.
+        assert_eq!(
+            unsafe { libc::killpg(pid, 0) },
+            0,
+            "handed-off group must STILL be alive after kill() + Drop"
+        );
+        // Clean up: nothing else will, precisely because we disarmed the teardown.
+        // SAFETY: thin FFI to killpg with a checked pid.
+        unsafe { libc::killpg(pid, libc::SIGKILL) };
+    }
+
+    #[test]
+    fn real_pty_adopted_fd_streams_output_and_reports_the_pgid() {
+        // Hand a LIVE pty's master fd to a second PtyTerm and prove the adopting side is a working
+        // terminal: it sees output the shell writes after the handover, and it carries the process
+        // group across (we are not the shell's parent, so the pgid can only come from the wire).
+        // Ticks CONTINUOUSLY: the donor's reader thread is still alive and competing for bytes
+        // (see `adopt`), so a single line could be swallowed by it - a stream cannot be.
+        let mut donor = e2e_term("while :; do printf 'TICK\\n'; sleep 0.2; done");
+        let pgid = poll_term(&donor, PtyTerm::shell_pid).expect("no shell pid");
+        let (fd, carried) = donor.handoff_fd().expect("master fd must be borrowable");
+        assert_eq!(carried, Some(pgid), "the pgid must travel with the fd");
+
+        let owned = fd.try_clone_to_owned().expect("dup the master");
+        donor.mark_handed_off(); // the donor must not reap what it just gave away
+
+        let opts = SpawnOpts {
+            detect_progress: false,
+            shell_integration: false,
+            autosuggestions: false,
+            scrollback_lines: 500,
+            word_separators: " ".into(),
+            bold_bright: false,
+            cwd: None,
+            profile: None,
+        };
+        let heir = PtyTerm::adopt(
+            20,
+            5,
+            egui::Context::default(),
+            owned,
+            Some(pgid),
+            std::time::Duration::from_secs(42),
+            &opts,
+        )
+        .expect("adopt");
+
+        // Seeing a tick that was written AFTER the handover proves the adopted fd is live.
+        let seen = poll_term(&heir, |t| {
+            let snap = t.grid_snapshot();
+            let text: String = snap.cells.iter().map(|c| c.c).collect();
+            text.contains("TICK").then_some(())
+        });
+        assert!(seen.is_some(), "adopted pty must stream the shell's ongoing output");
+        assert_eq!(heir.shell_pid(), Some(pgid));
+        drop(heir);
+        donor.kill(); // disarmed, so clean up explicitly
+        #[allow(unsafe_code)] // SAFETY: thin FFI, checked pid
+        unsafe {
+            libc::killpg(pgid as i32, libc::SIGKILL)
+        };
     }
 
     #[test]
