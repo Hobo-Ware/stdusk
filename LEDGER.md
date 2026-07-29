@@ -598,6 +598,15 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## 1.5.1 - restart confirmation honesty
+- Clicking Restart raised a "Quit stdusk?" modal with a Quit button (the restart flow reuses the
+  quit path, and the modal was hardcoded). Title/button/message now follow the armed action, and the
+  restart wording promises the relaunch.
+- Cancelling a restart left `restart_on_quit` armed, so the NEXT ordinary quit would silently
+  relaunch the app. Cancel disarms it. The OS-close interception passes `restart = false` explicitly.
+- Standing question, not a bug: a restart still KILLS shells. Users reasonably expect a UI-level
+  restart to keep sessions attached; that promise needs the handoff work on `feat/session-handoff`.
+
 ## 1.5.0 - pending-update affordance (gear dot / tray / About) + TCC prompt docs
 - Update detection compares the compiled-in version against the .app bundle's `Info.plist`, which
   is exactly what changes when `brew reinstall --cask` swaps the bundle while we keep running the
