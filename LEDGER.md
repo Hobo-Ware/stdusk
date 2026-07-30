@@ -1864,6 +1864,63 @@ builder agent; implementation + integration here.
   + strip height), `pane.rs` (untouched - reused), `ui.rs` (`WINDOW_TAB_H_EXTRA`). 270 tests green.
   Version NOT bumped, NOT committed.
 
+## Post-handoff regression batch (uncommitted version bump; 1.6.1 + 3 fixes, 312 tests)
+Three user-reported regressions after a real Restart-with-handoff. All three root causes were
+MEASURED, not assumed - and one of the reported hypotheses was wrong (see bug 3).
+
+- **Blank adopted panes (the real one, two causes).**
+  1. **`nudge_redraw` was a silent no-op**: it re-sent the CURRENT window size, and **a pty delivers
+     SIGWINCH only when the size actually CHANGES** - measured on this Mac with a real pty
+     (`real_pty_only_a_size_change_delivers_sigwinch`; Linux's `tty_do_resize` has the same
+     "don't signal if unchanged" guard). So NOTHING was ever asked to repaint. `nudge_winsize` now
+     wiggles the row count and puts it back.
+  2. **A shell doesn't repaint on SIGWINCH at all.** A pane NOT on the alt screen now also gets
+     `^L` (0x0c) - zsh's zle / bash's readline redraw the prompt on it, the same trick the
+     alt-screen heal path in `spawn_reader` already used. A pane that IS on the alt screen gets
+     SIGWINCH ONLY: inside a TUI that byte is the app's (a literal insert in vim's insert mode).
+  - Our fresh `Term` has parsed nothing, so it cannot know which case it is in: **`PaneMeta.alt_screen`
+    carries it over the wire (PROTOCOL 1 -> 2)**. The successor also enters the alt screen itself when
+    the app owned it, so the `ESC[?1049l` the app eventually sends restores an empty primary grid
+    instead of being a no-op that leaves TUI leftovers under the next prompt.
+  - **The ask is REPEATED** (4 tries over ~2.5s on a short-lived thread, stopping as soon as
+    `TabState.saw_output` flips): until the predecessor exits, ITS reader thread is still draining the
+    pty and eats the answer - which is exactly why the blank panes looked intermittent between two
+    user screenshots. `PtyTerm::adopt` now takes an `Adopted` struct (7 args -> 3, clippy-clean).
+- **Tabs coming back as "zsh".** Not a bad basename - `auto_title` returns None with no OSC title AND
+  no cwd, so the `tab_with_root` placeholder stays. Those panes had NO cwd to hand over: `TabState.cwd`
+  is filled ONLY by OSC 7, and **on macOS zsh emits OSC 7 from `/etc/zshrc_Apple_Terminal`, which
+  `/etc/zshrc` sources only when `TERM_PROGRAM == Apple_Terminal`** - never ours. So a shell whose own
+  rc files don't emit it has no cwd, forever. `handoff::pane_cwd` now falls back to **asking the OS
+  where the pane's shell sits** (`procwatch::process_cwd` -> one targeted sysinfo refresh, which is
+  `PROC_PIDVNODEPATHINFO` on macOS). Once per pane per restart, never on a frame path. A pane whose
+  directory genuinely can't be discovered still says "zsh" - no name is invented.
+- **"Successor starts in the light theme" - the reported hypothesis was WRONG.** This Mac is on
+  **Auto appearance** (`AppleInterfaceStyleSwitchesAutomatically = 1`) and was in its LIGHT half at
+  report time (`AppleInterfaceStyle` absent, `osascript ... dark mode` = false), so a light window is
+  what `follow_system = true` + `theme_light` asks for. The REAL defect found underneath:
+  **`colors::init` resolved the fixed `theme` slot at startup, ignoring `follow_system`** - the user's
+  fixed slot is `3024-day`, so the window was painted in a near-white theme belonging to neither
+  system mode until the per-frame reconcile caught up (and in the screenshot harness, where the
+  reconcile is skipped, it stayed there - proven with a before/after `--screenshot --state-dir`).
+  Startup now goes through the shared `settings::resolved_theme_name`, and the OS answer comes from
+  the **`AppleInterfaceStyle` default** (`macos::os_dark_mode`) rather than what the window system
+  reported: that key exists before our process does, needs no main thread or finished launch, and
+  tracks the Auto schedule. `ui::system_is_light` keeps egui's `system_theme` as the non-macOS
+  fallback. Every other appearance decision (settings preview, scheme-browser slot pick,
+  `reapply_appearance`) reads the same source now; the reconcile is throttled to 2 Hz.
+- **Tests (+7, 305 -> 312, all green)**: `real_pty_only_a_size_change_delivers_sigwinch`,
+  `real_pty_an_adopted_prompt_is_asked_to_repaint_without_a_keystroke` (a raw-mode probe shell reports
+  every byte it receives as `GOT-<hex>`; asserts `GOT-0c` arrives with nothing typed),
+  `real_pty_an_adopted_full_screen_app_is_never_sent_ctrl_l`,
+  `a_pane_that_never_emitted_osc_7_still_hands_over_its_directory`,
+  `a_live_process_cwd_comes_back_from_the_os`, `the_dark_mode_read_agrees_with_the_defaults_database`,
+  `the_os_appearance_beats_what_the_window_system_reported`. The first two FAIL against the pre-fix
+  code (verified by reverting). Both `--ignored` live handoff checks still pass against the real
+  binary under PROTOCOL 2.
+- **NOT verifiable without a human clicking Restart**: the end-to-end restart of a real window (the
+  `--screenshot` harness skips window management and can't drive a Restart click). What IS covered:
+  the pty-level redraw contract, the receiving half against the real binary, and the startup theme.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
