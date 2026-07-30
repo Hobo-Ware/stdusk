@@ -160,16 +160,15 @@ fn adopt_saved_tree(
         // right even for a layout that shifted, and an adopted pty has no other way to know it.
         let opts = spawn_opts(cfg, meta.cwd.clone().or(cwd));
         let (cols, rows) = crate::handoff::grid_dims(meta.cols, meta.rows);
-        PtyTerm::adopt(
+        let handover = crate::terminal::Adopted {
+            fd,
             cols,
             rows,
-            ctx.clone(),
-            fd,
-            meta.pgid,
-            crate::handoff::alive_duration(meta.alive_secs),
-            &opts,
-        )
-        .unwrap_or_else(|_| {
+            pgid: meta.pgid,
+            alive: crate::handoff::alive_duration(meta.alive_secs),
+            alt_screen: meta.alt_screen,
+        };
+        PtyTerm::adopt(ctx.clone(), handover, &opts).unwrap_or_else(|_| {
             eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
             PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts)
         })
@@ -1238,6 +1237,7 @@ mod tests {
             alive_secs: 30.0,
             cols: 80,
             rows: 24,
+            alt_screen: false,
         };
         let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
         let tab = adopt_saved_tab(&Config::default(), &egui::Context::default(), st, &mut panes);

@@ -62,7 +62,7 @@ const MAX_PANES: usize = 512;
 /// Wire-format version. Bump on ANY change to the framing, the message order, or the metadata
 /// fields. A mismatch ABORTS the handoff: an older build must never adopt fds under a contract it
 /// cannot interpret, and a rollback is exactly when that happens.
-const PROTOCOL: u32 = 1;
+const PROTOCOL: u32 = 2;
 
 /// What the successor answers once every pane is adopted and live. Nothing else counts as consent.
 const ACK: &str = "adopted";
@@ -112,6 +112,11 @@ pub(crate) struct PaneMeta {
     pub(crate) alive_secs: f32,
     pub(crate) cols: usize,
     pub(crate) rows: usize,
+    /// Was a full-screen app holding the ALT screen? The successor's `Term` has parsed nothing, so
+    /// this is the only way it can know - and it decides how the pane is asked to repaint (SIGWINCH
+    /// for a TUI, `^L` for a shell prompt). Defaulted so a decode never hard-fails on it.
+    #[serde(default)]
+    pub(crate) alt_screen: bool,
 }
 
 /// Panes handed to us by a predecessor, received BEFORE the window exists (the transport needs no
@@ -508,6 +513,7 @@ impl crate::Stdusk {
                         alive_secs: term.alive().as_secs_f32(),
                         cols: term.cols(),
                         rows: term.rows(),
+                        alt_screen: term.is_alt_screen(),
                     },
                     fd,
                 ));
@@ -619,6 +625,8 @@ mod tests {
             alive_secs: 12.5,
             cols: 80 + n,
             rows: 24,
+            // Alternate per pane so a field that stopped round-tripping shows up as a mismatch.
+            alt_screen: n % 2 == 1,
         }
     }
 
@@ -882,6 +890,7 @@ mod tests {
                 alive_secs: term.alive().as_secs_f32(),
                 cols: term.cols(),
                 rows: term.rows(),
+                alt_screen: term.is_alt_screen(),
             },
             fd,
         )];

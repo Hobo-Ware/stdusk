@@ -2,6 +2,7 @@
 //! ANSI parser into a shared alacritty_terminal `Term`. The egui thread reads the grid to
 //! render, resizes, scrolls, and writes keystrokes/paste back to the pty.
 use std::io::{Read, Write};
+use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -148,6 +149,10 @@ pub(crate) struct TabState {
     pub(crate) cmd: CmdState,             // OSC 133 last-command state (tab dot)
     pub(crate) bell: bool,                // BEL rung since last consumed (drives the visual flash)
     pub(crate) activity: bool,            // output since last consumed (notify-on-activity)
+    /// Any pty output at all since this `PtyTerm` was built - never cleared, unlike `activity`.
+    /// The adopt redraw nudger's stop condition: an adopted pane starts with an empty grid, and
+    /// this is what says the shell has actually painted something into it.
+    pub(crate) saw_output: bool,
     pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
     pub(crate) exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
     pub(crate) title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
@@ -238,6 +243,50 @@ pub(crate) struct SpawnOpts {
     pub(crate) profile: Option<crate::config::Profile>, // launch profile overrides (shell/args/cwd/env)
 }
 
+/// When an adopted pane re-asks for a repaint, counting from adoption. The first ask is immediate;
+/// the rest cover the window in which the predecessor's reader thread is still draining this pty and
+/// eating the answer (it exits right after our ACK). Each retry is skipped once output has landed.
+const REDRAW_RETRY_DELAYS: [std::time::Duration; 4] = [
+    std::time::Duration::ZERO,
+    std::time::Duration::from_millis(250),
+    std::time::Duration::from_millis(700),
+    std::time::Duration::from_millis(1500),
+];
+
+/// The row count to bounce off so putting the real one back is a genuine CHANGE - which is the only
+/// thing that makes a pty deliver SIGWINCH. One row less, except on a 1-row pty (0 would mean
+/// "unset").
+fn wiggle_rows(rows: usize) -> usize {
+    if rows > 1 { rows - 1 } else { rows + 1 }
+}
+
+/// Deliver a SIGWINCH to whatever is running on this pty, so a full-screen app repaints its screen.
+/// Adopting a live shell gives us an EMPTY `Term` (the predecessor's grid cannot be moved), and this
+/// is the only signal a TUI redraws on.
+///
+/// It has to WIGGLE the row count and put it back: a pty signals only when the size actually
+/// CHANGES, so re-sending the current size - which the old "nudge" did - was silently nothing.
+/// Verified on macOS with a real pty (`real_pty_only_a_size_change_delivers_sigwinch`); Linux's
+/// `tty_do_resize` carries the same "don't signal if the size is unchanged" guard.
+fn nudge_winsize(fd: std::os::fd::BorrowedFd<'_>, cols: usize, rows: usize) {
+    set_winsize(fd, cols, wiggle_rows(rows));
+    set_winsize(fd, cols, rows);
+}
+
+/// Push a window size to a pty master fd - the ioctl that delivers SIGWINCH to the tty's foreground
+/// process group.
+fn set_winsize(fd: std::os::fd::BorrowedFd<'_>, cols: usize, rows: usize) {
+    let _ = rustix::termios::tcsetwinsize(
+        fd,
+        rustix::termios::Winsize {
+            ws_row: rows as u16,
+            ws_col: cols as u16,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    );
+}
+
 /// Shell for a spawn: profile override first, then $SHELL, then /bin/zsh.
 fn resolve_shell(profile: Option<&crate::config::Profile>, env_shell: Option<String>) -> String {
     profile.and_then(|p| p.shell.clone()).or(env_shell).unwrap_or_else(|| "/bin/zsh".into())
@@ -266,6 +315,24 @@ pub(crate) struct PtyTerm {
     handed_off: bool,       // the pty was passed to a successor process - kill()/Drop must NOT reap
     started: std::time::Instant, // when THIS owner took the pty (spawn or adopt)
     uptime_base: std::time::Duration, // how long the shell had run under previous owners
+}
+
+/// A live pty handed over by a predecessor stdusk, plus everything a freshly built `Term` cannot
+/// deduce about it. Bundled rather than passed as seven arguments, and because every field is
+/// untrusted wire data the caller has already clamped.
+pub(crate) struct Adopted {
+    pub(crate) fd: std::os::fd::OwnedFd,
+    pub(crate) cols: usize,
+    pub(crate) rows: usize,
+    /// Process GROUP to kill later: we are not the shell's parent, so we cannot look it up.
+    pub(crate) pgid: Option<u32>,
+    /// How long the shell had already been running, so the crash-loop guard doesn't read a
+    /// long-lived shell as freshly spawned.
+    pub(crate) alive: std::time::Duration,
+    /// Was a full-screen app (vim / less / claude) holding the ALT screen at handover? Decides how
+    /// the pane is asked to repaint - see [`PtyTerm::request_redraw`]. Our own `Term` starts blank
+    /// and has parsed nothing, so this can only come from the predecessor.
+    pub(crate) alt_screen: bool,
 }
 
 /// How this pane's pty master is owned. A spawned pane keeps `portable_pty`'s master (its proven
@@ -427,6 +494,7 @@ fn spawn_reader(c: ReaderCtx) {
                         let mut s = state_reader.lock().unwrap();
                         s.progress = progress;
                         s.activity = true; // any output chunk counts (notify-on-activity)
+                        s.saw_output = true;
                         if let Some(c) = cwd_update {
                             s.cwd = Some(c);
                         }
@@ -560,27 +628,23 @@ impl PtyTerm {
     }
 
     /// Take over a LIVE pty handed to us by a predecessor stdusk (see `handoff`). No spawn happens:
-    /// the shell keeps running, unaware that its master fd changed owner. `pgid` is the group we
-    /// must be able to kill later - it comes across the wire because we are not the shell's parent
-    /// and cannot look it up. `alive` is how long it had been running, so the crash-loop guard is
-    /// not fooled into thinking a long-lived shell just started.
+    /// the shell keeps running, unaware that its master fd changed owner. Everything our fresh
+    /// `Term` cannot deduce rides in [`Adopted`].
     ///
-    /// The grid starts EMPTY: alacritty's `Term` has no serialization, so scrollback does not
-    /// survive. `nudge_redraw` recovers the visible screen for anything that repaints on SIGWINCH.
+    /// The grid starts EMPTY: alacritty's `Term` has no serialization, so neither the screen nor the
+    /// scrollback survives. [`Self::request_redraw`] is what puts content back.
     ///
     /// Only ONE reader may pump a pty: bytes are consumed, not broadcast. While the predecessor's
     /// reader thread is still alive it competes for output and whatever it wins is LOST to us, so
-    /// the handover must be the last thing the predecessor does before exiting. The window is
-    /// milliseconds on an idle prompt, and the SIGWINCH nudge repaints anything that redraws.
+    /// the handover must be the last thing the predecessor does before exiting - and why the redraw
+    /// request is repeated until output actually lands here.
     pub(crate) fn adopt(
-        cols: usize,
-        rows: usize,
         ctx: egui::Context,
-        fd: std::os::fd::OwnedFd,
-        pgid: Option<u32>,
-        alive: std::time::Duration,
+        handover: Adopted,
         opts: &SpawnOpts,
     ) -> std::io::Result<Self> {
+        let Adopted { fd, cols, rows, pgid, alive, alt_screen } = handover;
+        let redraw_ctx = ctx.clone(); // the reader thread takes `ctx`; the nudger needs one too
         // Separate dups for the reader thread and the writer: both sides of the same pty master,
         // independently owned, exactly like `try_clone_reader` + `take_writer` give us on a spawn.
         let reader = std::fs::File::from(fd.try_clone()?);
@@ -602,6 +666,13 @@ impl PtyTerm {
             &Dims { cols, rows },
             EventProxy { state: state.clone(), replies: replies.clone() },
         )));
+        // Enter the alt screen ourselves when the handed-over app owned it: its repaint then lands
+        // on the alt grid, and the `ESC[?1049l` it sends when it exits restores our (empty) primary
+        // one instead of being a no-op that leaves its leftovers under the shell's next prompt. A
+        // stale flag (the app quit mid-handover) is healed by the prompt-mark path in `spawn_reader`.
+        if alt_screen {
+            term.lock().swap_alt();
+        }
 
         spawn_reader(ReaderCtx {
             reader: Box::new(reader),
@@ -630,8 +701,53 @@ impl PtyTerm {
             started: std::time::Instant::now(),
             uptime_base: alive,
         };
-        me.nudge_redraw();
+        me.request_redraw(alt_screen, redraw_ctx);
         Ok(me)
+    }
+
+    /// Ask whatever is running on an adopted pty to paint the screen again, and keep asking while
+    /// nothing arrives. Without this the pane shows an empty grid with a cursor until the user hits
+    /// Enter - the shells are live, they just have no reason to speak.
+    ///
+    /// Two different asks, because one tool does not fit both cases:
+    /// - a full-screen app (vim / less / claude) redraws on SIGWINCH, so the size wiggle is enough,
+    ///   and a `^L` must NOT be sent - inside a TUI that byte is the app's to interpret (a literal
+    ///   insert in vim's insert mode).
+    /// - otherwise the SHELL owns the screen, and shells do not repaint on SIGWINCH; zsh's zle and
+    ///   bash's readline both redraw the prompt (plus whatever is typed) on `^L`. Same trick the
+    ///   alt-screen heal path in `spawn_reader` already uses for the same reason.
+    ///
+    /// A `^L` reaching a non-alt-screen program that is mid-command is harmless: readline-style
+    /// readers treat it as redraw, and a program that never reads stdin leaves the byte in the tty
+    /// input queue, where the shell's own `zle` consumes it as a clear-screen at the next prompt.
+    ///
+    /// The retries exist because a single ask is genuinely unreliable: until the predecessor process
+    /// exits, ITS reader thread is still draining this pty, and anything it wins is lost to us. It
+    /// closes right after our ACK, so the window is short - but it is exactly the window we ask in.
+    /// They run on their own short-lived thread (the UI thread must not sleep), which holds a DUP of
+    /// the master for up to [`REDRAW_RETRY_DELAYS`]'s total - closing the pane during that window
+    /// defers the master's SIGHUP by that much, while `kill()` still reaps the group at once.
+    fn request_redraw(&self, alt_screen: bool, ctx: egui::Context) {
+        let (state, writer) = (self.state.clone(), self.writer.clone());
+        let Some(fd) = self.pty.as_fd().and_then(|fd| fd.try_clone_to_owned().ok()) else {
+            return; // no fd to wiggle: nothing to ask, and nothing to retry
+        };
+        let (cols, rows) = (self.cols, self.rows);
+        thread::spawn(move || {
+            for (attempt, wait) in REDRAW_RETRY_DELAYS.iter().enumerate() {
+                thread::sleep(*wait);
+                // Something painted: the pane is no longer blank, so stop poking it.
+                if attempt > 0 && state.lock().is_ok_and(|s| s.saw_output) {
+                    return;
+                }
+                nudge_winsize(fd.as_fd(), cols, rows);
+                if !alt_screen && let Ok(mut w) = writer.lock() {
+                    let _ = w.write_all(b"\x0c");
+                    let _ = w.flush();
+                }
+                ctx.request_repaint();
+            }
+        });
     }
 
     /// How long this shell has been running, counting time under previous owners - what a further
@@ -720,26 +836,8 @@ impl PtyTerm {
                     pixel_height: 0,
                 });
             }
-            Pty::Adopted(fd) => {
-                let _ = rustix::termios::tcsetwinsize(
-                    fd,
-                    rustix::termios::Winsize {
-                        ws_row: rows as u16,
-                        ws_col: cols as u16,
-                        ws_xpixel: 0,
-                        ws_ypixel: 0,
-                    },
-                );
-            }
+            Pty::Adopted(fd) => set_winsize(fd.as_fd(), cols, rows),
         }
-    }
-
-    /// Re-send the CURRENT size to the pty. Adopting a live shell gives us an empty `Term` (the
-    /// predecessor's scrollback cannot be moved), so nudging SIGWINCH makes whatever is running
-    /// (vim, claude, less) repaint its screen instead of leaving the pane blank until the next
-    /// keystroke.
-    pub(crate) fn nudge_redraw(&self) {
-        self.set_pty_size(self.cols, self.rows);
     }
 
     pub(crate) fn scroll(&self, delta_lines: i32) {
@@ -1265,6 +1363,121 @@ mod tests {
     }
 
     #[test]
+    fn real_pty_only_a_size_change_delivers_sigwinch() {
+        // The fact this whole redraw path rests on: a pty signals SIGWINCH only when the window size
+        // actually CHANGES. `nudge_redraw` used to re-send the CURRENT size, which is silently
+        // nothing - so an adopted full-screen app was never asked to repaint and the pane stayed
+        // blank. Measured here rather than trusted: XNU's TIOCSWINSZ compares before signalling
+        // (Linux's `tty_do_resize` has the same guard).
+        //
+        // `read` is a BUILTIN, so the shell itself stays the tty's foreground process group and the
+        // signal reaches its trap; a `sleep` child would become the foreground group instead and
+        // swallow it (SIGWINCH's default action is to ignore).
+        let log = std::env::temp_dir().join(format!("stdusk-winch-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&log);
+        let term = e2e_term(&format!(
+            "trap 'echo w >> {}' WINCH; printf ARMED; while :; do read line; done",
+            log.display()
+        ));
+        // ARMED in the grid proves the trap is installed (it is set before the print).
+        assert!(
+            poll_term(&term, |t| grid_text(t).contains("ARMED").then_some(())).is_some(),
+            "the probe shell never armed its trap"
+        );
+        let winches = || std::fs::read_to_string(&log).unwrap_or_default().lines().count();
+
+        let fd = term.pty.as_fd().expect("a spawned pty has a master fd");
+        super::set_winsize(fd, term.cols(), term.rows()); // the OLD nudge: same size
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert_eq!(winches(), 0, "re-sending the same size must NOT signal - that was the bug");
+
+        super::nudge_winsize(fd, term.cols(), term.rows());
+        let signalled = poll_term(&term, |_| (winches() > 0).then_some(()));
+        assert!(signalled.is_some(), "nudge_redraw must actually deliver a SIGWINCH");
+        let _ = std::fs::remove_file(&log);
+    }
+
+    /// A donor pane running a "shell" that reports every byte it is sent as `GOT-<hex>`, in RAW mode
+    /// with echo off so only real input shows up (never the line discipline's echo). `ARMED` in the
+    /// grid means the raw mode is in effect and it is safe to hand the pty over.
+    fn raw_byte_reporter() -> PtyTerm {
+        let term = e2e_term(
+            "stty raw -echo; printf ARMED; \
+             while :; do b=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); \
+             printf 'GOT-%s ' \"$b\"; done",
+        );
+        assert!(
+            poll_term(&term, |t| grid_text(t).contains("ARMED").then_some(())).is_some(),
+            "the probe shell never armed raw mode"
+        );
+        term
+    }
+
+    /// Hand `donor`'s live pty to a second `PtyTerm`, the way a successor process adopts it.
+    fn adopt_from(donor: &mut PtyTerm, alt_screen: bool) -> PtyTerm {
+        let pgid = poll_term(donor, PtyTerm::shell_pid).expect("no shell pid");
+        let (fd, _) = donor.handoff_fd().expect("master fd must be borrowable");
+        let owned = fd.try_clone_to_owned().expect("dup the master");
+        donor.mark_handed_off();
+        let opts = SpawnOpts {
+            detect_progress: false,
+            shell_integration: false,
+            autosuggestions: false,
+            scrollback_lines: 500,
+            word_separators: " ".into(),
+            bold_bright: false,
+            cwd: None,
+            profile: None,
+        };
+        PtyTerm::adopt(
+            egui::Context::default(),
+            super::Adopted {
+                fd: owned,
+                cols: donor.cols(),
+                rows: donor.rows(),
+                pgid: Some(pgid),
+                alive: std::time::Duration::from_secs(9),
+                alt_screen,
+            },
+            &opts,
+        )
+        .expect("adopt")
+    }
+
+    #[test]
+    fn real_pty_an_adopted_prompt_is_asked_to_repaint_without_a_keystroke() {
+        // The reported bug: after a restart the shells were alive but every pane rendered empty
+        // until the user pressed Enter. An adopted `Term` starts blank and a shell has no reason to
+        // speak, so we ask: `^L` (0x0c) is what makes zle/readline redraw the prompt. Proven by the
+        // byte actually arriving at the shell - 0x0c, unechoed, with nothing typed.
+        let mut donor = raw_byte_reporter();
+        let heir = adopt_from(&mut donor, false);
+        let asked = poll_term(&heir, |t| grid_text(t).contains("GOT-0c").then_some(()));
+        assert!(
+            asked.is_some(),
+            "an adopted prompt must be asked to repaint, got {:?}",
+            grid_text(&heir)
+        );
+        drop(heir);
+        donor.kill();
+    }
+
+    #[test]
+    fn real_pty_an_adopted_full_screen_app_is_never_sent_ctrl_l() {
+        // The other half: inside a TUI, `^L` is the APP's byte to interpret (a literal insert in
+        // vim's insert mode), so a pane on the alt screen is asked to repaint with SIGWINCH only.
+        // Long enough to cover every retry the nudger makes.
+        let mut donor = raw_byte_reporter();
+        let heir = adopt_from(&mut donor, true);
+        std::thread::sleep(std::time::Duration::from_millis(2600));
+        let seen = grid_text(&heir);
+        assert!(!seen.contains("GOT-"), "nothing may be typed into a TUI, got {seen:?}");
+        assert!(heir.is_alt_screen(), "the handed-over alt screen must be entered here too");
+        drop(heir);
+        donor.kill();
+    }
+
+    #[test]
     fn real_pty_adopted_fd_streams_output_and_reports_the_pgid() {
         // Hand a LIVE pty's master fd to a second PtyTerm and prove the adopting side is a working
         // terminal: it sees output the shell writes after the handover, and it carries the process
@@ -1290,12 +1503,15 @@ mod tests {
             profile: None,
         };
         let heir = PtyTerm::adopt(
-            20,
-            5,
             egui::Context::default(),
-            owned,
-            Some(pgid),
-            std::time::Duration::from_secs(42),
+            super::Adopted {
+                fd: owned,
+                cols: 20,
+                rows: 5,
+                pgid: Some(pgid),
+                alive: std::time::Duration::from_secs(42),
+                alt_screen: false,
+            },
             &opts,
         )
         .expect("adopt");
