@@ -505,7 +505,7 @@ pub(crate) fn quit_confirm_labels(kind: QuitKind) -> (&'static str, &'static str
 /// modal: promise a reattach only when the running build can actually hand its ptys over.
 pub(crate) fn restart_shell_note(keeps_shells: bool) -> &'static str {
     if keeps_shells {
-        "Running shells are reattached; scrollback is not restored."
+        "Running shells are reattached, with the screen and recent scrollback."
     } else {
         "Running shells are terminated by the restart."
     }

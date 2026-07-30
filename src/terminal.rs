@@ -274,8 +274,10 @@ fn wiggle_rows(rows: usize) -> usize {
 /// emits no OSC 133, and the tty could not be asked). Then the FIRST attempt stays silent and only a
 /// pane that produced no output during the grace period is treated as an idle prompt - the retry loop
 /// bails out as soon as `saw_output` flips, so a producing pane is never typed into.
-fn allow_ctrl_l(alt_screen: bool, running: Option<bool>, attempt: usize) -> bool {
-    if alt_screen {
+fn allow_ctrl_l(alt_screen: bool, running: Option<bool>, attempt: usize, replayed: bool) -> bool {
+    // A replayed pane already shows its screen - and zle's clear-screen would WIPE it to redraw a
+    // bare prompt, throwing away the very content the replay restored.
+    if alt_screen || replayed {
         return false;
     }
     match running {
@@ -375,6 +377,9 @@ pub(crate) struct Adopted {
     /// `None` = nobody knows - a predecessor too old to send it, or a shell that emits no OSC 133 at
     /// all. See [`allow_ctrl_l`]: the answer decides whether the pane may be sent a `^L`.
     pub(crate) cmd_running: Option<bool>,
+    /// The donor's screen as ANSI (see `screen`), replayed into our fresh grid so the pane shows what
+    /// was already there. Empty when the predecessor sent none - a 1.6.2 build, or a blank pane.
+    pub(crate) replay: Vec<u8>,
 }
 
 /// How this pane's pty master is owned. A spawned pane keeps `portable_pty`'s master (its proven
@@ -685,7 +690,7 @@ impl PtyTerm {
         handover: Adopted,
         opts: &SpawnOpts,
     ) -> std::io::Result<Self> {
-        let Adopted { fd, cols, rows, pgid, alive, alt_screen, cmd_running } = handover;
+        let Adopted { fd, cols, rows, pgid, alive, alt_screen, cmd_running, replay } = handover;
         let redraw_ctx = ctx.clone(); // the reader thread takes `ctx`; the nudger needs one too
         // Separate dups for the reader thread and the writer: both sides of the same pty master,
         // independently owned, exactly like `try_clone_reader` + `take_writer` give us on a spawn.
@@ -715,6 +720,13 @@ impl PtyTerm {
         if alt_screen {
             term.lock().swap_alt();
         }
+        // Repaint the donor's screen BEFORE the reader starts, so the very first frame already shows
+        // it and live output simply continues from there. A separate parser instance is fine - the
+        // dump is self-contained, so it can never leave a half-parsed escape behind for the reader.
+        if !replay.is_empty() {
+            let mut replay_parser: Processor = Processor::new();
+            replay_parser.advance(&mut *term.lock(), &replay);
+        }
 
         spawn_reader(ReaderCtx {
             reader: Box::new(reader),
@@ -743,7 +755,7 @@ impl PtyTerm {
             started: std::time::Instant::now(),
             uptime_base: alive,
         };
-        me.request_redraw(alt_screen, cmd_running, redraw_ctx);
+        me.request_redraw(alt_screen, cmd_running, !replay.is_empty(), redraw_ctx);
         Ok(me)
     }
 
@@ -763,7 +775,13 @@ impl PtyTerm {
     /// They run on their own short-lived thread (the UI thread must not sleep), which holds a DUP of
     /// the master for up to [`REDRAW_RETRY_DELAYS`]'s total - closing the pane during that window
     /// defers the master's SIGHUP by that much, while `kill()` still reaps the group at once.
-    fn request_redraw(&self, alt_screen: bool, cmd_running: Option<bool>, ctx: egui::Context) {
+    fn request_redraw(
+        &self,
+        alt_screen: bool,
+        cmd_running: Option<bool>,
+        replayed: bool,
+        ctx: egui::Context,
+    ) {
         let (state, writer) = (self.state.clone(), self.writer.clone());
         let Some(fd) = self.pty.as_fd().and_then(|fd| fd.try_clone_to_owned().ok()) else {
             return; // no fd to wiggle: nothing to ask, and nothing to retry
@@ -780,7 +798,7 @@ impl PtyTerm {
                     return;
                 }
                 nudge_winsize(fd.as_fd(), cols, rows);
-                if allow_ctrl_l(alt_screen, running, attempt)
+                if allow_ctrl_l(alt_screen, running, attempt, replayed)
                     && let Ok(mut w) = writer.lock()
                 {
                     let _ = w.write_all(b"\x0c");
@@ -1031,6 +1049,45 @@ impl PtyTerm {
             None
         };
         GridSnap { cols, rows, cells, cursor, top_line }
+    }
+
+    /// This pane's screen as ANSI, for a successor process to REPLAY into its fresh grid (see
+    /// `screen`). Empty when there is nothing on screen worth sending.
+    ///
+    /// Reads the ACTIVE grid, so a pane on the alt screen dumps what the app has drawn there (and
+    /// carries no history - the alt grid has none). Includes a bounded tail of scrollback so a loop
+    /// that printed more than one screen still comes back with its context.
+    pub(crate) fn screen_dump(&self) -> Vec<u8> {
+        let term = self.term.lock();
+        let grid = term.grid();
+        // Grid dimensions are authoritative (an app may have resized it via CSI 8).
+        let (cols, rows) = (grid.columns(), grid.screen_lines());
+        let history = i32::try_from(crate::screen::MAX_HISTORY_LINES).unwrap_or(i32::MAX);
+        let top = grid.topmost_line().0.max(-history);
+        let bot = grid.bottommost_line().0;
+        let mut lines = Vec::with_capacity((bot - top + 1).max(0) as usize);
+        for l in top..=bot {
+            let row = &grid[Line(l)];
+            lines.push(
+                (0..cols)
+                    .map(|c| {
+                        let cell = &row[Column(c)];
+                        crate::screen::Cell {
+                            c: cell.c,
+                            fg: cell.fg,
+                            bg: cell.bg,
+                            flags: cell.flags,
+                        }
+                    })
+                    .collect(),
+            );
+        }
+        let cp = grid.cursor.point;
+        let cursor = (
+            (cp.line.0.max(0) as usize).min(rows.saturating_sub(1)),
+            cp.column.0.min(cols.saturating_sub(1)),
+        );
+        crate::screen::encode(&lines, rows, cursor)
     }
 
     /// Whether the terminal is on the alternate screen (vim/less/...), e.g. to suppress the
@@ -1406,25 +1463,33 @@ mod tests {
     #[test]
     fn ctrl_l_only_goes_to_a_shell_that_is_at_its_prompt() {
         use super::allow_ctrl_l;
-        // (alt_screen, running, attempt) -> may send ^L
+        // (alt_screen, running, attempt, replayed) -> may send ^L
         let cases = [
             // At a prompt: the one case that consumes it as clear-screen-and-redraw.
-            ((false, Some(false), 0), true),
-            ((false, Some(false), 3), true),
+            ((false, Some(false), 0, false), true),
+            ((false, Some(false), 3, false), true),
+            // ...unless the screen was REPLAYED: zle's clear-screen would wipe it to redraw a bare
+            // prompt, throwing away the content the replay just restored.
+            ((false, Some(false), 0, true), false),
             // A command is running: the tty would ECHO it as a literal "^L" (the 1.6.2 bug).
-            ((false, Some(true), 0), false),
-            ((false, Some(true), 3), false),
+            ((false, Some(true), 0, false), false),
+            ((false, Some(true), 3, false), false),
             // Alt screen: the byte belongs to the app, whatever the command state says.
-            ((true, Some(false), 0), false),
-            ((true, Some(true), 1), false),
-            ((true, None, 2), false),
+            ((true, Some(false), 0, false), false),
+            ((true, Some(true), 1, false), false),
+            ((true, None, 2, true), false),
             // Unknown (old predecessor / no OSC 133): silent first, then treat a pane that stayed
             // quiet through the grace period as an idle prompt.
-            ((false, None, 0), false),
-            ((false, None, 1), true),
+            ((false, None, 0, false), false),
+            ((false, None, 1, false), true),
+            ((false, None, 1, true), false),
         ];
-        for ((alt, running, attempt), want) in cases {
-            assert_eq!(allow_ctrl_l(alt, running, attempt), want, "{alt} {running:?} {attempt}");
+        for ((alt, running, attempt, replayed), want) in cases {
+            assert_eq!(
+                allow_ctrl_l(alt, running, attempt, replayed),
+                want,
+                "alt={alt} running={running:?} attempt={attempt} replayed={replayed}"
+            );
         }
     }
 
@@ -1479,8 +1544,15 @@ mod tests {
         term
     }
 
-    /// Hand `donor`'s live pty to a second `PtyTerm`, the way a successor process adopts it.
-    fn adopt_from(donor: &mut PtyTerm, alt_screen: bool, cmd_running: Option<bool>) -> PtyTerm {
+    /// Hand `donor`'s live pty to a second `PtyTerm`, the way a successor process adopts it -
+    /// including the screen dump that rides along with the fd. `replay: false` simulates a
+    /// predecessor that sent none (a 1.6.2 build, or a blank pane).
+    fn adopt_from(
+        donor: &mut PtyTerm,
+        alt_screen: bool,
+        cmd_running: Option<bool>,
+        replay: bool,
+    ) -> PtyTerm {
         let pgid = poll_term(donor, PtyTerm::shell_pid).expect("no shell pid");
         let (fd, _) = donor.handoff_fd().expect("master fd must be borrowable");
         let owned = fd.try_clone_to_owned().expect("dup the master");
@@ -1505,6 +1577,7 @@ mod tests {
                 alive: std::time::Duration::from_secs(9),
                 alt_screen,
                 cmd_running,
+                replay: if replay { donor.screen_dump() } else { Vec::new() },
             },
             &opts,
         )
@@ -1523,7 +1596,7 @@ mod tests {
         // would report "a command is running" - a real zsh prompt reads with zle, in the shell's own
         // process group, which `real_pty_the_tty_reports_whether_a_command_is_running` covers.)
         let mut donor = raw_byte_reporter();
-        let heir = adopt_from(&mut donor, false, Some(false));
+        let heir = adopt_from(&mut donor, false, Some(false), false);
         let asked = poll_term(&heir, |t| grid_text(t).contains("GOT-0c").then_some(()));
         assert!(
             asked.is_some(),
@@ -1540,7 +1613,7 @@ mod tests {
         // vim's insert mode), so a pane on the alt screen is asked to repaint with SIGWINCH only.
         // Long enough to cover every retry the nudger makes.
         let mut donor = raw_byte_reporter();
-        let heir = adopt_from(&mut donor, true, Some(false));
+        let heir = adopt_from(&mut donor, true, Some(false), false);
         std::thread::sleep(std::time::Duration::from_millis(2600));
         let seen = grid_text(&heir);
         assert!(!seen.contains("GOT-"), "nothing may be typed into a TUI, got {seen:?}");
@@ -1565,11 +1638,66 @@ mod tests {
         );
         // `None` = the hardest case: a predecessor too old to send the field, or a shell with no
         // OSC 133 at all. The tty is asked instead, and the output-based bail-out backs it up.
-        let heir = adopt_from(&mut donor, false, None);
+        let heir = adopt_from(&mut donor, false, None, false);
         std::thread::sleep(std::time::Duration::from_millis(2600)); // past every retry
         let seen = grid_text(&heir);
         assert!(seen.contains("WORK"), "a producing pane repaints itself, got {seen:?}");
         assert!(!seen.contains("^L"), "a running command must never be sent ^L, got {seen:?}");
+        drop(heir);
+        donor.kill();
+    }
+
+    #[test]
+    fn real_pty_an_adopted_pane_still_shows_what_was_already_on_screen() {
+        // The point of a resumable restart: a pane must come back showing the lines it had, not a
+        // blank grid that starts filling from the next write. The donor prints distinctive lines and
+        // then goes SILENT, so anything in the heir's grid can only have come from the replay - no
+        // new output, no keystroke.
+        let mut donor = e2e_term(
+            "printf 'ALPHA-1\\r\\nBRAVO-2\\r\\nCHARLIE-3\\r\\n'; while :; do sleep 5; done",
+        );
+        assert!(
+            poll_term(&donor, |t| grid_text(t).contains("CHARLIE-3").then_some(())).is_some(),
+            "the donor never printed its lines"
+        );
+        let heir = adopt_from(&mut donor, false, Some(true), true);
+        let seen = grid_text(&heir);
+        for line in ["ALPHA-1", "BRAVO-2", "CHARLIE-3"] {
+            assert!(seen.contains(line), "{line} must survive the handover, got {seen:?}");
+        }
+        // ...and on their own rows, in order, not concatenated into one.
+        let snap = heir.grid_snapshot();
+        let rows: Vec<String> = snap
+            .cells
+            .chunks(snap.cols)
+            .map(|r| r.iter().map(|c| c.c).collect::<String>().trim_end().to_string())
+            .collect();
+        assert_eq!(rows[0], "ALPHA-1");
+        assert_eq!(rows[1], "BRAVO-2");
+        assert_eq!(rows[2], "CHARLIE-3");
+        drop(heir);
+        donor.kill();
+    }
+
+    #[test]
+    fn real_pty_a_replayed_screen_keeps_its_colors_and_bold() {
+        // The dump carries RAW cell colors and the style flags, so the heir re-renders them through
+        // its own theme. Asserted against the DONOR's snapshot, cell for cell.
+        let mut donor = e2e_term(
+            "printf 'p\\033[1;31mRED\\033[0m\\033[44mBLU\\033[0m\\r\\n'; while :; do sleep 5; done",
+        );
+        assert!(
+            poll_term(&donor, |t| grid_text(t).contains("RED").then_some(())).is_some(),
+            "the donor never printed its colored line"
+        );
+        let before = donor.grid_snapshot();
+        let heir = adopt_from(&mut donor, false, Some(true), true);
+        let after = heir.grid_snapshot();
+        let cells =
+            |snap: &super::GridSnap| -> Vec<(char, egui::Color32, Option<egui::Color32>, bool)> {
+                snap.cells[..12].iter().map(|c| (c.c, c.fg, c.bg, c.bold)).collect()
+            };
+        assert_eq!(cells(&after), cells(&before), "glyphs, colors and bold must all round-trip");
         drop(heir);
         donor.kill();
     }
@@ -1630,6 +1758,7 @@ mod tests {
                 alive: std::time::Duration::from_secs(42),
                 alt_screen: false,
                 cmd_running: Some(false),
+                replay: Vec::new(),
             },
             &opts,
         )

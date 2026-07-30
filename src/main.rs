@@ -24,6 +24,7 @@ mod palette;
 mod pane;
 mod procwatch;
 mod progress;
+mod screen;
 mod search;
 mod session;
 mod settings;
@@ -330,9 +331,10 @@ impl Stdusk {
         let toast = if font_missing {
             Some((format!("Font not found: {}", cfg.appearance.font), 3.0))
         } else if adopted {
-            // The one thing a handoff cannot carry (alacritty's Term has no serialization), said
-            // once, right after it happened - the shells themselves are the same processes.
-            Some(("Session reattached - scrollback did not carry over".to_owned(), 6.0))
+            // What a handoff does NOT carry: the screen and a bounded slice of scrollback are
+            // replayed (see `screen`), but the deep history is not. Said once, right after it
+            // happened - the shells themselves are the same processes.
+            Some(("Session reattached - older scrollback did not carry over".to_owned(), 6.0))
         } else {
             None
         };

@@ -51,7 +51,9 @@ use serde::{Deserialize, Serialize};
 use crate::session::SavedSession;
 
 /// Cap on a single pane's metadata, so a corrupt or hostile length can't make us allocate wildly.
-const MAX_META: usize = 64 * 1024;
+/// Generous because the metadata now carries the pane's SCREEN (base64'd, itself capped by
+/// `screen::MAX_DUMP_BYTES`); a legitimate pane sits comfortably under half of this.
+const MAX_META: usize = 512 * 1024;
 
 /// Cap on a text message (the header carries the whole session; the ACK is one word).
 const MAX_TEXT: usize = 1024 * 1024;
@@ -124,6 +126,14 @@ pub(crate) struct PaneMeta {
     /// an upgrade refuse the handoff, and the user already paid that once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cmd_running: Option<bool>,
+    /// The pane's screen (plus a bounded tail of scrollback) as ANSI, base64'd - what lets the
+    /// successor show what was ALREADY on screen instead of a blank grid. See `screen`.
+    ///
+    /// Base64 rather than a raw string because the dump is arbitrary control bytes, which a TOML
+    /// basic string would escape into six bytes apiece. Absent from a 1.6.2 predecessor, hence
+    /// optional - and hence addable without a `PROTOCOL` bump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) screen: Option<String>,
 }
 
 /// Panes handed to us by a predecessor, received BEFORE the window exists (the transport needs no
@@ -522,6 +532,7 @@ impl crate::Stdusk {
                         rows: term.rows(),
                         alt_screen: term.is_alt_screen(),
                         cmd_running: cmd_running(term.cmd_state()),
+                        screen: encode_screen(&term.screen_dump()),
                     },
                     fd,
                 ));
@@ -541,6 +552,21 @@ impl crate::Stdusk {
 /// happens to `cd`. Asking the OS costs one targeted process refresh per pane, once per restart.
 fn pane_cwd(term: &crate::terminal::PtyTerm) -> Option<String> {
     term.cwd().or_else(|| term.shell_pid().and_then(crate::procwatch::process_cwd))
+}
+
+/// A pane's screen dump for the wire: base64, or `None` when there is nothing on screen.
+pub(crate) fn encode_screen(dump: &[u8]) -> Option<String> {
+    use base64::Engine as _;
+    (!dump.is_empty()).then(|| base64::engine::general_purpose::STANDARD.encode(dump))
+}
+
+/// The screen dump off the wire. A blob that will not decode is DROPPED, never fatal: a pane that
+/// comes back without its old screen is a cosmetic loss, a refused handoff is not.
+pub(crate) fn decode_screen(screen: Option<&String>) -> Vec<u8> {
+    use base64::Engine as _;
+    screen
+        .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+        .unwrap_or_default()
 }
 
 /// Is a command running, as far as OSC 133 has told us? `Idle` is NOT "at a prompt": it is also what
@@ -648,6 +674,8 @@ mod tests {
             // Alternate per pane so a field that stopped round-tripping shows up as a mismatch.
             alt_screen: n % 2 == 1,
             cmd_running: n.is_multiple_of(2).then_some(n == 0),
+            // A dump big enough to prove the metadata survives past one socket buffer.
+            screen: encode_screen(format!("\x1b[0mpane-{n} screen{}", "x".repeat(9000)).as_bytes()),
         }
     }
 
@@ -813,6 +841,20 @@ mod tests {
     }
 
     #[test]
+    fn a_screen_dump_survives_the_wire_and_a_corrupt_one_is_dropped() {
+        // The dump is arbitrary control bytes, so it rides base64'd rather than as a TOML string.
+        let dump = b"\x1b[0mhello\r\n\x1b[0m\x1b[1;1H";
+        let meta = PaneMeta { screen: encode_screen(dump), ..Default::default() };
+        let back: PaneMeta = decode(&encode(&meta).unwrap()).unwrap();
+        assert_eq!(decode_screen(back.screen.as_ref()), dump);
+        // Absent (a predecessor too old to send one) and garbage both mean "no replay", never an
+        // aborted handoff - losing the old screen is cosmetic, refusing the restart is not.
+        assert!(decode_screen(None).is_empty());
+        assert!(decode_screen(Some(&"not base64 !!".to_owned())).is_empty());
+        assert_eq!(encode_screen(&[]), None, "a blank screen is sent as nothing at all");
+    }
+
+    #[test]
     fn a_pane_that_never_emitted_osc_7_still_hands_over_its_directory() {
         // The "zsh" tab bug: a shell whose rc files never emit OSC 7 has no tracked cwd, so the
         // handover carried `cwd: None` and the successor had nothing to name the tab from. A REAL
@@ -913,6 +955,7 @@ mod tests {
                 rows: term.rows(),
                 alt_screen: term.is_alt_screen(),
                 cmd_running: cmd_running(term.cmd_state()),
+                screen: encode_screen(&term.screen_dump()),
             },
             fd,
         )];
