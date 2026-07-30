@@ -355,6 +355,10 @@ pub(crate) struct PtyTerm {
     handed_off: bool,       // the pty was passed to a successor process - kill()/Drop must NOT reap
     started: std::time::Instant, // when THIS owner took the pty (spawn or adopt)
     uptime_base: std::time::Duration, // how long the shell had run under previous owners
+    /// Liveness token for background helpers (the adopt redraw nudger). They hold a `Weak` to it, so
+    /// dropping this pane stops them at once - and releases the pty fd they duplicated - instead of
+    /// leaving them poking a pane the user already closed.
+    alive_token: Arc<()>,
 }
 
 /// A live pty handed over by a predecessor stdusk, plus everything a freshly built `Term` cannot
@@ -671,6 +675,7 @@ impl PtyTerm {
             handed_off: false,
             started: std::time::Instant::now(),
             uptime_base: std::time::Duration::ZERO,
+            alive_token: Arc::new(()),
         }
     }
 
@@ -754,6 +759,7 @@ impl PtyTerm {
             handed_off: false,
             started: std::time::Instant::now(),
             uptime_base: alive,
+            alive_token: Arc::new(()),
         };
         me.request_redraw(alt_screen, cmd_running, !replay.is_empty(), redraw_ctx);
         Ok(me)
@@ -789,9 +795,13 @@ impl PtyTerm {
         // What the predecessor DECLARED (OSC 133) wins; without it, ask the tty itself.
         let running = cmd_running.or_else(|| foreground_command(fd.as_fd(), self.shell_pid));
         let (cols, rows) = (self.cols, self.rows);
+        let alive = Arc::downgrade(&self.alive_token);
         thread::spawn(move || {
             for (attempt, wait) in REDRAW_RETRY_DELAYS.iter().enumerate() {
                 thread::sleep(*wait);
+                if alive.upgrade().is_none() {
+                    return; // the pane is gone: stop poking its pty and let the dup go
+                }
                 // Something painted: the pane is no longer blank, so stop poking it - and never
                 // type into a pane that has since started producing output on its own.
                 if attempt > 0 && state.lock().is_ok_and(|s| s.saw_output) {
@@ -1544,6 +1554,20 @@ mod tests {
         term
     }
 
+    /// Tear down a probe pane after a handover test. `donor.kill()` is DISARMED by the
+    /// `mark_handed_off` inside `adopt_from` (that is the whole point of the handoff), so the group
+    /// has to be reaped explicitly - otherwise the shell and its pty outlive the test and starve the
+    /// rest of the suite of ptys.
+    fn reap_probe(donor: &PtyTerm) {
+        #[cfg(unix)]
+        if let Some(pid) = donor.shell_pid() {
+            #[allow(unsafe_code)] // SAFETY: thin FFI to killpg with a pid we spawned ourselves
+            unsafe {
+                libc::killpg(pid as i32, libc::SIGKILL)
+            };
+        }
+    }
+
     /// Hand `donor`'s live pty to a second `PtyTerm`, the way a successor process adopts it -
     /// including the screen dump that rides along with the fd. `replay: false` simulates a
     /// predecessor that sent none (a 1.6.2 build, or a blank pane).
@@ -1604,7 +1628,7 @@ mod tests {
             grid_text(&heir)
         );
         drop(heir);
-        donor.kill();
+        reap_probe(&donor);
     }
 
     #[test]
@@ -1619,7 +1643,7 @@ mod tests {
         assert!(!seen.contains("GOT-"), "nothing may be typed into a TUI, got {seen:?}");
         assert!(heir.is_alt_screen(), "the handed-over alt screen must be entered here too");
         drop(heir);
-        donor.kill();
+        reap_probe(&donor);
     }
 
     #[test]
@@ -1644,7 +1668,7 @@ mod tests {
         assert!(seen.contains("WORK"), "a producing pane repaints itself, got {seen:?}");
         assert!(!seen.contains("^L"), "a running command must never be sent ^L, got {seen:?}");
         drop(heir);
-        donor.kill();
+        reap_probe(&donor);
     }
 
     #[test]
@@ -1654,7 +1678,7 @@ mod tests {
         // then goes SILENT, so anything in the heir's grid can only have come from the replay - no
         // new output, no keystroke.
         let mut donor = e2e_term(
-            "printf 'ALPHA-1\\r\\nBRAVO-2\\r\\nCHARLIE-3\\r\\n'; while :; do sleep 5; done",
+            "printf 'ALPHA-1\\r\\nBRAVO-2\\r\\nCHARLIE-3\\r\\n'; i=0; while [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done",
         );
         assert!(
             poll_term(&donor, |t| grid_text(t).contains("CHARLIE-3").then_some(())).is_some(),
@@ -1676,7 +1700,175 @@ mod tests {
         assert_eq!(rows[1], "BRAVO-2");
         assert_eq!(rows[2], "CHARLIE-3");
         drop(heir);
-        donor.kill();
+        reap_probe(&donor);
+    }
+
+    /// A donor on a REAL 80x24 pty (the 20x5 `e2e_term` grid is too small to say anything about row
+    /// positions or scrollback).
+    fn e2e_term_sized(cols: usize, rows: usize, script: &str) -> PtyTerm {
+        let opts = SpawnOpts {
+            detect_progress: false,
+            shell_integration: false,
+            autosuggestions: false,
+            scrollback_lines: 500,
+            word_separators: " ".into(),
+            bold_bright: false,
+            cwd: None,
+            profile: Some(Profile {
+                name: "e2e".into(),
+                shell: Some("/bin/sh".into()),
+                args: vec!["-c".into(), script.into()],
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                color: None,
+            }),
+        };
+        PtyTerm::spawn(cols, rows, egui::Context::default(), &opts)
+    }
+
+    /// Row-by-row text of a snapshot, trailing blanks trimmed.
+    fn snap_rows(term: &PtyTerm) -> Vec<String> {
+        let snap = term.grid_snapshot();
+        snap.cells
+            .chunks(snap.cols)
+            .map(|r| r.iter().map(|c| c.c).collect::<String>().trim_end().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn real_pty_a_replayed_screen_keeps_every_row_where_it_was() {
+        // The "only the last line came back?" question. Content is placed at rows 10-12 of a 24-row
+        // grid (blank rows above AND below) with the cursor parked on row 20, so a replay that
+        // COMPACTED the picture to the top - or dropped blank rows to save bytes - cannot pass.
+        // CUP is 1-based: row 11 = index 10, col 3 = index 2.
+        let mut donor = e2e_term_sized(
+            80,
+            24,
+            "printf '\\033[11;3HROW-A\\033[12;3HROW-B\\033[13;3HROW-C\\033[21;6H'; \
+             i=0; while [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done",
+        );
+        assert!(
+            poll_term(&donor, |t| snap_rows(t)
+                .get(12)
+                .is_some_and(|r| r.contains("ROW-C"))
+                .then_some(()))
+            .is_some(),
+            "the donor never drew its rows"
+        );
+        let before = snap_rows(&donor);
+        let before_cursor = donor.grid_snapshot().cursor;
+        assert_eq!(before[10], "  ROW-A", "the probe itself must place row 10");
+        assert_eq!(before_cursor, Some((20, 5)), "the probe must park the cursor on row 20");
+
+        let heir = adopt_from(&mut donor, false, Some(true), true);
+        assert_eq!(snap_rows(&heir), before, "every row must land where the donor had it");
+        assert_eq!(heir.grid_snapshot().cursor, before_cursor, "the cursor must come back too");
+        drop(heir);
+        reap_probe(&donor);
+    }
+
+    #[test]
+    fn real_pty_a_carriage_return_progress_bar_replays_as_the_one_row_it_occupies() {
+        // The "looks like only last line?" screenshot, reproduced. A `\r`-overwrite progress bar
+        // rewrites ONE row: its earlier percentages never existed as separate rows, not even on the
+        // donor. One line at the top with blank below is therefore the faithful answer, not a loss -
+        // and this test is what says so, next to the row-position test above which proves that a
+        // donor with content lower down comes back lower down.
+        let mut donor = e2e_term_sized(
+            80,
+            24,
+            "printf 'dry  [###-------] 12.3%% 8000/68461\\r'; \
+             printf 'dry  [######----] 87.6%% 60000/68461 | ETA 8s\\r'; \
+             i=0; while [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done",
+        );
+        assert!(
+            poll_term(&donor, |t| snap_rows(t)[0].contains("87.6%").then_some(())).is_some(),
+            "the donor never drew its progress line"
+        );
+        let before = snap_rows(&donor);
+        assert!(
+            !before[0].contains("12.3%"),
+            "the overwrite already erased the earlier percentage"
+        );
+        assert!(
+            before[1..].iter().all(String::is_empty),
+            "the donor's own grid has exactly one non-blank row, got {before:?}"
+        );
+
+        let heir = adopt_from(&mut donor, false, Some(true), true);
+        assert_eq!(snap_rows(&heir), before, "the replay must be exactly what the donor had");
+        drop(heir);
+        reap_probe(&donor);
+    }
+
+    #[test]
+    fn real_pty_a_replayed_pane_can_be_scrolled_back_into_its_history() {
+        // The claim that up to `screen::MAX_HISTORY_LINES` of scrollback survive: the donor prints
+        // more lines than fit, so the early ones are already in ITS history, and the heir must be
+        // able to scroll up to them - not just show the last screenful.
+        let mut donor = e2e_term_sized(
+            80,
+            24,
+            "i=1; while [ $i -le 40 ]; do printf 'LINE-%02d\\r\\n' $i; i=$((i+1)); done; \
+             i=0; while [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done",
+        );
+        assert!(
+            poll_term(&donor, |t| snap_rows(t).iter().any(|r| r == "LINE-40").then_some(()))
+                .is_some(),
+            "the donor never printed 40 lines"
+        );
+        // 40 lines on a 24-row grid: 1..16 are in history, 17..40 are on screen.
+        assert!(donor.scroll_state().1 >= 16, "the donor must have history to hand over");
+        assert!(!snap_rows(&donor).iter().any(|r| r == "LINE-01"), "LINE-01 must be off-screen");
+
+        let heir = adopt_from(&mut donor, false, Some(true), true);
+        let (_, history) = heir.scroll_state();
+        assert!(history >= 16, "the heir must have inherited scrollback, got {history} lines");
+        let buffer: Vec<String> = heir.buffer_lines().into_iter().map(|(_, s)| s).collect();
+        for want in ["LINE-01", "LINE-16", "LINE-17", "LINE-40"] {
+            assert!(buffer.iter().any(|l| l == want), "{want} missing from the heir's buffer");
+        }
+        // ...and it is really HISTORY: scrolling up brings the early lines into view.
+        heir.scroll(20);
+        assert!(
+            snap_rows(&heir).iter().any(|r| r == "LINE-01"),
+            "scrolling up must reveal the oldest handed-over line"
+        );
+        drop(heir);
+        reap_probe(&donor);
+    }
+
+    #[test]
+    fn real_pty_replayed_scrollback_stops_at_the_documented_cap() {
+        // "Up to 200 lines of scrollback survive" is a promise made to users, so pin the actual
+        // number: a donor with FAR more history hands over its newest `MAX_HISTORY_LINES` and drops
+        // the rest, rather than either shipping 25k lines or quietly sending none.
+        let mut donor = e2e_term_sized(
+            80,
+            24,
+            "i=1; while [ $i -le 400 ]; do printf 'LINE-%03d\\r\\n' $i; i=$((i+1)); done; \
+             i=0; while [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done",
+        );
+        assert!(
+            poll_term(&donor, |t| snap_rows(t).iter().any(|r| r == "LINE-400").then_some(()))
+                .is_some(),
+            "the donor never printed 400 lines"
+        );
+        assert!(donor.scroll_state().1 > 300, "the donor must have far more history than the cap");
+
+        let heir = adopt_from(&mut donor, false, Some(true), true);
+        let history = heir.scroll_state().1;
+        assert_eq!(
+            history,
+            crate::screen::MAX_HISTORY_LINES,
+            "the heir must inherit exactly the capped number of scrollback lines"
+        );
+        let buffer: Vec<String> = heir.buffer_lines().into_iter().map(|(_, s)| s).collect();
+        assert!(buffer.iter().any(|l| l == "LINE-400"), "the newest line must survive");
+        assert!(buffer.iter().any(|l| l == "LINE-200"), "well within the cap");
+        assert!(!buffer.iter().any(|l| l == "LINE-001"), "beyond the cap must be dropped");
+        drop(heir);
+        reap_probe(&donor);
     }
 
     #[test]
@@ -1684,7 +1876,7 @@ mod tests {
         // The dump carries RAW cell colors and the style flags, so the heir re-renders them through
         // its own theme. Asserted against the DONOR's snapshot, cell for cell.
         let mut donor = e2e_term(
-            "printf 'p\\033[1;31mRED\\033[0m\\033[44mBLU\\033[0m\\r\\n'; while :; do sleep 5; done",
+            "printf 'p\\033[1;31mRED\\033[0m\\033[44mBLU\\033[0m\\r\\n'; i=0; while [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done",
         );
         assert!(
             poll_term(&donor, |t| grid_text(t).contains("RED").then_some(())).is_some(),
@@ -1699,7 +1891,7 @@ mod tests {
             };
         assert_eq!(cells(&after), cells(&before), "glyphs, colors and bold must all round-trip");
         drop(heir);
-        donor.kill();
+        reap_probe(&donor);
     }
 
     #[test]
