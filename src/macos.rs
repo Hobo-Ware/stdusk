@@ -143,6 +143,29 @@ pub(crate) fn set_window_alpha(alpha: f64) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn set_window_alpha(_alpha: f64) {}
 
+/// Is the OS appearance DARK? `None` means "no OS answer here" (non-macOS), so the caller falls
+/// back to what the window system reported.
+///
+/// Read from the `AppleInterfaceStyle` global default, NOT `NSApp.effectiveAppearance`: the default
+/// is written by the OS before our process exists and needs no main thread or finished launch, so
+/// it is already correct while `Stdusk::new` picks the startup theme. It also tracks the "Auto"
+/// appearance schedule - the key is present ("Dark") only during the dark half, absent for light.
+#[cfg(target_os = "macos")]
+// The `Option` is the CROSS-PLATFORM contract ("is there an OS answer at all"); the macOS arm
+// always has one, which is exactly what clippy sees and what the stub below contradicts.
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn os_dark_mode() -> Option<bool> {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let style = NSUserDefaults::standardUserDefaults()
+        .stringForKey(&NSString::from_str("AppleInterfaceStyle"));
+    // Absent key = Light; macOS stores only the dark state.
+    Some(style.is_some_and(|s| s.to_string().eq_ignore_ascii_case("dark")))
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn os_dark_mode() -> Option<bool> {
+    None
+}
+
 /// Whether the whole app is the active (frontmost) macOS app. This stays TRUE when a *system*
 /// panel (the emoji/character viewer, Ctrl+Cmd+Space) takes the key window - unlike winit's
 /// per-window `focused`, which drops. Used to gate hide-on-blur so the emoji picker doesn't
@@ -251,6 +274,21 @@ mod tests {
             assert_eq!(again, placed, "re-apply must be idempotent, no drift");
             assert_eq!(baseline, Some(30.0), "baseline stays the once-captured default");
         }
+    }
+
+    /// The objc read must answer the SAME thing the OS stores, on whatever appearance this machine
+    /// happens to be in - including the light half of "Auto", where the key is simply absent. A
+    /// silent `None`/always-false here is what painted a follow-system window in the wrong theme.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_dark_mode_read_agrees_with_the_defaults_database() {
+        let out = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+            .expect("defaults is part of macOS");
+        let stored_dark = out.status.success()
+            && String::from_utf8_lossy(&out.stdout).trim().eq_ignore_ascii_case("dark");
+        assert_eq!(super::os_dark_mode(), Some(stored_dark));
     }
 
     #[test]

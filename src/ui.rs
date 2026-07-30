@@ -89,6 +89,17 @@ fn shell_single_quote(s: &str) -> String {
     out
 }
 
+/// Is the OS appearance LIGHT? The platform's own answer (`macos::os_dark_mode`) wins, because it
+/// is available before the first frame; egui's `system_theme` is the cross-platform fallback and is
+/// only as good as what the window system reported. "Nobody knows" reads as DARK - the historical
+/// default for a terminal, and what the follow-system reconcile has always done.
+pub(crate) fn system_is_light(os_dark: Option<bool>, reported: Option<egui::Theme>) -> bool {
+    match os_dark {
+        Some(dark) => !dark,
+        None => matches!(reported, Some(egui::Theme::Light)),
+    }
+}
+
 /// Auto-title for an unrenamed tab: the shell's OSC 0/2 title (when dynamic titles are on
 /// and it's non-empty) beats the cwd basename; `None` = leave the current title alone.
 pub(crate) fn auto_title(dynamic: bool, osc: Option<&str>, cwd: Option<&str>) -> Option<String> {
@@ -1283,6 +1294,18 @@ mod tests {
         assert_eq!(basename("foo"), "foo");
         assert_eq!(basename("/"), "/");
         assert_eq!(basename(""), "/");
+    }
+
+    #[test]
+    fn the_os_appearance_beats_what_the_window_system_reported() {
+        // The OS answer is authoritative and available before the first frame; egui's report only
+        // fills in where there is none (non-macOS). "Nobody knows" stays DARK.
+        assert!(system_is_light(Some(false), Some(egui::Theme::Dark)));
+        assert!(system_is_light(Some(false), None));
+        assert!(!system_is_light(Some(true), Some(egui::Theme::Light)));
+        assert!(system_is_light(None, Some(egui::Theme::Light)));
+        assert!(!system_is_light(None, Some(egui::Theme::Dark)));
+        assert!(!system_is_light(None, None));
     }
 
     #[test]

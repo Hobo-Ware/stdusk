@@ -98,6 +98,7 @@ struct Stdusk {
     flash: f64,                   // bell visual-flash expiry (egui time); 0 = none
     zoom: f32,                    // font-size multiplier (Cmd +/-/0)
     theme_name: String,           // currently-applied theme (to detect OS light/dark changes)
+    next_theme_check: f64,        // egui time of the next throttled OS-appearance read
     sys: sysinfo::System,         // process table for CLI-awareness scans
     next_cli_scan: f64,           // egui time of the next throttled procwatch scan
     next_session_save: f64,       // egui time of the next throttled session persist
@@ -263,7 +264,12 @@ impl Stdusk {
         // Menu-bar status item is the accessory app's presence + control; skip it in the
         // screenshot harness and when disabled.
         let tray = (cfg.quake.menu_bar_icon && screenshot.is_none()).then(tray::build).flatten();
-        let theme_name = cfg.appearance.theme.clone();
+        // Mirrors what `main` initialized the colors to, so the per-frame reconcile agrees with the
+        // startup theme instead of immediately re-resolving (and repainting) a different one.
+        let theme_name = settings::resolved_theme_name(
+            &cfg.appearance,
+            ui::system_is_light(macos::os_dark_mode(), cc.egui_ctx.input(|i| i.raw.system_theme)),
+        );
 
         // --screenshot-settings: open the settings view on the scheme browser (the money shot)
         // or, via STDUSK_SHOT_SECTION, any other section (visual checks of the whole view).
@@ -384,6 +390,7 @@ impl Stdusk {
             flash: 0.0,
             zoom: 1.0,
             theme_name,
+            next_theme_check: 0.0,
             sys: sysinfo::System::new(),
             next_cli_scan: 0.0,
             next_session_save: 0.0,
@@ -833,20 +840,22 @@ impl eframe::App for Stdusk {
 
         // Follow the OS light/dark appearance (or the manual theme when follow_system is off).
         // Re-inits colors + egui visuals only when the resolved theme actually changes.
+        // Throttled: the OS answer comes from a defaults lookup, which has no business running on
+        // every frame - a half-second lag on flipping the system appearance is imperceptible.
         if self.screenshot.is_none() {
-            let want = if self.cfg.appearance.follow_system {
-                match ctx.input(|i| i.raw.system_theme) {
-                    Some(egui::Theme::Light) => &self.cfg.appearance.theme_light,
-                    _ => &self.cfg.appearance.theme_dark,
+            let now = ctx.input(|i| i.time);
+            if now >= self.next_theme_check {
+                self.next_theme_check = now + 0.5;
+                let want = settings::resolved_theme_name(
+                    &self.cfg.appearance,
+                    ui::system_is_light(macos::os_dark_mode(), ctx.input(|i| i.raw.system_theme)),
+                );
+                if want != self.theme_name {
+                    colors::set(colors::by_name(&want));
+                    apply_theme(&ctx);
+                    self.theme_name = want;
+                    ctx.request_repaint();
                 }
-            } else {
-                &self.cfg.appearance.theme
-            };
-            if *want != self.theme_name {
-                colors::set(colors::by_name(want));
-                apply_theme(&ctx);
-                self.theme_name = want.clone();
-                ctx.request_repaint();
             }
         }
 
@@ -1456,7 +1465,13 @@ fn main() -> eframe::Result<()> {
     #[cfg(not(unix))]
     let instance_listener: Option<instance::Listener> = None;
 
-    colors::init(colors::by_name(&cfg.appearance.theme));
+    // The theme the appearance config RESOLVES to right now - follow-system reads the OS light/dark
+    // state here, before the window exists, so the very first frame is already the right theme. It
+    // used to init from the fixed `theme` slot and let the per-frame reconcile catch up, which
+    // painted a follow-system user's window in the unrelated fixed theme at startup (and left the
+    // screenshot harness, where the reconcile is skipped, on it for good).
+    let startup_light = ui::system_is_light(macos::os_dark_mode(), None);
+    colors::init(colors::by_name(&settings::resolved_theme_name(&cfg.appearance, startup_light)));
     if let Some(path) = &screenshot {
         // SAFE: single-threaded, set before any threads spawn (edition-2024 set_var is unsafe).
         #[allow(unsafe_code)]

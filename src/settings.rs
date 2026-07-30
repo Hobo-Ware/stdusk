@@ -1013,7 +1013,8 @@ fn appearance_section(
 
     // One live preview for the whole section: resolved theme + font size + cursor + ligatures,
     // overridden by the dropdown row hovered last frame (same handoff as the scheme browser).
-    let system_light = matches!(ui.ctx().input(|i| i.raw.system_theme), Some(egui::Theme::Light));
+    let system_light =
+        ui::system_is_light(crate::macos::os_dark_mode(), ui.ctx().input(|i| i.raw.system_theme));
     let resolved = resolved_theme_name(&cfg.appearance, system_light);
     let theme = st.hover_preview.unwrap_or_else(|| colors::by_name(&resolved));
     preview_card(ui, &theme, &preview_opts(cfg));
@@ -1903,7 +1904,8 @@ impl Stdusk {
     fn apply_scheme(&mut self, ctx: &egui::Context, name: &str, theme: Theme) {
         colors::set(theme);
         ui::apply_theme(ctx);
-        let system_light = matches!(ctx.input(|i| i.raw.system_theme), Some(egui::Theme::Light));
+        let system_light =
+            ui::system_is_light(crate::macos::os_dark_mode(), ctx.input(|i| i.raw.system_theme));
         let a = &mut self.cfg.appearance;
         match scheme_slot(a.follow_system, system_light) {
             SchemeSlot::Fixed => name.clone_into(&mut a.theme),
@@ -1920,7 +1922,8 @@ impl Stdusk {
     fn scheme_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         title(ui, "Color scheme");
         let all = themes::all_schemes();
-        let system_light = matches!(ctx.input(|i| i.raw.system_theme), Some(egui::Theme::Light));
+        let system_light =
+            ui::system_is_light(crate::macos::os_dark_mode(), ctx.input(|i| i.raw.system_theme));
         if self.cfg.appearance.follow_system {
             let slot = if system_light { "light" } else { "dark" };
             ui.label(
@@ -2037,7 +2040,10 @@ impl Stdusk {
     /// Re-resolve + re-apply the active theme from `self.cfg` (after Revert / Discard / a
     /// settings-sync pull).
     pub(crate) fn reapply_appearance(&mut self, ctx: &egui::Context) {
-        let system_light = matches!(ctx.input(|i| i.raw.system_theme), Some(egui::Theme::Light));
+        // Same appearance source as the per-frame reconcile in main.rs - a different one here would
+        // apply a theme the next reconcile immediately undoes.
+        let system_light =
+            ui::system_is_light(crate::macos::os_dark_mode(), ctx.input(|i| i.raw.system_theme));
         let want = resolved_theme_name(&self.cfg.appearance, system_light);
         colors::set(colors::by_name(&want));
         ui::apply_theme(ctx);
