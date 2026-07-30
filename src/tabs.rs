@@ -70,15 +70,18 @@ pub(crate) fn spawn_opts(cfg: &Config, cwd: Option<String>) -> terminal::SpawnOp
     }
 }
 
-pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
-    let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
+/// A tab around a freshly built pane tree: default presentation (auto-titled, uncolored, unpinned)
+/// and focus on the tree's first leaf. Every builder below starts here so they cannot drift on the
+/// per-tab flags.
+fn tab_with_root(root: pane::Pane<PtyTerm>) -> Tab {
+    let focused = root.first_leaf_path();
     Tab {
         id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
         title: "zsh".into(),
         color: None,
         renamed: false,
-        root: Some(pane::Pane::leaf(term)),
-        focused: Vec::new(),
+        root: Some(root),
+        focused,
         cli: None,
         proc: None,
         maximized: false,
@@ -87,6 +90,31 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
         notify_activity: false,
         activity_notified: false,
     }
+}
+
+pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
+    let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
+    tab_with_root(pane::Pane::leaf(term))
+}
+
+/// Apply a saved tab's presentation to a rebuilt one: the persisted rename, color and pin. Shared
+/// by the restore and the handoff-adopt paths so a field added to `SavedTab` cannot silently go
+/// missing from one of them.
+fn apply_saved_tab(tab: &mut Tab, st: &session::SavedTab) {
+    // Same rule as the rename dialog: a persisted empty/whitespace rename is no rename at all -
+    // auto-titling stays live.
+    if let Some(title) = st.title.as_deref().and_then(ui::commit_rename) {
+        tab.title = title;
+        tab.renamed = true;
+    }
+    tab.color = st.color.as_deref().and_then(session::hex_to_color);
+    tab.pinned = st.pinned;
+}
+
+/// A saved tab's layout: its stored pane tree, or a single pane in the flat `cwd` (sessions written
+/// before split-restore, and the shape a handoff header falls back to).
+fn saved_tree(st: &session::SavedTab) -> session::SavedPane {
+    st.pane.clone().unwrap_or(session::SavedPane::Leaf { cwd: st.cwd.clone() })
 }
 
 /// Rebuild a live pane tree from a persisted layout, spawning one shell per leaf in its saved cwd.
@@ -123,12 +151,14 @@ fn adopt_saved_tree(
             session::SavedPane::Leaf { cwd, .. } => cwd.clone(),
             session::SavedPane::Split { .. } => None,
         };
-        let opts = spawn_opts(cfg, cwd);
-        let fresh = || {
+        let next = queue.borrow_mut().next();
+        let Some((meta, fd)) = next else {
             eprintln!("stdusk: no pane to adopt for a leaf; starting a fresh shell");
-            PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts)
+            return PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
         };
-        let Some((meta, fd)) = queue.borrow_mut().next() else { return fresh() };
+        // The pane's own cwd at handover beats the saved leaf's: it rides with the fd, so it is
+        // right even for a layout that shifted, and an adopted pty has no other way to know it.
+        let opts = spawn_opts(cfg, meta.cwd.clone().or(cwd));
         let (cols, rows) = crate::handoff::grid_dims(meta.cols, meta.rows);
         PtyTerm::adopt(
             cols,
@@ -139,58 +169,33 @@ fn adopt_saved_tree(
             crate::handoff::alive_duration(meta.alive_secs),
             &opts,
         )
-        .unwrap_or_else(|_| fresh())
+        .unwrap_or_else(|_| {
+            eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
+            PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts)
+        })
     })
 }
 
-/// A tab whose panes are ADOPTED from a predecessor instead of spawned. Mirrors `spawn_saved_tab`
-/// (same layout rebuild, same caller-applied title/color/pinned) so the successor's window comes
-/// back identical - only the shells are the very same processes.
+/// A tab whose panes are ADOPTED from a predecessor instead of spawned. Same layout rebuild and the
+/// same saved title/color/pinning as `spawn_saved_tab`, so the successor's window comes back
+/// identical - only the shells are the very same processes.
 pub(crate) fn adopt_saved_tab(
     cfg: &Config,
     ctx: &egui::Context,
-    sp: &session::SavedPane,
+    st: &session::SavedTab,
     panes: &mut std::vec::IntoIter<(crate::handoff::PaneMeta, std::os::fd::OwnedFd)>,
 ) -> Tab {
-    let root = adopt_saved_tree(cfg, ctx, sp, panes);
-    let focused = root.first_leaf_path();
-    Tab {
-        id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
-        title: "zsh".into(),
-        color: None,
-        renamed: false,
-        root: Some(root),
-        focused,
-        cli: None,
-        proc: None,
-        maximized: false,
-        pinned: false,
-        broadcast: false,
-        notify_activity: false,
-        activity_notified: false,
-    }
+    let mut tab = tab_with_root(adopt_saved_tree(cfg, ctx, &saved_tree(st), panes));
+    apply_saved_tab(&mut tab, st);
+    tab
 }
 
-/// A tab restored from a saved split layout: rebuild the whole pane tree and focus its first leaf.
-/// Title/color/pinned are applied by the caller (same as the single-pane restore path).
-pub(crate) fn spawn_saved_tab(cfg: &Config, ctx: &egui::Context, sp: &session::SavedPane) -> Tab {
-    let root = spawn_saved_tree(cfg, ctx, sp);
-    let focused = root.first_leaf_path();
-    Tab {
-        id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
-        title: "zsh".into(),
-        color: None,
-        renamed: false,
-        root: Some(root),
-        focused,
-        cli: None,
-        proc: None,
-        maximized: false,
-        pinned: false,
-        broadcast: false,
-        notify_activity: false,
-        activity_notified: false,
-    }
+/// A tab restored from a saved session: rebuild its whole pane tree (a fresh shell per leaf, in the
+/// leaf's cwd), focus the first leaf, and re-apply the saved title/color/pinning.
+pub(crate) fn spawn_saved_tab(cfg: &Config, ctx: &egui::Context, st: &session::SavedTab) -> Tab {
+    let mut tab = tab_with_root(spawn_saved_tree(cfg, ctx, &saved_tree(st)));
+    apply_saved_tab(&mut tab, st);
+    tab
 }
 
 /// Fresh shell in place of a dead pane's (same cwd), carrying the crash-loop counter: a death
@@ -212,21 +217,11 @@ pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Pro
     let mut opts = spawn_opts(cfg, None);
     opts.profile = Some(profile.clone());
     let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts);
-    Tab {
-        id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
-        title: profile.name.clone(),
-        color: profile.color.as_deref().and_then(session::hex_to_color),
-        renamed: true,
-        root: Some(pane::Pane::leaf(term)),
-        focused: Vec::new(),
-        cli: None,
-        proc: None,
-        maximized: false,
-        pinned: false,
-        broadcast: false,
-        notify_activity: false,
-        activity_notified: false,
-    }
+    let mut tab = tab_with_root(pane::Pane::leaf(term));
+    tab.title.clone_from(&profile.name);
+    tab.color = profile.color.as_deref().and_then(session::hex_to_color);
+    tab.renamed = true;
+    tab
 }
 
 /// Where a pin toggle moves the tab at `i` (Tabby `AppService.pinTab`/`unpinTab`): pinning
@@ -1230,6 +1225,64 @@ impl Stdusk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Adopt `st` with ONE handed-over pane whose metadata carries `cwd`, exactly the way a
+    /// successor does at startup. The pane's fd is a pipe read end: adoption only needs a live
+    /// descriptor, so nothing asserted here (title/color/pin + the cwd that rides with the fd)
+    /// needs a shell. The returned writer must stay alive - closing it only EOFs the pane.
+    fn adopt_one(st: &session::SavedTab, cwd: Option<&str>) -> (Tab, std::io::PipeWriter) {
+        let (rx, tx) = std::io::pipe().expect("pipe");
+        let meta = crate::handoff::PaneMeta {
+            pgid: None,
+            cwd: cwd.map(Into::into),
+            alive_secs: 30.0,
+            cols: 80,
+            rows: 24,
+        };
+        let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
+        let tab = adopt_saved_tab(&Config::default(), &egui::Context::default(), st, &mut panes);
+        (tab, tx)
+    }
+
+    #[test]
+    fn an_adopted_tab_comes_back_with_its_saved_name_color_and_pin() {
+        let st = session::SavedTab {
+            title: Some("  build  ".into()), // trimmed, and still a rename
+            color: Some("#e06c75".into()),
+            cwd: Some("/tmp/beta".into()),
+            pinned: true,
+            pane: Some(session::SavedPane::Leaf { cwd: Some("/tmp/beta".into()) }),
+        };
+        let (tab, _tx) = adopt_one(&st, Some("/tmp/beta"));
+        assert_eq!(tab.title, "build");
+        assert!(tab.renamed, "a restored rename must keep auto-titling off");
+        assert_eq!(tab.color, session::hex_to_color("#e06c75"));
+        assert!(tab.pinned);
+    }
+
+    #[test]
+    fn an_adopted_pane_auto_titles_from_the_handover_cwd() {
+        // The adopted shell is mid-session and re-emits OSC 7 only at its next prompt, so without
+        // the cwd off the wire an unrenamed tab would sit on the "zsh" placeholder indefinitely.
+        let st = session::SavedTab {
+            pane: Some(session::SavedPane::Leaf { cwd: Some("/stale/leaf".into()) }),
+            ..Default::default()
+        };
+        let (tab, _tx) = adopt_one(&st, Some("/Users/x/Git/stdusk"));
+        assert!(!tab.renamed);
+        let cwd = tab.focused_term().cwd();
+        assert_eq!(cwd.as_deref(), Some("/Users/x/Git/stdusk"), "the pane's cwd rides with its fd");
+        // What the render loop's auto-title pass then writes onto the tab.
+        assert_eq!(ui::auto_title(true, None, cwd.as_deref()), Some("stdusk".into()));
+    }
+
+    #[test]
+    fn a_blank_saved_rename_leaves_an_adopted_tab_auto_titled() {
+        let st = session::SavedTab { title: Some("   ".into()), ..Default::default() };
+        let (tab, _tx) = adopt_one(&st, None);
+        assert!(!tab.renamed, "an empty persisted rename is no rename at all");
+        assert_eq!(tab.title, "zsh");
+    }
 
     /// Lay tabs left-to-right with the given widths (mixed widths on purpose).
     fn rects(widths: &[f32]) -> Vec<egui::Rect> {

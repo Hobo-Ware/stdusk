@@ -103,8 +103,9 @@ pub(crate) struct PaneMeta {
     /// because the successor is NOT the shell's parent and cannot look the group up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pgid: Option<u32>,
-    /// The pane's cwd at handover. Diagnostic only - the layout comes from the header's session
-    /// tree - but it makes a socket dump readable when a handoff misbehaves.
+    /// The pane's cwd at handover. The adopted shell won't re-emit OSC 7 until its next prompt, so
+    /// this is the only thing the successor can seed the pane's cwd (and its basename auto-title)
+    /// from. The layout still comes from the header's session tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cwd: Option<String>,
     /// Seconds the shell had already been alive, so the crash-loop guard isn't fooled by a handover.
@@ -782,6 +783,10 @@ mod tests {
     // Both launch the successor with `--state-dir`, so they can never touch the user's config,
     // session, or single-instance socket.
 
+    /// The cwd the live checks hand over: a real directory, so the successor's own session persist
+    /// echoes it back only if the adopted pane really knows where it is.
+    const LIVE_CWD: &str = "/usr/share/dict";
+
     /// The predecessor half of a live check: a real shell on a real pty, the socket bound, the
     /// successor started by `launch`, then the full exchange. `Ok(())` means it acknowledged.
     fn live_handoff(sock_file: &Path, launch: impl FnOnce(&Path)) -> std::io::Result<()> {
@@ -811,7 +816,7 @@ mod tests {
         let session = SavedSession {
             tabs: vec![SavedTab {
                 title: Some("live".into()),
-                pane: Some(SavedPane::Leaf { cwd: None }),
+                pane: Some(SavedPane::Leaf { cwd: Some(LIVE_CWD.into()) }),
                 ..Default::default()
             }],
             ..Default::default()
@@ -820,7 +825,7 @@ mod tests {
         let panes = [(
             PaneMeta {
                 pgid,
-                cwd: None,
+                cwd: Some(LIVE_CWD.into()),
                 alive_secs: term.alive().as_secs_f32(),
                 cols: term.cols(),
                 rows: term.rows(),
@@ -830,8 +835,30 @@ mod tests {
         send_session(&sock, &session, &panes)
     }
 
+    /// Poll the successor's OWN session file (`--state-dir` puts it under DIR) for the first tab's
+    /// cwd. It is written from the live `PtyTerm::cwd()`, so it is the only externally observable
+    /// proof that an adopted pane knows its directory - which is what the tab's name is derived from.
+    fn adopted_session_cwd(dir: &Path) -> Option<String> {
+        let file = dir.join(".config/stdusk/session.toml");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(body) = std::fs::read_to_string(&file)
+                && let Ok(s) = toml::from_str::<SavedSession>(&body)
+                && let Some(cwd) = s.tabs.first().and_then(|t| t.cwd.clone())
+            {
+                return Some(cwd);
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     /// The receiving half against the real binary: `--adopt` parsing, `Incoming::receive`, the
-    /// adoption inside `Stdusk::new`, and the ACK that releases the shells.
+    /// adoption inside `Stdusk::new`, and the ACK that releases the shells. Also the user-visible
+    /// half of it: an adopted pane must know its cwd immediately (the shell re-emits OSC 7 only at
+    /// its next prompt, and the tab's auto-title is that cwd's basename).
     #[test]
     #[ignore = "launches the real binary and opens a window; run manually after cargo build"]
     fn real_successor_adopts_a_live_shell_and_acknowledges() {
@@ -849,12 +876,14 @@ mod tests {
                 .spawn()
                 .ok();
         });
+        let cwd = handed.is_ok().then(|| adopted_session_cwd(&dir)).flatten();
         if let Some(mut c) = child {
             let _ = c.kill();
             let _ = c.wait();
         }
         let _ = std::fs::remove_dir_all(&dir);
         handed.expect("the successor must acknowledge a live adoption");
+        assert_eq!(cwd.as_deref(), Some(LIVE_CWD), "the adopted pane must know its cwd at once");
     }
 
     /// The LAUNCH line, end to end: a real `.app` bundle started the way `spawn_successor` starts it

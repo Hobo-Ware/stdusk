@@ -194,18 +194,7 @@ impl Stdusk {
             let mut panes = inc.take_panes().into_iter();
             let session = inc.session().clone();
             for st in &session.tabs {
-                // Every handed-over tab carries a pane tree (the sender always writes one); the
-                // flat-cwd fallback only exists for session files written before split-restore.
-                let single = session::SavedPane::Leaf { cwd: st.cwd.clone() };
-                let sp = st.pane.as_ref().unwrap_or(&single);
-                let mut tab = tabs::adopt_saved_tab(&cfg, &cc.egui_ctx, sp, &mut panes);
-                if let Some(title) = st.title.as_deref().and_then(ui::commit_rename) {
-                    tab.title = title;
-                    tab.renamed = true;
-                }
-                tab.color = st.color.as_deref().and_then(session::hex_to_color);
-                tab.pinned = st.pinned;
-                tabs.push(tab);
+                tabs.push(tabs::adopt_saved_tab(&cfg, &cc.egui_ctx, st, &mut panes));
             }
             active = session.active.min(tabs.len().saturating_sub(1));
             adopted = !tabs.is_empty();
@@ -220,20 +209,7 @@ impl Stdusk {
         if tabs.is_empty() && cfg.session.restore && screenshot.is_none() {
             let saved = session::load();
             for st in &saved.tabs {
-                // Rebuild the split layout when present; else a single pane in the saved cwd.
-                let mut tab = match &st.pane {
-                    Some(sp) => tabs::spawn_saved_tab(&cfg, &cc.egui_ctx, sp),
-                    None => spawn_tab(&cfg, &cc.egui_ctx, st.cwd.clone()),
-                };
-                // Same rule as the rename dialog: a persisted empty/whitespace rename is no
-                // rename at all - auto-titling stays live.
-                if let Some(title) = st.title.as_deref().and_then(ui::commit_rename) {
-                    tab.title = title;
-                    tab.renamed = true;
-                }
-                tab.color = st.color.as_deref().and_then(session::hex_to_color);
-                tab.pinned = st.pinned;
-                tabs.push(tab);
+                tabs.push(tabs::spawn_saved_tab(&cfg, &cc.egui_ctx, st));
             }
             active = saved.active.min(tabs.len().saturating_sub(1));
         }

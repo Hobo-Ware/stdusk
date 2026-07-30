@@ -587,7 +587,10 @@ impl PtyTerm {
         let writer: Box<dyn Write + Send> = Box::new(std::fs::File::from(fd.try_clone()?));
         let writer = Arc::new(Mutex::new(writer));
 
-        let state = Arc::new(Mutex::new(TabState::default()));
+        // Seed the cwd from the handover instead of waiting for OSC 7: the shell is mid-session and
+        // won't re-emit it until its NEXT prompt, so anything reading `cwd()` (the tab's basename
+        // auto-title, "new tab here") would be blind until the user runs a command.
+        let state = Arc::new(Mutex::new(TabState { cwd: opts.cwd.clone(), ..TabState::default() }));
         let replies = Arc::new(Mutex::new(Vec::new()));
         let term_config = Config {
             scrolling_history: opts.scrollback_lines,

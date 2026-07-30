@@ -598,7 +598,7 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
-## unreleased (branch `handoff`) - Restart keeps the shells running
+## 1.6.0 (shipped, branch merged to main) - Restart keeps the shells running
 - **Session handoff is complete** (phases 1-4). Restart no longer kills anything from a bundle: the
   predecessor binds a unix socket, `open -n -a <bundle> --args --adopt <sock>`, sends a TOML header
   (protocol version + pane count + the `SavedSession`) and then ONE `SCM_RIGHTS` message per pane in
@@ -640,6 +640,26 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   reasoned about. Known rough edge: `hand_off` blocks the UI thread until the ACK (~1s), so the old
   window is frozen for that moment; a background handshake would only widen the window in which our
   reader threads steal the successor's pty bytes, which is why it is synchronous.
+- **Post-ship fix (user-reported): adopted tabs came back nameless.** Root cause was NOT the saved
+  title - `adopt_saved_tab`'s caller applied `SavedTab`'s title/color/pin all along - it was the cwd.
+  Most tabs are UNRENAMED, so their name is `ui::auto_title`'s cwd basename, and an adopted pane
+  started with `TabState::default()` (cwd `None`): the shell is mid-session and re-emits OSC 7 only at
+  its NEXT prompt, so every tab sat on the "zsh" placeholder until the user ran a command.
+  `PtyTerm::adopt` now seeds `TabState.cwd` from `opts.cwd`, which `adopt_saved_tree` fills from the
+  pane's `PaneMeta.cwd` (already on the wire since 1.6.0 - no protocol bump, so a 1.6.0 predecessor
+  can still hand over). `PaneMeta.cwd` stopped being "diagnostic only".
+- Same change deduped the two restore paths: `spawn_saved_tab`/`adopt_saved_tab` now take the whole
+  `SavedTab` and share `apply_saved_tab` + `tab_with_root`, so a field added to `SavedTab` cannot go
+  missing from one path (main.rs's two nearly-identical apply loops are gone). Still NOT carried
+  across a handoff: the live OSC 0/2 title (it would need a protocol field) and the scrollback.
+- 305 tests green (+3, all in `tabs.rs`): an adopted tab restores its renamed title/color/pin, an
+  adopted pane's cwd comes off the wire and auto-titles to its basename (this one fails without the
+  seed), and a blank persisted rename stays auto-titled. They adopt through a pipe fd, so no shell.
+- **Verified LIVE too:** `real_successor_adopts_a_live_shell_and_acknowledges` now hands over
+  `cwd = /usr/share/dict` and then reads the REAL successor's own `session.toml` under its
+  `--state-dir` (written from the live `PtyTerm::cwd()`, the only externally observable proof). Green
+  with the seed, red without it - so the fix is confirmed in the actual successor process, not just
+  in unit tests. What still cannot be automated: seeing the rendered tab label.
 
 ## 1.5.1 - restart confirmation honesty
 - Clicking Restart raised a "Quit stdusk?" modal with a Quit button (the restart flow reuses the
