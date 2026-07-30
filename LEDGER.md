@@ -653,8 +653,12 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   can still hand over). `PaneMeta.cwd` stopped being "diagnostic only".
 - Same change deduped the two restore paths: `spawn_saved_tab`/`adopt_saved_tab` now take the whole
   `SavedTab` and share `apply_saved_tab` + `tab_with_root`, so a field added to `SavedTab` cannot go
-  missing from one path (main.rs's two nearly-identical apply loops are gone). Still NOT carried
-  across a handoff: the live OSC 0/2 title (it would need a protocol field) and the scrollback.
+  missing from one path (main.rs's two nearly-identical apply loops are gone).
+  > **OBSOLETE:** this entry ended with "still NOT carried across a handoff: the live OSC 0/2 title
+  > (it would need a protocol field) and the scrollback". Both are carried now, and the premise was
+  > wrong twice over - a `serde(default)` field needs NO protocol bump (`cmd_running`, `screen`,
+  > `title_osc` all landed that way), and the screen/scrollback never needed `Term` serialization,
+  > only a replay (see the 1.6.4 batch below).
 - 305 tests green (+3, all in `tabs.rs`): an adopted tab restores its renamed title/color/pin, an
   adopted pane's cwd comes off the wire and auto-titles to its basename (this one fails without the
   seed), and a blank persisted rename stays auto-titled. They adopt through a pipe fd, so no shell.
@@ -1986,6 +1990,39 @@ worked for idle shells (user-confirmed: Claude panes render) but was wrong in tw
 - **NOT verifiable without a human clicking Restart**: the real window round trip - whether the
   replayed screen LOOKS right (alignment, wrapped lines, a TUI painting over the replay) and whether
   an idle prompt feels live after replay instead of `^L`. The harness cannot drive a Restart click.
+
+## Replay positioning verified + the OSC title (post-1.6.3, uncommitted version bump; 335 tests)
+- **"Looks like only the last line?" - MEASURED, and the replay is CORRECT.** The screenshot (one
+  progress line at the top row, blank below) is a faithful replay: that program is a `\r`-OVERWRITE
+  progress bar, so the donor's grid genuinely held exactly ONE non-blank row - its earlier
+  percentages never existed as rows, not even on the donor. Nothing is compacted to the top:
+  - content at rows 10-12 of a 24-row grid, blank rows above AND below, cursor parked on row 20 comes
+    back row-for-row identical with the cursor at (20, 5);
+  - blank rows are preserved AS ROWS (each row is emitted, blank or not - only trailing blanks WITHIN
+    a row are trimmed, which is a byte optimisation, not a layout one);
+  - a donor with 40 lines on a 24-row grid hands over its history: the heir can scroll up to LINE-01;
+  - a donor with 400 lines hands over EXACTLY `screen::MAX_HISTORY_LINES` (200), newest kept.
+  So the "up to 200 scrollback lines survive" claim is accurate; the only nuance is that very wide or
+  heavily-coloured lines can hit the 128 KB byte cap first and reduce the count.
+- **The live OSC 0/2 title now travels** (`PaneMeta.title_osc`, `serde(default)`, no protocol bump).
+  A Claude pane came back named `vladjerca` - the cwd basename doing its job while the app's real
+  title was lost, because an app re-emits its title only when the title CHANGES. `adopt` seeds
+  `TabState.title_osc` next to the cwd; `ui::auto_title` already ranks user rename > OSC title > cwd
+  basename, and a renamed tab never reaches that pass. `clamp_title` runs on BOTH sides (untrusted
+  app text): whitespace-only = no title, hostile length truncated at 512 CHARS (bytes would split a
+  code point).
+- **The adopt redraw nudger no longer outlives its pane**: it holds a `Weak` liveness token now. It
+  had been poking closed panes for up to 2.5s while holding a DUPLICATED pty fd, which in the
+  (pty-heavy) test suite starved later tests of ptys - random `openpty` failures. Two test-hygiene
+  fixes with it: handover tests reap the donor's group explicitly (`donor.kill()` is DISARMED by
+  `mark_handed_off` - they were leaking a shell each) and probe loops self-terminate so a panicking
+  test cannot leave one running. Five consecutive full-suite runs clean.
+- **Tests (+7, 328 -> 335)**: 4 replay-positioning real-pty tests (rows/cursor, the `\r` repro,
+  scrollback scroll-up, the 200-line cap), `an_adopted_pane_keeps_the_osc_title_its_app_had_set`,
+  `a_renamed_tab_is_not_overridden_by_a_handed_over_osc_title`, `an_osc_title_is_clamped_before_it_travels`.
+  The positioning four fail without the replay; the title two fail without the new field.
+- **Still needs a human clicking Restart**: whether the replayed screen LOOKS right in a real window
+  and whether a reattached Claude tab shows its app title. The harness cannot drive a Restart.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
