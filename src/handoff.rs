@@ -117,6 +117,13 @@ pub(crate) struct PaneMeta {
     /// for a TUI, `^L` for a shell prompt). Defaulted so a decode never hard-fails on it.
     #[serde(default)]
     pub(crate) alt_screen: bool,
+    /// Was a command RUNNING (OSC 133) rather than the shell sitting at its prompt? `None` = we do
+    /// not know, which is what an ABSENT field means: a 1.6.2 predecessor never sent it, and a shell
+    /// that emits no OSC 133 has no answer to give. Deliberately three-state and `serde(default)` so
+    /// this could be added WITHOUT bumping `PROTOCOL` - a version bump makes the first restart after
+    /// an upgrade refuse the handoff, and the user already paid that once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cmd_running: Option<bool>,
 }
 
 /// Panes handed to us by a predecessor, received BEFORE the window exists (the transport needs no
@@ -514,6 +521,7 @@ impl crate::Stdusk {
                         cols: term.cols(),
                         rows: term.rows(),
                         alt_screen: term.is_alt_screen(),
+                        cmd_running: cmd_running(term.cmd_state()),
                     },
                     fd,
                 ));
@@ -533,6 +541,18 @@ impl crate::Stdusk {
 /// happens to `cd`. Asking the OS costs one targeted process refresh per pane, once per restart.
 fn pane_cwd(term: &crate::terminal::PtyTerm) -> Option<String> {
     term.cwd().or_else(|| term.shell_pid().and_then(crate::procwatch::process_cwd))
+}
+
+/// Is a command running, as far as OSC 133 has told us? `Idle` is NOT "at a prompt": it is also what
+/// a shell that emits no OSC 133 at all reports forever, so it maps to `None` (unknown) and lets the
+/// successor decide from the tty instead. Only a completed command (`Ok`/`Fail`) proves a prompt.
+fn cmd_running(cmd: crate::terminal::CmdState) -> Option<bool> {
+    use crate::terminal::CmdState::{Fail, Idle, Ok, Running};
+    match cmd {
+        Running => Some(true),
+        Ok | Fail => Some(false),
+        Idle => None,
+    }
 }
 
 #[cfg(test)]
@@ -627,6 +647,7 @@ mod tests {
             rows: 24,
             // Alternate per pane so a field that stopped round-tripping shows up as a mismatch.
             alt_screen: n % 2 == 1,
+            cmd_running: n.is_multiple_of(2).then_some(n == 0),
         }
     }
 
@@ -891,6 +912,7 @@ mod tests {
                 cols: term.cols(),
                 rows: term.rows(),
                 alt_screen: term.is_alt_screen(),
+                cmd_running: cmd_running(term.cmd_state()),
             },
             fd,
         )];

@@ -167,6 +167,7 @@ fn adopt_saved_tree(
             pgid: meta.pgid,
             alive: crate::handoff::alive_duration(meta.alive_secs),
             alt_screen: meta.alt_screen,
+            cmd_running: meta.cmd_running,
         };
         PtyTerm::adopt(ctx.clone(), handover, &opts).unwrap_or_else(|_| {
             eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
@@ -1238,6 +1239,7 @@ mod tests {
             cols: 80,
             rows: 24,
             alt_screen: false,
+            cmd_running: None,
         };
         let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
         let tab = adopt_saved_tab(&Config::default(), &egui::Context::default(), st, &mut panes);

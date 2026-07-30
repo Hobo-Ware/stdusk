@@ -260,6 +260,44 @@ fn wiggle_rows(rows: usize) -> usize {
     if rows > 1 { rows - 1 } else { rows + 1 }
 }
 
+/// May this redraw attempt send `^L` (0x0c) into an adopted pane?
+///
+/// `^L` is only ever CONSUMED by a shell sitting at its prompt - zsh's zle and bash's readline
+/// redraw the prompt on it. Everywhere else it is damage:
+/// - on the ALT screen the byte belongs to the app (a literal insert in vim's insert mode);
+/// - with a command RUNNING and not reading stdin, the tty line discipline ECHOES it as a literal
+///   `^L` and parks the byte in the input queue. That was the 1.6.2 bug: a pane running a progress
+///   loop came back showing `^L` and nothing else. Such a pane needs nothing from us anyway - its
+///   own next output tick repaints it.
+///
+/// `running: None` means nobody could tell (a 1.6.2 predecessor did not send the field, the shell
+/// emits no OSC 133, and the tty could not be asked). Then the FIRST attempt stays silent and only a
+/// pane that produced no output during the grace period is treated as an idle prompt - the retry loop
+/// bails out as soon as `saw_output` flips, so a producing pane is never typed into.
+fn allow_ctrl_l(alt_screen: bool, running: Option<bool>, attempt: usize) -> bool {
+    if alt_screen {
+        return false;
+    }
+    match running {
+        Some(running) => !running,
+        None => attempt > 0,
+    }
+}
+
+/// Is a foreground command running on this pty, as the TTY sees it? With job control a foreground
+/// job gets its own process group (`tcsetpgrp`), so the tty's foreground group is the shell's own
+/// group ONLY when the shell is at its prompt. `None` when it cannot be told: no known pgid, or the
+/// fd is not a tty (a test pipe).
+///
+/// Verified on a real pty: a pane running `sleep` reports a foreground group that is not the shell's,
+/// a pane blocked in a builtin `read` reports the shell's own
+/// (`real_pty_the_tty_reports_whether_a_command_is_running`).
+fn foreground_command(fd: std::os::fd::BorrowedFd<'_>, shell_pgid: Option<u32>) -> Option<bool> {
+    let shell = shell_pgid?;
+    let fg = rustix::termios::tcgetpgrp(fd).ok()?;
+    Some(fg.as_raw_nonzero().get().cast_unsigned() != shell)
+}
+
 /// Deliver a SIGWINCH to whatever is running on this pty, so a full-screen app repaints its screen.
 /// Adopting a live shell gives us an EMPTY `Term` (the predecessor's grid cannot be moved), and this
 /// is the only signal a TUI redraws on.
@@ -333,6 +371,10 @@ pub(crate) struct Adopted {
     /// the pane is asked to repaint - see [`PtyTerm::request_redraw`]. Our own `Term` starts blank
     /// and has parsed nothing, so this can only come from the predecessor.
     pub(crate) alt_screen: bool,
+    /// Was a command RUNNING at handover (OSC 133), rather than the shell sitting at its prompt?
+    /// `None` = nobody knows - a predecessor too old to send it, or a shell that emits no OSC 133 at
+    /// all. See [`allow_ctrl_l`]: the answer decides whether the pane may be sent a `^L`.
+    pub(crate) cmd_running: Option<bool>,
 }
 
 /// How this pane's pty master is owned. A spawned pane keeps `portable_pty`'s master (its proven
@@ -643,7 +685,7 @@ impl PtyTerm {
         handover: Adopted,
         opts: &SpawnOpts,
     ) -> std::io::Result<Self> {
-        let Adopted { fd, cols, rows, pgid, alive, alt_screen } = handover;
+        let Adopted { fd, cols, rows, pgid, alive, alt_screen, cmd_running } = handover;
         let redraw_ctx = ctx.clone(); // the reader thread takes `ctx`; the nudger needs one too
         // Separate dups for the reader thread and the writer: both sides of the same pty master,
         // independently owned, exactly like `try_clone_reader` + `take_writer` give us on a spawn.
@@ -701,7 +743,7 @@ impl PtyTerm {
             started: std::time::Instant::now(),
             uptime_base: alive,
         };
-        me.request_redraw(alt_screen, redraw_ctx);
+        me.request_redraw(alt_screen, cmd_running, redraw_ctx);
         Ok(me)
     }
 
@@ -709,17 +751,11 @@ impl PtyTerm {
     /// nothing arrives. Without this the pane shows an empty grid with a cursor until the user hits
     /// Enter - the shells are live, they just have no reason to speak.
     ///
-    /// Two different asks, because one tool does not fit both cases:
-    /// - a full-screen app (vim / less / claude) redraws on SIGWINCH, so the size wiggle is enough,
-    ///   and a `^L` must NOT be sent - inside a TUI that byte is the app's to interpret (a literal
-    ///   insert in vim's insert mode).
-    /// - otherwise the SHELL owns the screen, and shells do not repaint on SIGWINCH; zsh's zle and
-    ///   bash's readline both redraw the prompt (plus whatever is typed) on `^L`. Same trick the
-    ///   alt-screen heal path in `spawn_reader` already uses for the same reason.
-    ///
-    /// A `^L` reaching a non-alt-screen program that is mid-command is harmless: readline-style
-    /// readers treat it as redraw, and a program that never reads stdin leaves the byte in the tty
-    /// input queue, where the shell's own `zle` consumes it as a clear-screen at the next prompt.
+    /// The size wiggle goes to EVERY adopted pane (harmless, and the only thing a full-screen app
+    /// redraws on). The `^L` is the delicate part - see [`allow_ctrl_l`]: only a shell sitting at its
+    /// prompt consumes it as clear-screen-and-redraw. Sent to a pane with a command running, the
+    /// line discipline just ECHOES it as a literal `^L` and leaves the byte in the input queue,
+    /// which is exactly what showed up at the top-left of two panes after a restart.
     ///
     /// The retries exist because a single ask is genuinely unreliable: until the predecessor process
     /// exits, ITS reader thread is still draining this pty, and anything it wins is lost to us. It
@@ -727,21 +763,26 @@ impl PtyTerm {
     /// They run on their own short-lived thread (the UI thread must not sleep), which holds a DUP of
     /// the master for up to [`REDRAW_RETRY_DELAYS`]'s total - closing the pane during that window
     /// defers the master's SIGHUP by that much, while `kill()` still reaps the group at once.
-    fn request_redraw(&self, alt_screen: bool, ctx: egui::Context) {
+    fn request_redraw(&self, alt_screen: bool, cmd_running: Option<bool>, ctx: egui::Context) {
         let (state, writer) = (self.state.clone(), self.writer.clone());
         let Some(fd) = self.pty.as_fd().and_then(|fd| fd.try_clone_to_owned().ok()) else {
             return; // no fd to wiggle: nothing to ask, and nothing to retry
         };
+        // What the predecessor DECLARED (OSC 133) wins; without it, ask the tty itself.
+        let running = cmd_running.or_else(|| foreground_command(fd.as_fd(), self.shell_pid));
         let (cols, rows) = (self.cols, self.rows);
         thread::spawn(move || {
             for (attempt, wait) in REDRAW_RETRY_DELAYS.iter().enumerate() {
                 thread::sleep(*wait);
-                // Something painted: the pane is no longer blank, so stop poking it.
+                // Something painted: the pane is no longer blank, so stop poking it - and never
+                // type into a pane that has since started producing output on its own.
                 if attempt > 0 && state.lock().is_ok_and(|s| s.saw_output) {
                     return;
                 }
                 nudge_winsize(fd.as_fd(), cols, rows);
-                if !alt_screen && let Ok(mut w) = writer.lock() {
+                if allow_ctrl_l(alt_screen, running, attempt)
+                    && let Ok(mut w) = writer.lock()
+                {
                     let _ = w.write_all(b"\x0c");
                     let _ = w.flush();
                 }
@@ -1363,6 +1404,31 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_l_only_goes_to_a_shell_that_is_at_its_prompt() {
+        use super::allow_ctrl_l;
+        // (alt_screen, running, attempt) -> may send ^L
+        let cases = [
+            // At a prompt: the one case that consumes it as clear-screen-and-redraw.
+            ((false, Some(false), 0), true),
+            ((false, Some(false), 3), true),
+            // A command is running: the tty would ECHO it as a literal "^L" (the 1.6.2 bug).
+            ((false, Some(true), 0), false),
+            ((false, Some(true), 3), false),
+            // Alt screen: the byte belongs to the app, whatever the command state says.
+            ((true, Some(false), 0), false),
+            ((true, Some(true), 1), false),
+            ((true, None, 2), false),
+            // Unknown (old predecessor / no OSC 133): silent first, then treat a pane that stayed
+            // quiet through the grace period as an idle prompt.
+            ((false, None, 0), false),
+            ((false, None, 1), true),
+        ];
+        for ((alt, running, attempt), want) in cases {
+            assert_eq!(allow_ctrl_l(alt, running, attempt), want, "{alt} {running:?} {attempt}");
+        }
+    }
+
+    #[test]
     fn real_pty_only_a_size_change_delivers_sigwinch() {
         // The fact this whole redraw path rests on: a pty signals SIGWINCH only when the window size
         // actually CHANGES. `nudge_redraw` used to re-send the CURRENT size, which is silently
@@ -1414,7 +1480,7 @@ mod tests {
     }
 
     /// Hand `donor`'s live pty to a second `PtyTerm`, the way a successor process adopts it.
-    fn adopt_from(donor: &mut PtyTerm, alt_screen: bool) -> PtyTerm {
+    fn adopt_from(donor: &mut PtyTerm, alt_screen: bool, cmd_running: Option<bool>) -> PtyTerm {
         let pgid = poll_term(donor, PtyTerm::shell_pid).expect("no shell pid");
         let (fd, _) = donor.handoff_fd().expect("master fd must be borrowable");
         let owned = fd.try_clone_to_owned().expect("dup the master");
@@ -1438,6 +1504,7 @@ mod tests {
                 pgid: Some(pgid),
                 alive: std::time::Duration::from_secs(9),
                 alt_screen,
+                cmd_running,
             },
             &opts,
         )
@@ -1450,8 +1517,13 @@ mod tests {
         // until the user pressed Enter. An adopted `Term` starts blank and a shell has no reason to
         // speak, so we ask: `^L` (0x0c) is what makes zle/readline redraw the prompt. Proven by the
         // byte actually arriving at the shell - 0x0c, unechoed, with nothing typed.
+        //
+        // `cmd_running: Some(false)` is what OSC 133 reports for a shell that finished a command,
+        // i.e. the case this must serve. (The probe reads with `dd`, a foreground CHILD, so the tty
+        // would report "a command is running" - a real zsh prompt reads with zle, in the shell's own
+        // process group, which `real_pty_the_tty_reports_whether_a_command_is_running` covers.)
         let mut donor = raw_byte_reporter();
-        let heir = adopt_from(&mut donor, false);
+        let heir = adopt_from(&mut donor, false, Some(false));
         let asked = poll_term(&heir, |t| grid_text(t).contains("GOT-0c").then_some(()));
         assert!(
             asked.is_some(),
@@ -1468,13 +1540,59 @@ mod tests {
         // vim's insert mode), so a pane on the alt screen is asked to repaint with SIGWINCH only.
         // Long enough to cover every retry the nudger makes.
         let mut donor = raw_byte_reporter();
-        let heir = adopt_from(&mut donor, true);
+        let heir = adopt_from(&mut donor, true, Some(false));
         std::thread::sleep(std::time::Duration::from_millis(2600));
         let seen = grid_text(&heir);
         assert!(!seen.contains("GOT-"), "nothing may be typed into a TUI, got {seen:?}");
         assert!(heir.is_alt_screen(), "the handed-over alt screen must be entered here too");
         drop(heir);
         donor.kill();
+    }
+
+    #[test]
+    fn real_pty_a_pane_with_a_command_running_is_never_sent_ctrl_l() {
+        // The 1.6.2 regression: a pane running a producing process (a progress loop) came back
+        // showing a literal `^L` at the top-left. Nobody consumes 0x0c there - the line discipline
+        // ECHOES it, which is what put it on screen - and the pane needed nothing from us anyway:
+        // its own next output tick repaints it.
+        //
+        // The probe keeps a foreground process that never reads stdin (`sleep`), echo left ON exactly
+        // like a real shell, so a `^L` we send would show up as the literal the user saw.
+        let mut donor = e2e_term("printf ARMED; while :; do printf 'WORK '; sleep 0.3; done");
+        assert!(
+            poll_term(&donor, |t| grid_text(t).contains("ARMED").then_some(())).is_some(),
+            "the probe loop never started"
+        );
+        // `None` = the hardest case: a predecessor too old to send the field, or a shell with no
+        // OSC 133 at all. The tty is asked instead, and the output-based bail-out backs it up.
+        let heir = adopt_from(&mut donor, false, None);
+        std::thread::sleep(std::time::Duration::from_millis(2600)); // past every retry
+        let seen = grid_text(&heir);
+        assert!(seen.contains("WORK"), "a producing pane repaints itself, got {seen:?}");
+        assert!(!seen.contains("^L"), "a running command must never be sent ^L, got {seen:?}");
+        drop(heir);
+        donor.kill();
+    }
+
+    #[test]
+    fn real_pty_the_tty_reports_whether_a_command_is_running() {
+        // The signal that resolves the unknown case, measured rather than assumed: with job control a
+        // foreground job gets its OWN process group, so the tty's foreground group is the shell's own
+        // only at a prompt. `read` is a builtin (no child), `sleep` is not.
+        let busy = e2e_term("printf ARMED; while :; do printf 'W '; sleep 0.3; done");
+        let idle = e2e_term("printf ARMED; while :; do read line; done");
+        for t in [&busy, &idle] {
+            assert!(poll_term(t, |t| grid_text(t).contains("ARMED").then_some(())).is_some());
+        }
+        let ask = |t: &PtyTerm| {
+            let fd = t.pty.as_fd().expect("a spawned pty has a master fd");
+            poll_term(t, |t| super::foreground_command(fd, t.shell_pid()))
+        };
+        assert_eq!(ask(&busy), Some(true), "a foreground `sleep` means a command is running");
+        assert_eq!(ask(&idle), Some(false), "a shell blocked in a builtin is at its prompt");
+        // A pipe is not a tty, so there is nothing to ask - the caller must fall back.
+        let (rx, _tx) = std::io::pipe().unwrap();
+        assert_eq!(super::foreground_command(std::os::fd::AsFd::as_fd(&rx), Some(1)), None);
     }
 
     #[test]
@@ -1511,6 +1629,7 @@ mod tests {
                 pgid: Some(pgid),
                 alive: std::time::Duration::from_secs(42),
                 alt_screen: false,
+                cmd_running: Some(false),
             },
             &opts,
         )
