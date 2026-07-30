@@ -1279,6 +1279,44 @@ mod tests {
     }
 
     #[test]
+    fn an_adopted_pane_scrapes_progress_per_the_live_config() {
+        // The tab's progress bar comes from `ProgressScanner`, which is INERT unless the adopted
+        // pane's reader was built with `detect_progress` from the USER's config. An adopt path that
+        // built its `SpawnOpts` from defaults (or filled them partially) would silently kill the bar
+        // for every handed-over tab - and, with the same opts, the scrollback depth, word separators
+        // and bold-bright rendering with it. Driven through the real `adopt_saved_tab`, with the pipe
+        // playing the pty: whatever the shell writes goes through the adopted reader.
+        for (detect, want) in [(true, Progress::Normal(50)), (false, Progress::None)] {
+            let cfg = Config {
+                terminal: crate::config::Terminal { detect_progress: detect, ..Default::default() },
+                ..Default::default()
+            };
+            let (rx, mut tx) = std::io::pipe().expect("pipe");
+            let meta = crate::handoff::PaneMeta { cols: 80, rows: 24, ..Default::default() };
+            let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
+            let tab = adopt_saved_tab(
+                &cfg,
+                &egui::Context::default(),
+                &session::SavedTab::default(),
+                &mut panes,
+            );
+            std::io::Write::write_all(&mut tx, b" 50% done\r\n").expect("write to the fake pty");
+            let term = tab.focused_term();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            // Wait for the CHUNK to be parsed (the text lands in the grid) so the disabled case is
+            // a real negative and not just "nothing has arrived yet".
+            while std::time::Instant::now() < deadline {
+                let seen: String = term.grid_snapshot().cells.iter().map(|c| c.c).collect();
+                if seen.contains("50%") && (term.progress() == want || !detect) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            assert_eq!(term.progress(), want, "detect_progress = {detect}");
+        }
+    }
+
+    #[test]
     fn a_blank_saved_rename_leaves_an_adopted_tab_auto_titled() {
         let st = session::SavedTab { title: Some("   ".into()), ..Default::default() };
         let (tab, _tx) = adopt_one(&st, None);
