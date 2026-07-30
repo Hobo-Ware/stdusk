@@ -620,11 +620,14 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   twice. The predecessor then skips unlinking a socket path the successor owns
   (`handoff::gave_instance_socket`). A handoff that fails AFTER launch exits quietly when the
   predecessor still answers its socket, and opens a normal window when nobody does.
-- UX: the confirm modal now follows a `ui::QuitKind` - a handoff restart says it reattaches and warns
-  that scrollback is not restored instead of claiming it terminates processes; a dev build keeps the
-  honest terminate wording. Same split on the Settings > About note. The successor toasts the
-  scrollback loss once after adopting (alacritty's `Term` has no serialization - the grid cannot
-  move, only the shells).
+- UX: the confirm modal now follows a `ui::QuitKind` - a handoff restart says it reattaches instead of
+  claiming it terminates processes; a dev build keeps the honest terminate wording. Same split on the
+  Settings > About note.
+  > **CORRECTED in the 1.6.3 batch below.** This entry originally said the grid "cannot move, only
+  > the shells", reasoning from "alacritty's `Term` has no serialization". That does not follow and it
+  > stalled the real fix for two releases: we own the donor's grid, so it can be READ and REPLAYED as
+  > ANSI (see `screen.rs`). The screen and a bounded slice of scrollback DO carry over now; only the
+  > deep history does not, which is what the wording and the toast say today.
 - Untrusted wire input is clamped, not trusted: `Duration::from_secs_f32` panics on NaN/negative and
   a hostile `cols` would size a grid that wide (`alive_duration`, `grid_dims`).
 - 302 tests green (+12): the full exchange over a `UnixStream::pair` with pipes standing in for ptys,
@@ -1920,6 +1923,69 @@ MEASURED, not assumed - and one of the reported hypotheses was wrong (see bug 3)
 - **NOT verifiable without a human clicking Restart**: the end-to-end restart of a real window (the
   `--screenshot` harness skips window management and can't drive a Restart click). What IS covered:
   the pty-level redraw contract, the receiving half against the real binary, and the startup theme.
+
+## Screen replay + the Ctrl-L echo (post-1.6.2, uncommitted version bump; 328 tests)
+Second round of user-reported handoff regressions, after 1.6.2 shipped. The redraw ask from 1.6.2
+worked for idle shells (user-confirmed: Claude panes render) but was wrong in two ways.
+
+- **`^L` was ECHOED as literal text (real bug, my earlier reasoning was wrong).** 1.6.2's in-code
+  claim that a mid-command `^L` is "usually harmless" is FALSE: when a foreground process is running
+  and not reading stdin, nobody consumes the 0x0c - **the tty line discipline ECHOES it as a literal
+  `^L`** and parks the byte in the input queue. Two panes running producing processes came back
+  showing exactly that. Reproduced in a test (`^LWORK WORK ...`), which is the pre-fix output.
+  - `allow_ctrl_l(alt_screen, running, attempt, replayed)` is now the single decision: `^L` goes ONLY
+    to a shell at its prompt with no replay. Table-tested.
+  - `PaneMeta.cmd_running: Option<bool>` carries the OSC 133 state, **`serde(default)`, NO PROTOCOL
+    bump** (a bump makes the first restart after an upgrade refuse the handoff - the user already paid
+    that once going 1 -> 2). Absent = UNKNOWN, and so is `CmdState::Idle`: Idle is not proof of a
+    prompt, it is equally what a shell with no OSC 133 reports forever.
+  - Unknown is resolved by **asking the TTY, not by guessing**: with job control a foreground job gets
+    its own process group, so `tcgetpgrp(fd) == shell pgid` only at a prompt. MEASURED on a real pty
+    (busy pane fg=10242 vs shell 10227; a shell blocked in a builtin `read` reports its own group).
+    If even that cannot answer, the first attempt stays silent and the retry loop bails out the moment
+    any output lands.
+- **Screen replay (the big one) - "the grid cannot move" was a false premise.** A pane must come back
+  showing WHAT WAS ON SCREEN; a producing pane does NOT repaint itself, it just appends. New pure
+  `screen.rs` serializes the donor's grid to ANSI and the successor replays it through its own parser
+  before the reader thread starts, so the first frame already shows the old screen.
+  - Per cell: one ABSOLUTE SGR per style run (indexed + truecolor fg/bg, bold/dim/italic/underline/
+    inverse/hidden/strikeout), trailing blanks trimmed, wide-glyph SPACER cells skipped (emitting them
+    would shift the row), final `ESC[row;colH` for the cursor. Lines CRLF-separated and NOT
+    newline-terminated, so a fresh grid lands on the donor's exact layout (screen at the bottom,
+    the rest scrolled into history). Each line re-states its own attributes so any line can be
+    dropped by the cap without leaving a stale SGR state.
+  - **RAW `Color` values, never `Color32`** - the successor re-renders through ITS theme.
+  - **Size**: visible screen + <=200 scrollback lines, hard cap 128 KB/pane. 25k lines would be
+    megabytes per pane for content already scrolled past. Over the cap the OLDEST lines go first and
+    dropped screen rows are padded back so the cursor row stays truthful (tested).
+  - **Wire**: `PaneMeta.screen: Option<String>`, base64 (raw control bytes in a TOML basic string
+    escape to six bytes apiece), `serde(default)`, again NO protocol bump. `MAX_META` 64 KB -> 512 KB.
+    A blank screen sends nothing, so "no replay" stays distinguishable from "a replay of blank".
+    A corrupt blob is dropped, never fatal.
+  - **Per case**: running command -> replay only (no `^L`); idle prompt -> replay REPLACES the `^L`
+    (zle's clear-screen would wipe the restored screen to redraw a bare prompt); alt screen -> replay
+    of the alt grid, then the app's own SIGWINCH redraw paints over its own content.
+- **The missing tab progress bar was NOT a config-plumbing bug** (hypothesis rejected):
+  `adopt_saved_tree` already builds its opts with the same `tabs::spawn_opts(cfg, cwd)` a spawned pane
+  uses, so `detect_progress`/`scrollback_lines`/`word_separators`/`bold_bright` all come from the live
+  config. The reported pane was printing `0.0%`, and 0 is deliberately NOT progress (Tabby's
+  `0 < pct <= 100`). Pinned with a test anyway, since opts built from defaults would silently kill the
+  bar for every adopted tab.
+- **Tests (+11, 317 -> 328)**: `screen.rs` (7: plain dump, style runs, wide spacer, named-color
+  mapping, blank-is-nothing, oversized drop-oldest, screen-bigger-than-the-cap padding);
+  `real_pty_an_adopted_pane_still_shows_what_was_already_on_screen` (donor prints three lines then goes
+  SILENT - anything in the heir's grid can only be the replay; asserts the exact rows);
+  `real_pty_a_replayed_screen_keeps_its_colors_and_bold` (heir's `CellSnap` == donor's, cell for cell);
+  `real_pty_a_pane_with_a_command_running_is_never_sent_ctrl_l`;
+  `real_pty_the_tty_reports_whether_a_command_is_running`;
+  `ctrl_l_only_goes_to_a_shell_that_is_at_its_prompt`;
+  `a_screen_dump_survives_the_wire_and_a_corrupt_one_is_dropped`;
+  `an_adopted_pane_scrapes_progress_per_the_live_config`. The three behavioral ones FAIL against the
+  pre-fix code (verified by reverting each). Both `--ignored` live checks still pass against the real
+  binary.
+- **NOT verifiable without a human clicking Restart**: the real window round trip - whether the
+  replayed screen LOOKS right (alignment, wrapped lines, a TUI painting over the replay) and whether
+  an idle prompt feels live after replay instead of `^L`. The harness cannot drive a Restart click.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk

@@ -44,6 +44,7 @@ src/
   themes.rs      community XRDB color schemes (embedded pack + user files)
   progress.rs    ProgressScanner: Tabby's %-regex scrape (alt-screen guarded)
   osc.rs         OscScanner: OSC 7/1337/52/9;4 framing across chunk boundaries
+  screen.rs      grid -> ANSI screen dump, replayed into a handed-over pane (session handoff)
   search.rs      scrollback search: match finding + options
   links.rs       URL/path detection for clickable links
   session.rs     session save/restore (tabs, cwd, title, color)
