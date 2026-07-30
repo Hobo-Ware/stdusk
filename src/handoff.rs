@@ -504,7 +504,7 @@ impl crate::Stdusk {
                 panes.push((
                     PaneMeta {
                         pgid,
-                        cwd: term.cwd(),
+                        cwd: pane_cwd(term),
                         alive_secs: term.alive().as_secs_f32(),
                         cols: term.cols(),
                         rows: term.rows(),
@@ -515,6 +515,18 @@ impl crate::Stdusk {
         }
         Ok(panes)
     }
+}
+
+/// The cwd to hand a pane over with: the one we tracked, else the one the OS says its shell is in.
+///
+/// The tracked cwd comes ONLY from OSC 7, and on macOS zsh emits that from
+/// `/etc/zshrc_Apple_Terminal` - sourced only when `TERM_PROGRAM == Apple_Terminal`, which ours
+/// never is. A shell whose own rc files don't emit it therefore has no tracked cwd at all, and after
+/// a handoff that pane has nothing left to name its tab from: the successor's `Term` starts with no
+/// title and no scrollback either, so the tab sits on the bare "zsh" placeholder until the user
+/// happens to `cd`. Asking the OS costs one targeted process refresh per pane, once per restart.
+fn pane_cwd(term: &crate::terminal::PtyTerm) -> Option<String> {
+    term.cwd().or_else(|| term.shell_pid().and_then(crate::procwatch::process_cwd))
 }
 
 #[cfg(test)]
@@ -769,6 +781,47 @@ mod tests {
         // fight it; with nobody running, a window is the only acceptable outcome.
         assert_eq!(fallback(true), Fallback::ExitQuietly);
         assert_eq!(fallback(false), Fallback::FreshWindow);
+    }
+
+    #[test]
+    fn a_pane_that_never_emitted_osc_7_still_hands_over_its_directory() {
+        // The "zsh" tab bug: a shell whose rc files never emit OSC 7 has no tracked cwd, so the
+        // handover carried `cwd: None` and the successor had nothing to name the tab from. A REAL
+        // pty is needed: this only reproduces with a live shell process to ask the OS about.
+        let dir = std::env::temp_dir().join(format!("stdusk-pane-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let opts = crate::terminal::SpawnOpts {
+            detect_progress: false,
+            shell_integration: false, // no OSC 133 hooks, and nothing emits OSC 7 either
+            autosuggestions: false,
+            scrollback_lines: 200,
+            word_separators: " ".into(),
+            bold_bright: false,
+            cwd: Some(dir.to_string_lossy().into_owned()),
+            profile: Some(crate::config::Profile {
+                name: "cwdless".into(),
+                shell: Some("/bin/sh".into()),
+                args: vec!["-c".into(), "sleep 30".into()],
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                color: None,
+            }),
+        };
+        let mut term = crate::terminal::PtyTerm::spawn(80, 24, egui::Context::default(), &opts);
+        // Wait for the shell to exist (the pgid is captured at spawn, but be honest about timing).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while term.shell_pid().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(term.cwd(), None, "nothing emitted OSC 7, so there is no tracked cwd");
+        let handed = pane_cwd(&term).expect("the OS knows where the shell is");
+        assert_eq!(
+            std::fs::canonicalize(&handed).ok(),
+            std::fs::canonicalize(&dir).ok(),
+            "handed-over cwd {handed}"
+        );
+        term.kill();
+        let _ = std::fs::remove_dir(&dir);
     }
 
     // --- LIVE checks (ignored: they run the real binary and open a real window) ----------------

@@ -203,6 +203,27 @@ pub(crate) fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
         .collect()
 }
 
+/// Where a process is actually sitting, asked of the OS. `None` when the pid is gone, the OS won't
+/// say, or the answer isn't a directory any more.
+///
+/// This is the fallback for a pane whose cwd we never learned: `TabState.cwd` is only ever filled by
+/// OSC 7, and macOS zsh emits that from `/etc/zshrc_Apple_Terminal` - sourced ONLY when
+/// `TERM_PROGRAM == Apple_Terminal`, which ours never is. So a shell whose own rc files don't emit
+/// it stays cwd-less forever, and its tab keeps the bare "zsh" placeholder. Asking the OS costs one
+/// targeted refresh (`PROC_PIDVNODEPATHINFO` on macOS), so keep it off per-frame paths - it exists
+/// for the handoff, which runs it once per pane during a restart.
+pub(crate) fn process_cwd(pid: u32) -> Option<String> {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        false,
+        sysinfo::ProcessRefreshKind::nothing().with_cwd(sysinfo::UpdateKind::Always),
+    );
+    let cwd = sys.process(pid)?.cwd()?;
+    cwd.is_dir().then(|| cwd.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +322,23 @@ mod tests {
         // A bare shell (no descendants) has nothing to terminate - the no-nag case.
         let procs = vec![p(999, 1, "Finder", &["Finder"])];
         assert!(running_children(&procs, 100).is_empty());
+    }
+
+    #[test]
+    fn a_live_process_cwd_comes_back_from_the_os() {
+        // The whole point of the fallback: the OS knows where a process sits even though nothing
+        // emitted OSC 7. Asked about OURSELVES, since that is a pid guaranteed to exist, and the
+        // answer must be this test's own working directory. A platform where sysinfo can't answer
+        // would silently degrade the handoff's tab names, so assert the real value, not just Some.
+        let me = std::process::id();
+        let want = std::env::current_dir().expect("a test always has a cwd");
+        let got = process_cwd(me).expect("the OS must know our own cwd");
+        assert_eq!(
+            std::fs::canonicalize(&got).ok(),
+            std::fs::canonicalize(&want).ok(),
+            "process_cwd({me}) = {got}"
+        );
+        // A pid that cannot exist has no cwd - never a bogus path.
+        assert_eq!(process_cwd(u32::MAX), None);
     }
 }
