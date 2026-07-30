@@ -134,6 +134,12 @@ pub(crate) struct PaneMeta {
     /// optional - and hence addable without a `PROTOCOL` bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) screen: Option<String>,
+    /// The pane's live OSC 0/2 window title. Carried for the same reason as `cwd`: an app re-emits
+    /// its title only when the title CHANGES, so a Claude/vim pane that had one would otherwise fall
+    /// back to its cwd basename for the rest of the session (the reported `vladjerca` tab).
+    /// Clamped by [`clamp_title`] - it is untrusted, app-supplied text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) title_osc: Option<String>,
 }
 
 /// Panes handed to us by a predecessor, received BEFORE the window exists (the transport needs no
@@ -533,6 +539,7 @@ impl crate::Stdusk {
                         alt_screen: term.is_alt_screen(),
                         cmd_running: cmd_running(term.cmd_state()),
                         screen: encode_screen(&term.screen_dump()),
+                        title_osc: clamp_title(term.title_osc()),
                     },
                     fd,
                 ));
@@ -552,6 +559,23 @@ impl crate::Stdusk {
 /// happens to `cd`. Asking the OS costs one targeted process refresh per pane, once per restart.
 fn pane_cwd(term: &crate::terminal::PtyTerm) -> Option<String> {
     term.cwd().or_else(|| term.shell_pid().and_then(crate::procwatch::process_cwd))
+}
+
+/// Longest OSC title carried over the wire, in CHARS (never bytes - splitting a code point would
+/// make the string unencodable). A window title is a tab label; anything past this is either
+/// decoration or an app misbehaving, and a tab shows an ellipsized slice of it anyway.
+const MAX_TITLE_CHARS: usize = 512;
+
+/// An OSC title fit to travel and to display: empty or whitespace-only means "no title" (the same
+/// reading `ui::auto_title` gives it), and a hostile length is truncated rather than dropped, so a
+/// long-but-legitimate title still names its tab. Applied on BOTH sides - the receiving side treats
+/// the wire as untrusted.
+pub(crate) fn clamp_title(title: Option<String>) -> Option<String> {
+    let t = title?;
+    if t.trim().is_empty() {
+        return None;
+    }
+    Some(t.chars().take(MAX_TITLE_CHARS).collect())
 }
 
 /// A pane's screen dump for the wire: base64, or `None` when there is nothing on screen.
@@ -674,6 +698,7 @@ mod tests {
             // Alternate per pane so a field that stopped round-tripping shows up as a mismatch.
             alt_screen: n % 2 == 1,
             cmd_running: n.is_multiple_of(2).then_some(n == 0),
+            title_osc: (n == 1).then(|| "claude - pane 1".to_owned()),
             // A dump big enough to prove the metadata survives past one socket buffer.
             screen: encode_screen(format!("\x1b[0mpane-{n} screen{}", "x".repeat(9000)).as_bytes()),
         }
@@ -855,6 +880,19 @@ mod tests {
     }
 
     #[test]
+    fn an_osc_title_is_clamped_before_it_travels() {
+        // App-supplied text, so it is untrusted on both sides: a blank title is no title, and a
+        // hostile length is truncated by CHARS (bytes would split a code point).
+        assert_eq!(clamp_title(Some("claude - locales".into())), Some("claude - locales".into()));
+        assert_eq!(clamp_title(None), None);
+        assert_eq!(clamp_title(Some(String::new())), None);
+        assert_eq!(clamp_title(Some("   ".into())), None);
+        let huge = clamp_title(Some("\u{1f600}".repeat(5000))).expect("truncated, not dropped");
+        assert_eq!(huge.chars().count(), MAX_TITLE_CHARS);
+        assert!(huge.chars().all(|c| c == '\u{1f600}'), "truncation must not split a code point");
+    }
+
+    #[test]
     fn a_pane_that_never_emitted_osc_7_still_hands_over_its_directory() {
         // The "zsh" tab bug: a shell whose rc files never emit OSC 7 has no tracked cwd, so the
         // handover carried `cwd: None` and the successor had nothing to name the tab from. A REAL
@@ -956,6 +994,7 @@ mod tests {
                 alt_screen: term.is_alt_screen(),
                 cmd_running: cmd_running(term.cmd_state()),
                 screen: encode_screen(&term.screen_dump()),
+                title_osc: clamp_title(term.title_osc()),
             },
             fd,
         )];

@@ -169,6 +169,7 @@ fn adopt_saved_tree(
             alt_screen: meta.alt_screen,
             cmd_running: meta.cmd_running,
             replay: crate::handoff::decode_screen(meta.screen.as_ref()),
+            title_osc: crate::handoff::clamp_title(meta.title_osc.clone()),
         };
         PtyTerm::adopt(ctx.clone(), handover, &opts).unwrap_or_else(|_| {
             eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
@@ -1232,6 +1233,15 @@ mod tests {
     /// descriptor, so nothing asserted here (title/color/pin + the cwd that rides with the fd)
     /// needs a shell. The returned writer must stay alive - closing it only EOFs the pane.
     fn adopt_one(st: &session::SavedTab, cwd: Option<&str>) -> (Tab, std::io::PipeWriter) {
+        adopt_one_titled(st, cwd, None)
+    }
+
+    /// As `adopt_one`, plus the live OSC 0/2 title the handed-over pane carried.
+    fn adopt_one_titled(
+        st: &session::SavedTab,
+        cwd: Option<&str>,
+        title_osc: Option<&str>,
+    ) -> (Tab, std::io::PipeWriter) {
         let (rx, tx) = std::io::pipe().expect("pipe");
         let meta = crate::handoff::PaneMeta {
             pgid: None,
@@ -1242,6 +1252,7 @@ mod tests {
             alt_screen: false,
             cmd_running: None,
             screen: None,
+            title_osc: title_osc.map(Into::into),
         };
         let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
         let tab = adopt_saved_tab(&Config::default(), &egui::Context::default(), st, &mut panes);
@@ -1316,6 +1327,51 @@ mod tests {
             }
             assert_eq!(term.progress(), want, "detect_progress = {detect}");
         }
+    }
+
+    #[test]
+    fn an_adopted_pane_keeps_the_osc_title_its_app_had_set() {
+        // The reported `vladjerca` tab: a Claude pane's name came from the app's OSC 0/2 title, and
+        // an app re-emits its title only when the title CHANGES - so a successor that did not carry
+        // it fell back to the cwd basename for the rest of the session.
+        let st = session::SavedTab {
+            pane: Some(session::SavedPane::Leaf { cwd: Some("/Users/vladjerca".into()) }),
+            ..Default::default()
+        };
+        let (tab, _tx) = adopt_one_titled(&st, Some("/Users/vladjerca"), Some("claude - locales"));
+        let term = tab.focused_term();
+        assert_eq!(term.title_osc().as_deref(), Some("claude - locales"));
+        // What the render loop's auto-title pass then writes onto the tab: the OSC title beats the
+        // cwd basename, exactly as it does for a pane that never moved.
+        assert!(!tab.renamed);
+        assert_eq!(
+            ui::auto_title(true, term.title_osc().as_deref(), term.cwd().as_deref()),
+            Some("claude - locales".into())
+        );
+        // ...and with dynamic titles off the cwd basename still wins, unchanged.
+        assert_eq!(
+            ui::auto_title(false, term.title_osc().as_deref(), term.cwd().as_deref()),
+            Some("vladjerca".into())
+        );
+    }
+
+    #[test]
+    fn a_renamed_tab_is_not_overridden_by_a_handed_over_osc_title() {
+        // A user rename outranks both the OSC title and the cwd: `renamed` is what keeps the
+        // per-frame auto-title pass off the tab entirely.
+        let st = session::SavedTab {
+            title: Some("deploy".into()),
+            pane: Some(session::SavedPane::Leaf { cwd: Some("/tmp/x".into()) }),
+            ..Default::default()
+        };
+        let (tab, _tx) = adopt_one_titled(&st, Some("/tmp/x"), Some("vim README.md"));
+        assert!(tab.renamed, "a restored rename must keep auto-titling off");
+        assert_eq!(tab.title, "deploy");
+        assert_eq!(
+            tab.focused_term().title_osc().as_deref(),
+            Some("vim README.md"),
+            "the title still rides along - it just does not win"
+        );
     }
 
     #[test]

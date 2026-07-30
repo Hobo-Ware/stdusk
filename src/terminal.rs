@@ -384,6 +384,10 @@ pub(crate) struct Adopted {
     /// The donor's screen as ANSI (see `screen`), replayed into our fresh grid so the pane shows what
     /// was already there. Empty when the predecessor sent none - a 1.6.2 build, or a blank pane.
     pub(crate) replay: Vec<u8>,
+    /// The live OSC 0/2 window title, if the app had set one. Like `cwd` this cannot be re-derived:
+    /// the app re-emits its title only when something changes, so without it a Claude/vim pane falls
+    /// back to its cwd basename for the rest of the session.
+    pub(crate) title_osc: Option<String>,
 }
 
 /// How this pane's pty master is owned. A spawned pane keeps `portable_pty`'s master (its proven
@@ -695,7 +699,8 @@ impl PtyTerm {
         handover: Adopted,
         opts: &SpawnOpts,
     ) -> std::io::Result<Self> {
-        let Adopted { fd, cols, rows, pgid, alive, alt_screen, cmd_running, replay } = handover;
+        let Adopted { fd, cols, rows, pgid, alive, alt_screen, cmd_running, replay, title_osc } =
+            handover;
         let redraw_ctx = ctx.clone(); // the reader thread takes `ctx`; the nudger needs one too
         // Separate dups for the reader thread and the writer: both sides of the same pty master,
         // independently owned, exactly like `try_clone_reader` + `take_writer` give us on a spawn.
@@ -703,10 +708,15 @@ impl PtyTerm {
         let writer: Box<dyn Write + Send> = Box::new(std::fs::File::from(fd.try_clone()?));
         let writer = Arc::new(Mutex::new(writer));
 
-        // Seed the cwd from the handover instead of waiting for OSC 7: the shell is mid-session and
-        // won't re-emit it until its NEXT prompt, so anything reading `cwd()` (the tab's basename
-        // auto-title, "new tab here") would be blind until the user runs a command.
-        let state = Arc::new(Mutex::new(TabState { cwd: opts.cwd.clone(), ..TabState::default() }));
+        // Seed the cwd AND the OSC title from the handover instead of waiting for the shell to
+        // re-emit them: it re-sends OSC 7 only at its next prompt and an app re-sends its title only
+        // when the title changes, so anything reading `cwd()`/`title_osc()` (the tab's auto-title,
+        // "new tab here") would otherwise be blind for the rest of the session.
+        let state = Arc::new(Mutex::new(TabState {
+            cwd: opts.cwd.clone(),
+            title_osc,
+            ..TabState::default()
+        }));
         let replies = Arc::new(Mutex::new(Vec::new()));
         let term_config = Config {
             scrolling_history: opts.scrollback_lines,
@@ -1602,6 +1612,7 @@ mod tests {
                 alt_screen,
                 cmd_running,
                 replay: if replay { donor.screen_dump() } else { Vec::new() },
+                title_osc: crate::handoff::clamp_title(donor.title_osc()),
             },
             &opts,
         )
@@ -1951,6 +1962,7 @@ mod tests {
                 alt_screen: false,
                 cmd_running: Some(false),
                 replay: Vec::new(),
+                title_osc: None,
             },
             &opts,
         )
