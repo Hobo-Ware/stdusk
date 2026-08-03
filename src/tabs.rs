@@ -235,6 +235,17 @@ pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Pro
 /// Where a pin toggle moves the tab at `i` (Tabby `AppService.pinTab`/`unpinTab`): pinning
 /// moves it to the END of the pinned group, unpinning to the START of the unpinned group.
 /// `pins` is the per-tab pinned flag BEFORE the toggle; returns (now pinned, target index).
+/// Where a NEW (unpinned) tab lands when opened from the tab at `from`: immediately to its right,
+/// so Cmd+T appears next to what you were looking at instead of at the far end of the bar.
+/// Pinned tabs hold the front of the bar as a contiguous prefix (see `pin_target`), so an unpinned
+/// tab can never land inside that group - opening from a pinned tab clamps to just after the last
+/// pinned one. `from` out of range (empty bar) yields the end.
+pub(crate) fn new_tab_index(pins: &[bool], from: usize) -> usize {
+    let pinned = pins.iter().filter(|p| **p).count();
+    let right_of = from.saturating_add(1).min(pins.len());
+    right_of.max(pinned)
+}
+
 pub(crate) fn pin_target(pins: &[bool], i: usize) -> (bool, usize) {
     let pin = !pins[i];
     let count = (0..pins.len()).filter(|&j| if j == i { pin } else { pins[j] }).count();
@@ -452,8 +463,20 @@ impl Stdusk {
     pub(crate) fn new_tab(&mut self, ctx: &egui::Context) {
         let cwd = self.tabs.get(self.active).and_then(|t| t.focused_term().cwd());
         let tab = spawn_tab(&self.cfg, ctx, cwd);
-        self.tabs.push(tab);
-        self.active = self.tabs.len() - 1;
+        self.insert_tab(tab, self.active);
+    }
+
+    /// Place a freshly created tab just right of `from` and focus it. Indices at or after the
+    /// insertion point shift up, so `prev_active` (toggle-last-tab) is fixed up here - otherwise
+    /// Cmd+O would jump to whichever tab slid into the old slot.
+    fn insert_tab(&mut self, tab: Tab, from: usize) {
+        let pins: Vec<bool> = self.tabs.iter().map(|t| t.pinned).collect();
+        let at = new_tab_index(&pins, from);
+        self.tabs.insert(at, tab);
+        if self.prev_active >= at {
+            self.prev_active += 1;
+        }
+        self.active = at;
     }
 
     pub(crate) fn close_tab(&mut self, i: usize, ctx: &egui::Context) {
@@ -1174,15 +1197,13 @@ impl Stdusk {
             Some(TabAction::NewWithProfile(pi)) => {
                 if let Some(p) = self.cfg.profiles.get(pi).cloned() {
                     let tab = spawn_profile_tab(&self.cfg, ctx, &p);
-                    self.tabs.push(tab);
-                    self.active = self.tabs.len() - 1;
+                    self.insert_tab(tab, self.active);
                 }
             }
             Some(TabAction::Duplicate(i)) => {
                 let cwd = self.tabs.get(i).and_then(|t| t.focused_term().cwd());
                 let tab = spawn_tab(&self.cfg, ctx, cwd);
-                self.tabs.push(tab);
-                self.active = self.tabs.len() - 1;
+                self.insert_tab(tab, i); // beside its source, not at the far end
             }
             Some(TabAction::Rename(i)) => {
                 if let Some(t) = self.tabs.get(i) {
@@ -1233,6 +1254,24 @@ impl Stdusk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_tab_lands_right_of_the_one_it_was_opened_from() {
+        // Plain bar: straight after the active tab, not at the end.
+        assert_eq!(new_tab_index(&[false, false, false], 0), 1);
+        assert_eq!(new_tab_index(&[false, false, false], 1), 2);
+        assert_eq!(new_tab_index(&[false, false, false], 2), 3); // last -> end
+        assert_eq!(new_tab_index(&[], 0), 0); // empty bar
+
+        // Pinned tabs are a contiguous PREFIX, so an unpinned newcomer can never land inside
+        // them: opening from a pinned tab clamps to just after the last pinned one.
+        assert_eq!(new_tab_index(&[true, true, false], 0), 2);
+        assert_eq!(new_tab_index(&[true, true, false], 1), 2);
+        assert_eq!(new_tab_index(&[true, true, false], 2), 3);
+        assert_eq!(new_tab_index(&[true, true], 0), 2); // all pinned
+        // A stale/out-of-range index must not panic or produce an out-of-bounds insert.
+        assert_eq!(new_tab_index(&[false, false], 9), 2);
+    }
 
     /// Adopt `st` with ONE handed-over pane whose metadata carries `cwd`, exactly the way a
     /// successor does at startup. The pane's fd is a pipe read end: adoption only needs a live
