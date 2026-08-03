@@ -2024,6 +2024,91 @@ worked for idle shells (user-confirmed: Claude panes render) but was wrong in tw
 - **Still needs a human clicking Restart**: whether the replayed screen LOOKS right in a real window
   and whether a reattached Claude tab shows its app title. The harness cannot drive a Restart.
 
+## Process-teardown audit: every path a pane can end (post-1.6.4; 343 tests)
+Asked: "are we 100% sure we can't leave dangling processes when closing a tab?" Answer: **no, but
+only in two named cases now** (bottom of this section). Everything below was MEASURED - the live
+`claude` trees on the user's own machine, plus real-pty reproductions - not reasoned about.
+
+- **The teardown boundary is the pty SESSION *and* the DESCENDANT closure**, not the process group
+  (`procwatch::pty_victims`, `terminal::kill_pty_session`). Three facts forced that, in order:
+  - an INTERACTIVE shell puts every foreground job in its OWN process group, so the old
+    `killpg(shell)` reached the shell alone. Live proof: `claude` runs at `pgid == its own pid`,
+    `sid == the shell's pid`. A job that ignores SIGHUP/SIGTERM (node CLIs routinely do) outlived
+    its tab forever - the reported leak.
+  - **Claude Code's Bash tool runs EVERY call through a `/bin/zsh` in a NEW SESSION** (`sid == its
+    own pid`), measured on the user's live tree: a backgrounded `deno task dev` and its whole
+    deno/workerd/dart-sass subtree sat outside the pane's pty session. A session sweep cannot see
+    them; only the parent CHAIN still links them to the tab. So teardown ALSO walks descendants -
+    and snapshots them BEFORE the first signal, because SIGTERM breaks those links.
+  - the close-tab confirm modal already counted those descendants ("N processes will be
+    terminated") via `procwatch::running_children`, so the kill was under-delivering on a promise
+    the UI was already making.
+- **pid reuse, for an ADOPTED pane whose pgid came off a socket** (we are not the parent, so nothing
+  reserves that pid): `kill_pty_session` refuses `pid <= 0`, refuses OUR own session (re-checked per
+  victim), and requires a LIVE `leader` to still be a session leader. A dead `leader` still sweeps -
+  that IS the orphaned-jobs case. Residual: a recycled pid that has itself become a session leader,
+  which needs ~99k pids of wraparound first. Accepted, documented, not hot-path work.
+- **Successor-side premature kill after a FAILED handoff - fixed.** The successor adopts every pane
+  BEFORE it acknowledges, so anything that dropped those panes first (a startup panic, a failed ack
+  write, the user quitting the new window) reaped shells the predecessor was still guarding - while
+  the old window said "Restart cancelled". `handed_off: bool` became `owns_session: bool`: a spawned
+  pane owns its session, an ADOPTED one does not until `arm_teardown()`, which `Stdusk::new` calls
+  only on `inc.ack()` returning `Ok`.
+- **`mark_handed_off` audit**: exactly ONE production call site (`Stdusk::hand_off`, after
+  `send_session` returned `Ok`, which requires the ACK to have been READ). Covered by
+  `a_receiver_that_never_acknowledges_fails_the_send`. No path disarms a pane without a successor.
+- **An unadoptable pane no longer strands its shell.** `adopt_saved_tree`'s fallback (a failed
+  `PtyTerm::adopt` drops the only fd we had) used to spawn a fresh shell and say nothing, while the
+  ACK still went out and disarmed the predecessor - nobody owned that session afterwards. It now
+  calls `terminal::reap_orphaned_session(meta.pgid)`.
+
+### Verdicts per path
+| Path | Verdict |
+|------|---------|
+| tab close, pane close in a split, `close others/left/right` | session + tree killed (via `Drop`) |
+| `on_exit = close` / `restart` (pane dropped / `*term = fresh`) | session + tree killed |
+| `on_exit = keep` | shell already dead; its jobs are reaped when the pane finally drops |
+| Cmd+Q / red button / tray Quit / palette Quit | `kill_all_panes()` before `ViewportCommand::Close`, `Drop` as backstop |
+| quit-confirm CANCEL | nothing killed (correct) |
+| successful handoff | adopted by the successor, predecessor disarmed after the ACK |
+| handoff failure at ANY point (no launch, no connect, version mismatch, short read, no ACK) | predecessor keeps every shell, armed; nothing moved |
+| successor drops panes before its ACK | left alone - the predecessor still owns them |
+| unadoptable pane inside an otherwise-good handoff | reaped explicitly (see above) |
+| stdusk SIGKILLed / `killall` | **LEAK** - `Drop` does not run, by definition |
+| a job that double-forked away (parent already exited: tmux server, `perl` daemonize) | **LEAK** - in neither the session nor the tree; belongs to no tab any more |
+| a job forked DURING the ~200ms teardown grace | narrow LEAK - one snapshot, not a loop of them |
+
+### Tests (+7, 336 -> 343)
+`real_pty_kill_reaps_a_foreground_job_in_its_own_process_group`,
+`real_pty_kill_reaps_a_job_that_escaped_into_its_own_session` (the Claude-Code shape: shell ->
+holder -> `setsid` escapee; FAILS before the descendant sweep - measured, escapee 83285 survived),
+`real_pty_an_adopted_pane_is_not_reaped_before_its_ack`,
+`kill_pty_session_refuses_our_own_session_and_a_non_leader_pid` (both pid-reuse guards, aimed at
+THIS process - a regression kills the test binary, the loudest possible assertion),
+`a_pane_that_could_not_be_adopted_is_reaped_not_leaked`, plus five pure `victims_of` cases in
+`procwatch`. `real_pty_kill_terminates_the_process_group` and
+`real_pty_handed_off_pane_survives_kill_and_drop` are untouched in what they assert.
+- **Test hygiene**: both of those were leaking one `sleep 300` per run - `sh` puts `sleep 300 &` in
+  its OWN process group, so their `killpg` cleanup missed it. The audited leak, inside the suite's
+  own cleanup. They reap by session now; five full-suite runs leave zero strays.
+- Probe jobs use `trap "" TERM HUP; exec sleep 300` - SIG_IGN survives the `exec`, and the `exec`
+  keeps it ONE pid, so a teardown snapshot cannot race a fork the probe was about to do.
+
+### Not done / open
+- **NOT verified live in a real window.** No window-chrome or lifecycle code changed, and the user
+  has a real stdusk running with hours of work in it; a second instance would fight for the global
+  hotkey and steal focus. The teardown seam (`PtyTerm::kill`) is what the GUI calls and it is
+  covered by real-pty tests.
+- **The remaining leak worth fixing** is the double-forked escapee: `claude` starts a background
+  `deno task dev` (own session), then `claude` itself exits - now nothing links that tree to the
+  tab and teardown cannot find it. Fixable only with bookkeeping WHILE the pane lives; the honest
+  candidate is a per-pane env tag (`STDUSK_PANE=<id>` in the spawn env, inherited through `setsid`
+  and immune to pid reuse) matched at teardown via a process's `environ`. NOT implemented and NOT
+  verified that macOS lets sysinfo read another process's environ - deliberately left for a
+  decision, since it changes WHAT a tab close is allowed to kill.
+- `pty_victims` costs ~10ms per pane (one process-table refresh + a `getsid` per process, measured
+  over 456 processes). Teardown-only; never call it from a frame path.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
