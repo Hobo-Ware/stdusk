@@ -202,8 +202,19 @@ impl Stdusk {
             adopted = !tabs.is_empty();
             // The ACK is the predecessor's release: only now, with live PtyTerms, is it safe. A
             // failed write leaves it running (it keeps its shells) - noisy, but never data loss.
-            if let Err(e) = inc.ack() {
-                eprintln!("stdusk: could not confirm the session handoff ({e})");
+            match inc.ack() {
+                // Delivered: the predecessor has let go, so these sessions are OURS to reap now.
+                // Adopted panes start disarmed precisely so the window between adopting and this
+                // line cannot kill shells the predecessor is still guarding (a panic here, a failed
+                // ack, the user quitting the new window - all used to reap them).
+                Ok(()) => {
+                    for tab in &mut tabs {
+                        for term in tab.root_mut().leaves_mut() {
+                            term.arm_teardown();
+                        }
+                    }
+                }
+                Err(e) => eprintln!("stdusk: could not confirm the session handoff ({e})"),
             }
         }
 

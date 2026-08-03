@@ -224,6 +224,85 @@ pub(crate) fn process_cwd(pid: u32) -> Option<String> {
     cwd.is_dir().then(|| cwd.to_string_lossy().into_owned())
 }
 
+/// A process as TEARDOWN sees it: its parent link and the session it belongs to - the two facts that
+/// decide whether closing a pane is responsible for killing it.
+struct Member {
+    pid: u32,
+    parent: Option<u32>,
+    session: Option<u32>,
+}
+
+/// Every live pid a pane's teardown must reap, given its shell's pid. TWO boundaries, because
+/// neither alone is enough and both were measured on the user's live tree:
+///
+/// - the pty SESSION (`sid == leader`): an interactive shell puts every foreground job in its OWN
+///   process group, so `killpg(shell)` reaches the shell by itself. The session is created per pty
+///   (portable-pty `setsid`s the shell) and inherited by every job - `claude` sits here.
+/// - the DESCENDANT closure: Claude Code runs each Bash tool call through a `/bin/zsh` in a NEW
+///   session (`sid == its own pid`), so a backgrounded `deno task dev` is outside the pty session
+///   and invisible to a session sweep. The parent chain is the only thing left that ties it to the
+///   tab - which is why teardown must snapshot this BEFORE it signals anything: the first SIGTERM
+///   kills the intermediate parent and the link is gone.
+///
+/// A job whose own parent already exited (a true daemonizing double-fork, e.g. the tmux server) is
+/// in neither set and belongs to no tab any more - unreachable by design, not by oversight.
+///
+/// Costs one process-table refresh plus a `getsid` per process (macOS sysinfo answers `session_id`
+/// with a live syscall), so this is teardown-only - never a per-frame path.
+pub(crate) fn pty_victims(leader: u32) -> Vec<u32> {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        false,
+        sysinfo::ProcessRefreshKind::nothing(),
+    );
+    let members: Vec<Member> = sys
+        .processes()
+        .values()
+        .map(|p| Member {
+            pid: p.pid().as_u32(),
+            parent: p.parent().map(sysinfo::Pid::as_u32),
+            session: p.session_id().map(sysinfo::Pid::as_u32),
+        })
+        .collect();
+    victims_of(&members, leader)
+}
+
+/// The pure half of [`pty_victims`]: session members plus the descendant closure of `leader`,
+/// deduplicated, never including `leader` itself (its own group kill covers it).
+fn victims_of(procs: &[Member], leader: u32) -> Vec<u32> {
+    let mut children: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
+    for (i, p) in procs.iter().enumerate() {
+        if let Some(par) = p.parent {
+            children.entry(par).or_default().push(i);
+        }
+    }
+    let mut seen = std::collections::HashSet::from([leader]);
+    let mut out = Vec::new();
+    // Session members need no parent link: an orphaned job whose shell is already gone still carries
+    // the sid, and that is exactly the case teardown exists for.
+    for p in procs.iter().filter(|p| p.session == Some(leader)) {
+        if seen.insert(p.pid) {
+            out.push(p.pid);
+        }
+    }
+    let mut stack = vec![leader];
+    let mut walked = std::collections::HashSet::new();
+    while let Some(pid) = stack.pop() {
+        if !walked.insert(pid) {
+            continue; // guard against pid-reuse cycles
+        }
+        for &i in children.get(&pid).into_iter().flatten() {
+            let p = &procs[i];
+            if seen.insert(p.pid) {
+                out.push(p.pid);
+            }
+            stack.push(p.pid);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,6 +401,66 @@ mod tests {
         // A bare shell (no descendants) has nothing to terminate - the no-nag case.
         let procs = vec![p(999, 1, "Finder", &["Finder"])];
         assert!(running_children(&procs, 100).is_empty());
+    }
+
+    fn m(pid: u32, parent: u32, session: u32) -> Member {
+        Member { pid, parent: Some(parent), session: Some(session) }
+    }
+
+    #[test]
+    fn victims_span_the_session_and_the_tree_but_never_the_leader() {
+        // shell(100) is the pty session leader. 200 = a foreground job in its own GROUP but the
+        // shell's session (the `claude` shape). 300 = a job that SETSID'd into its own session while
+        // staying 200's child (Claude Code's background bash), 400 its grandchild. 900 is unrelated.
+        let procs = vec![
+            m(200, 100, 100),
+            m(300, 200, 300),
+            m(400, 300, 300),
+            m(900, 1, 900),
+            m(100, 1, 100), // the leader itself
+        ];
+        let mut got = victims_of(&procs, 100);
+        got.sort_unstable();
+        assert_eq!(got, vec![200, 300, 400], "the escapee's whole subtree must be reachable");
+    }
+
+    #[test]
+    fn an_orphaned_session_member_is_still_a_victim() {
+        // The shell is already gone, so nothing links the job to it by parentage - the sid is the
+        // only remaining evidence, and this is exactly the case teardown exists for.
+        let procs = vec![m(200, 1, 100), m(900, 1, 900)];
+        assert_eq!(victims_of(&procs, 100), vec![200]);
+    }
+
+    #[test]
+    fn a_parent_cycle_from_pid_reuse_terminates() {
+        // A recycled pid can make the table describe a loop; the walk must not spin on it.
+        let procs = vec![m(200, 100, 100), m(100, 200, 100)];
+        let mut got = victims_of(&procs, 100);
+        got.sort_unstable();
+        assert_eq!(got, vec![200]);
+    }
+
+    #[test]
+    fn an_idle_shell_has_no_victims() {
+        assert!(victims_of(&[m(900, 1, 900)], 100).is_empty());
+    }
+
+    #[test]
+    fn the_live_process_table_puts_us_in_our_own_session() {
+        // Grounds `pty_victims` in the real adapter rather than the pure walk: sysinfo must actually
+        // answer `session_id` under a `nothing()` refresh (on macOS it is a live getsid), or the
+        // session half of the teardown boundary would silently collapse to the tree half.
+        let victims = pty_victims(std::process::id());
+        assert!(!victims.contains(&std::process::id()), "the leader is never its own victim");
+        // Our own session id, asked of the OS: every member of it must be in the sweep.
+        #[allow(unsafe_code)] // SAFETY: getsid(0) queries our own session; plain int arg
+        let our_sid = unsafe { libc::getsid(0) } as u32;
+        let mates = pty_victims(our_sid);
+        assert!(
+            our_sid == std::process::id() || mates.contains(&std::process::id()),
+            "we must show up in our own session's sweep (sid {our_sid})"
+        );
     }
 
     #[test]

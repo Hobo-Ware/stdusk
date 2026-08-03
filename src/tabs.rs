@@ -173,6 +173,12 @@ fn adopt_saved_tree(
         };
         PtyTerm::adopt(ctx.clone(), handover, &opts).unwrap_or_else(|_| {
             eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
+            // The failed adoption dropped the only fd we had for that shell, and the predecessor
+            // disarms every pane as soon as we acknowledge - so this is the last chance anyone has to
+            // reap it. See `terminal::reap_orphaned_session`.
+            if let Some(pgid) = meta.pgid {
+                terminal::reap_orphaned_session(pgid);
+            }
             PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts)
         })
     })

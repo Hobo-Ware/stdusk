@@ -352,7 +352,11 @@ pub(crate) struct PtyTerm {
     bold_bright: bool,      // draw bold text in bright ANSI colors
     rapid_exits: u32,       // consecutive <RAPID_EXIT_SECS deaths, carried across respawns
     killed: bool,           // kill() ran (idempotency guard; Drop calls kill() too)
-    handed_off: bool,       // the pty was passed to a successor process - kill()/Drop must NOT reap
+    /// May we reap this shell's session? A SPAWNED pane owns it outright. An ADOPTED pane does NOT
+    /// until its ACK is delivered - until then the predecessor is still guarding those shells, and a
+    /// successor that reaped them would kill the user's work while the old window says the restart
+    /// was cancelled. A HANDED-OFF pane gives ownership away for good.
+    owns_session: bool,
     started: std::time::Instant, // when THIS owner took the pty (spawn or adopt)
     uptime_base: std::time::Duration, // how long the shell had run under previous owners
     /// Liveness token for background helpers (the adopt redraw nudger). They hold a `Weak` to it, so
@@ -676,7 +680,7 @@ impl PtyTerm {
             bold_bright: opts.bold_bright,
             rapid_exits: 0,
             killed: false,
-            handed_off: false,
+            owns_session: true, // a shell we spawned is ours to reap
             started: std::time::Instant::now(),
             uptime_base: std::time::Duration::ZERO,
             alive_token: Arc::new(()),
@@ -766,7 +770,7 @@ impl PtyTerm {
             bold_bright: opts.bold_bright,
             rapid_exits: 0,
             killed: false,
-            handed_off: false,
+            owns_session: false, // not ours until the ACK is delivered (see `arm_teardown`)
             started: std::time::Instant::now(),
             uptime_base: alive,
             alive_token: Arc::new(()),
@@ -842,10 +846,19 @@ impl PtyTerm {
     }
 
     /// Mark this pane as handed over: the successor owns the shell now, so `kill()` and `Drop` must
-    /// NOT reap the process group. Without this the handoff is a silent no-op - the shells would be
-    /// killed on our way out, milliseconds after the successor adopted them.
+    /// NOT reap it. Without this the handoff is a silent no-op - the shells would be killed on our way
+    /// out, milliseconds after the successor adopted them. Only ever called after a delivered ACK.
     pub(crate) fn mark_handed_off(&mut self) {
-        self.handed_off = true;
+        self.owns_session = false;
+    }
+
+    /// Take ownership of an ADOPTED pane's session - the mirror of [`Self::mark_handed_off`], and the
+    /// only thing that arms teardown for it. Called once the successor's ACK is delivered, because
+    /// that is the moment the predecessor stops guarding these shells. Before it, a drop (a panic
+    /// during startup, a failed ack, the user quitting the new window) must leave them alone: they
+    /// are still the predecessor's, and it is still up.
+    pub(crate) fn arm_teardown(&mut self) {
+        self.owns_session = true;
     }
 
     /// PID of the tab's shell process - the root for CLI-awareness descendant scans.
@@ -853,22 +866,21 @@ impl PtyTerm {
         self.shell_pid
     }
 
-    /// Terminate the shell's whole process GROUP so the shell AND its descendants
-    /// (claude/node/npm/editors/...) die instead of leaking as orphans. Dropping the pty master
-    /// only sends SIGHUP, which node-based CLIs routinely ignore - hence the explicit group kill.
-    /// The shell is a session/process-group leader (portable-pty `setsid`), so its pid IS the pgid.
-    /// Idempotent (the `killed` guard) and safe on an already-dead group (killpg ESRCH is ignored).
-    /// No-op off unix (no POSIX process groups) or when the pid is unknown / not a leader.
+    /// Terminate the shell's whole pty SESSION - the shell AND every job it started - so nothing
+    /// leaks as an orphan. See [`kill_pty_session`] for why the session, not just the process group.
+    /// Idempotent (the `killed` guard) and safe on an already-dead session. No-op off unix, when the
+    /// pid is unknown, or when this pane's session is not ours to reap.
     pub(crate) fn kill(&mut self) {
-        // A handed-off pane's shell belongs to the successor process now - reaping it here is
-        // exactly the bug that would make session handoff look like it does nothing.
-        if self.killed || self.handed_off {
+        // Not ours to reap: either handed to a successor, or adopted and not yet confirmed as ours.
+        // Reaping in the first case makes the handoff a silent no-op; in the second it kills shells
+        // the predecessor is still guarding.
+        if self.killed || !self.owns_session {
             return;
         }
         self.killed = true;
         #[cfg(unix)]
         if let Some(pid) = self.shell_pid {
-            kill_process_group(pid as i32);
+            kill_pty_session(pid as i32);
         }
     }
 
@@ -1245,39 +1257,84 @@ impl Drop for PtyTerm {
     }
 }
 
-/// SIGTERM a process group, wait a short grace for it to drain, then SIGKILL any survivor.
-/// `pid` must be the group leader's pid (== the pgid). Guards `pid <= 0` (0 = OUR group, -1 =
-/// every process). `libc::killpg` is a raw POSIX FFI with no safe wrapper - the crate's only
-/// `unsafe` besides main's `set_var`, hence the local allow. ESRCH (group already gone) is ignored.
+/// Terminate everything the pane's pty was hosting: the shell AND every job it started.
+///
+/// `leader` is the shell's pid, which is also its process-GROUP id and its SESSION id (portable-pty
+/// `setsid`s it). Killing the process group alone is NOT enough, and that was the audited leak: an
+/// interactive shell puts every foreground job in its OWN process group, so `killpg(shell)` reaches
+/// the shell by itself. Measured on live `claude` panes - `pgid == claude's own pid`, `sid == the
+/// shell's pid` - and reproduced with a real pty: a job that ignores SIGHUP/SIGTERM (which
+/// node-based CLIs routinely do) outlived its tab. [`crate::procwatch::pty_victims`] is the boundary
+/// that does hold - the pty session AND the descendant closure, since Claude Code's background jobs
+/// `setsid` out of the session but stay in the tree.
+///
+/// Escalation is SIGTERM -> short grace -> SIGKILL, applied to the group and to every victim captured
+/// UP FRONT - before the first signal, because SIGTERM breaks the parent links the sweep reads. A
+/// process forked DURING the grace can be missed (one snapshot, not a loop of them), and a job whose
+/// own parent already exited is in neither the session nor the tree and is unreachable. Both are
+/// documented limits, not oversights.
+///
+/// Guards, because `leader` can be a pid we no longer own (an adopted pane's pgid comes off a socket
+/// and nothing keeps the pid reserved): never a pid <= 0, never OUR own session (checked again per
+/// victim, so a mis-snapshot cannot reach the process running us), and a LIVE `leader` must still be a
+/// session leader - a recycled pid almost never is. When `leader` is already gone the sweep still runs,
+/// since that is exactly the orphaned-jobs case; the residual risk is a recycled pid that has itself
+/// become a session leader, which needs ~99k pids of wraparound first.
 #[cfg(unix)]
 #[allow(unsafe_code)]
-fn kill_process_group(pid: i32) {
-    if pid <= 0 {
+fn kill_pty_session(leader: i32) {
+    if leader <= 0 {
         return;
     }
-    // SAFETY: thin FFI to killpg; pid > 0 is checked and the args are plain ints.
-    unsafe {
-        libc::killpg(pid, libc::SIGTERM);
+    // SAFETY (all `unsafe` in this fn): thin POSIX FFI - getsid/kill/killpg with plain int args.
+    // `kill(pid, 0)` and `killpg(pid, 0)` send nothing; they only probe existence.
+    let sid = |pid: i32| unsafe { libc::getsid(pid) };
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+    let our_sid = sid(0);
+    if our_sid == leader {
+        return; // our own session: never, whatever the bookkeeping says
     }
-    // Poll for the whole group to disappear; SIGKILL it if it outlives the grace. `killpg(pid, 0)`
-    // sends no signal - it just probes existence (0 = still alive, -1/ESRCH = gone). A bare shell
-    // dies on the first poll, so this returns in ~one tick; only a SIGTERM-ignoring tree waits out
-    // the grace.
+    if alive(leader) && sid(leader) != leader {
+        return; // not a session leader (any more): not the shell we spawned
+    }
+    let mut victims = crate::procwatch::pty_victims(leader as u32);
+    let me = std::process::id();
+    victims.retain(|&p| p != 1 && p != me && sid(p as i32) != our_sid);
+
+    unsafe { libc::killpg(leader, libc::SIGTERM) };
+    for &p in &victims {
+        unsafe { libc::kill(p as i32, libc::SIGTERM) };
+    }
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(10));
-        // SAFETY: same as above; signal 0 only probes, sends nothing.
-        if unsafe { libc::killpg(pid, 0) } == -1 {
+        // Probe the captured list rather than re-enumerating: a refresh per poll would cost more
+        // than the whole teardown budget.
+        victims.retain(|&p| alive(p as i32));
+        if victims.is_empty() && unsafe { libc::killpg(leader, 0) } == -1 {
             return;
         }
         if std::time::Instant::now() >= deadline {
-            // SAFETY: same as above.
-            unsafe {
-                libc::killpg(pid, libc::SIGKILL);
+            unsafe { libc::killpg(leader, libc::SIGKILL) };
+            for &p in &victims {
+                unsafe { libc::kill(p as i32, libc::SIGKILL) };
             }
             return;
         }
     }
+}
+
+/// Reap a session a predecessor handed us that we could NOT adopt. Its master fd died with the failed
+/// adoption, and the predecessor disarms every pane the moment our ACK goes out - so no `PtyTerm`
+/// anywhere owns it and nothing else will ever reap it. The pane is unusable either way (we have no
+/// fd left to reach that shell); leaving the tree running with no terminal and no owner is exactly the
+/// dangling-process bug this teardown path exists to prevent.
+/// `leader` is the pane's pgid off the wire, which is also its pty session id.
+pub(crate) fn reap_orphaned_session(leader: u32) {
+    #[cfg(unix)]
+    kill_pty_session(leader as i32);
+    #[cfg(not(unix))]
+    let _ = leader;
 }
 
 #[cfg(test)]
@@ -1425,6 +1482,231 @@ mod tests {
         );
     }
 
+    /// Poll [`descendants`] until `ready` accepts the tree (or ~8s pass), then return it. Waiting on
+    /// the SHAPE, not a count, is what keeps a teardown probe from snapshotting a tree the shell was
+    /// still in the middle of building.
+    #[cfg(unix)]
+    fn wait_for_descendants(
+        root: u32,
+        ready: impl Fn(&[(u32, i32, i32)]) -> bool,
+    ) -> Vec<(u32, i32, i32)> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        loop {
+            let kids = descendants(root);
+            if ready(&kids) || std::time::Instant::now() >= deadline {
+                return kids;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// Every live descendant of `root`, with its process group and session, from the live table.
+    #[cfg(unix)]
+    #[allow(unsafe_code)] // getpgid/getsid: thin POSIX FFI, plain int args
+    fn descendants(root: u32) -> Vec<(u32, i32, i32)> {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            false,
+            sysinfo::ProcessRefreshKind::nothing(),
+        );
+        let procs = crate::procwatch::snapshot(&sys);
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        while let Some(pid) = stack.pop() {
+            for p in procs.iter().filter(|p| p.parent == Some(pid)) {
+                // SAFETY: both are plain queries on a pid we just read from the process table.
+                out.push((p.pid, unsafe { libc::getpgid(p.pid as i32) }, unsafe {
+                    libc::getsid(p.pid as i32)
+                }));
+                stack.push(p.pid);
+            }
+        }
+        out
+    }
+
+    /// A pane running a REAL interactive `zsh` - what production spawns, and the only shape in which
+    /// job control (a process group per foreground job) actually happens. `-f` skips the user's rc
+    /// files so the probe is the same on any machine.
+    fn interactive_zsh() -> PtyTerm {
+        let opts = SpawnOpts {
+            detect_progress: false,
+            shell_integration: false,
+            autosuggestions: false,
+            scrollback_lines: 200,
+            word_separators: " ".into(),
+            bold_bright: false,
+            cwd: None,
+            profile: Some(Profile {
+                name: "leak-probe".into(),
+                shell: Some("/bin/zsh".into()),
+                args: vec!["-f".into()],
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                color: None,
+            }),
+        };
+        PtyTerm::spawn(80, 24, egui::Context::default(), &opts)
+    }
+
+    /// A shell line for a job that CANNOT be talked out of running: `trap ""` sets TERM/HUP to
+    /// SIG_IGN, which survives the `exec`, and the exec keeps it ONE pid - so a teardown snapshot can
+    /// never race a fork the probe was about to do.
+    const STUBBORN_JOB: &[u8] = b"/bin/sh -c 'trap \"\" TERM HUP; exec sleep 300'\r";
+
+    /// Wait until every pid in `pids` is gone, then SIGKILL whatever is left and return it - so a
+    /// failing teardown assertion can never leak the probe processes it was measuring.
+    #[cfg(unix)]
+    #[allow(unsafe_code)] // kill(pid, 0) probes existence; SIGKILL cleans up our own spawns
+    fn survivors_of(pids: &[u32]) -> Vec<u32> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let alive = loop {
+            // SAFETY: signal 0 only probes existence.
+            let alive: Vec<u32> =
+                pids.iter().copied().filter(|&p| unsafe { libc::kill(p as i32, 0) } == 0).collect();
+            if alive.is_empty() || std::time::Instant::now() >= deadline {
+                break alive;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        for &p in &alive {
+            // SAFETY: same thin FFI, on pids this test spawned itself.
+            unsafe { libc::kill(p as i32, libc::SIGKILL) };
+        }
+        alive
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn real_pty_kill_reaps_a_foreground_job_in_its_own_process_group() {
+        // The AUDITED LEAK, reproduced: an INTERACTIVE shell (what production spawns) puts every
+        // foreground job in its OWN process group, so the old `killpg(shell)` reached the shell
+        // alone. A job that ignores SIGHUP/SIGTERM - which node-based CLIs routinely do - then
+        // outlived its tab forever. Measured on the user's live `claude` panes too: `pgid == the
+        // claude pid`, `sid == the shell's pid`.
+        let mut term = interactive_zsh();
+        let shell = poll_term(&term, PtyTerm::shell_pid).expect("no shell pid");
+        std::thread::sleep(std::time::Duration::from_millis(700)); // reach the prompt
+        term.send(STUBBORN_JOB);
+        let kids = wait_for_descendants(shell, |kids| {
+            kids.iter().any(|&(pid, pgid, sid)| pgid == pid as i32 && sid == shell as i32)
+        });
+        assert!(
+            !kids.is_empty(),
+            "the job must be in its OWN group inside the shell's session, got {kids:?}"
+        );
+
+        term.kill();
+        let pids: Vec<u32> = kids.iter().map(|&(p, _, _)| p).collect();
+        let survivors = survivors_of(&pids);
+        assert!(survivors.is_empty(), "a signal-ignoring foreground job leaked: {survivors:?}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn real_pty_kill_reaps_a_job_that_escaped_into_its_own_session() {
+        // Concern C of the teardown audit, and the user's actual leak - MEASURED on their live tree
+        // before it was written: Claude Code runs every Bash tool call through a `/bin/zsh` in a NEW
+        // SESSION (`sid == its own pid`), so a backgrounded `deno task dev` sits outside the pane's
+        // pty session entirely. Neither `killpg(shell)` nor a session-wide sweep can see it; the only
+        // thing still tying it to the tab is the parent CHAIN, so teardown has to walk descendants
+        // too - and snapshot them BEFORE signalling, because the first SIGTERM breaks those links.
+        //
+        // Shape reproduced exactly: shell -> holder (in the pane's session) -> escapee (its own
+        // session, ignoring TERM/HUP so only a real reap can end it).
+        let mut term = interactive_zsh();
+        let shell = poll_term(&term, PtyTerm::shell_pid).expect("no shell pid");
+        std::thread::sleep(std::time::Duration::from_millis(700)); // reach the prompt
+        // `fork` first so the child is not a process-group leader: `setsid` fails for one. No `!`
+        // anywhere in the line - an interactive zsh would history-expand it.
+        term.send(
+            b"/usr/bin/perl -e 'use POSIX; my $p = fork; if ($p == 0) { POSIX::setsid(); \
+              $SIG{TERM} = \"IGNORE\"; $SIG{HUP} = \"IGNORE\"; sleep 300; } else { sleep 300; }'\r",
+        );
+
+        let escaped_from = |kids: &[(u32, i32, i32)]| {
+            kids.iter().find(|&&(pid, _, sid)| sid == pid as i32 && sid != shell as i32).copied()
+        };
+        let kids = wait_for_descendants(shell, |kids| escaped_from(kids).is_some());
+        let (escaped, _, _) = escaped_from(&kids).unwrap_or_else(|| {
+            panic!("the probe never escaped into its own session, got {kids:?}")
+        });
+
+        term.kill();
+        let pids: Vec<u32> = kids.iter().map(|&(p, _, _)| p).collect();
+        let survivors = survivors_of(&pids);
+        assert!(
+            survivors.is_empty(),
+            "a job that setsid'd out of the pty session leaked (escapee {escaped}): {survivors:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[allow(unsafe_code)] // getsid, and the guards under test are FFI-shaped
+    fn kill_pty_session_refuses_our_own_session_and_a_non_leader_pid() {
+        // Both pid-reuse guards, exercised against THIS process - if either fails, the test binary
+        // (and whatever shell is running it) dies, which is the loudest possible assertion.
+        // SAFETY: getsid(0) queries our own session; plain int arg.
+        let our_sid = unsafe { libc::getsid(0) };
+        assert!(our_sid > 0, "we must have a session to test the guard with");
+        super::kill_pty_session(our_sid); // guard 1: never our own session
+        let me = std::process::id() as i32;
+        // A test binary is not a session leader (its shell / cargo is), which is exactly the shape a
+        // RECYCLED pid has: alive, but not the session leader we recorded.
+        // SAFETY: same as above.
+        assert_ne!(unsafe { libc::getsid(me) }, me, "the test binary must not be a session leader");
+        super::kill_pty_session(me); // guard 2: alive but not a session leader
+        super::kill_pty_session(0); // and the pid <= 0 guard
+        super::kill_pty_session(-1);
+        // SAFETY: signal 0 only probes existence - we are still here.
+        assert_eq!(unsafe { libc::kill(me, 0) }, 0, "we must have survived every guard");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[allow(unsafe_code)] // killpg existence probe
+    fn real_pty_an_adopted_pane_is_not_reaped_before_its_ack() {
+        // Concern A of the teardown audit: the successor adopts every pane BEFORE it acknowledges, so
+        // anything that drops those panes first (a panic in startup, a failed ack write, the user
+        // quitting the new window) used to reap shells the predecessor was still guarding - killing
+        // the user's work while the old window reported the restart as cancelled. An adopted pane is
+        // therefore disarmed until `arm_teardown`.
+        let mut donor = e2e_term("i=0; while [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done");
+        let pgid = poll_term(&donor, PtyTerm::shell_pid).expect("no shell pid") as i32;
+        {
+            let heir = adopt_from(&mut donor, false, Some(true), false);
+            drop(heir); // no ACK was ever delivered
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // SAFETY: signal 0 only probes existence.
+        assert_eq!(
+            unsafe { libc::killpg(pgid, 0) },
+            0,
+            "an unacknowledged adoption must NOT reap the predecessor's shells"
+        );
+
+        // ...and once the ACK has landed, the successor DOES own them: the mirror direction, so the
+        // disarm can never silently become a leak.
+        let mut heir = adopt_from(&mut donor, false, Some(true), false);
+        heir.arm_teardown();
+        heir.kill();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let gone = loop {
+            // SAFETY: same probe.
+            if unsafe { libc::killpg(pgid, 0) } == -1 {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        };
+        drop(heir);
+        reap_probe(&donor);
+        assert!(gone, "an ARMED adopted pane must reap its session");
+    }
+
     #[test]
     #[cfg(unix)]
     #[allow(unsafe_code)] // killpg existence probe, mirroring kill_process_group
@@ -1451,6 +1733,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(25));
         };
         assert!(gone, "process group must be dead after kill()");
+        // `kill()` fires immediately after spawn, so `sh` can fork `sleep 300 &` (into its OWN group)
+        // AFTER the teardown snapshot was taken - the documented one-snapshot window. The assertion
+        // above is about the group; this keeps the race from leaking a `sleep` per run.
+        super::reap_orphaned_session(pid as u32);
     }
 
     #[test]
@@ -1475,9 +1761,41 @@ mod tests {
             0,
             "handed-off group must STILL be alive after kill() + Drop"
         );
-        // Clean up: nothing else will, precisely because we disarmed the teardown.
-        // SAFETY: thin FFI to killpg with a checked pid.
-        unsafe { libc::killpg(pid, libc::SIGKILL) };
+        // Clean up: nothing else will, precisely because we disarmed the teardown. By SESSION, not by
+        // group - `sh` puts `sleep 300 &` in its own process group, so the killpg this used to do left
+        // one `sleep` behind on every run. The audited leak, in the suite's own cleanup.
+        super::reap_orphaned_session(pid as u32);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[allow(unsafe_code)] // kill(pid, 0) existence probe
+    fn a_pane_that_could_not_be_adopted_is_reaped_not_leaked() {
+        // The one handoff branch that can strand a shell with NO owner at all: `PtyTerm::adopt` fails
+        // (its `dup` of the handed-over master is lost with it), the successor falls back to a fresh
+        // shell - and the predecessor disarms EVERY pane anyway the moment the ACK goes out. Nothing
+        // is left holding that session, and the state it is left in is reproduced here exactly: a
+        // disarmed pane, dropped, with a job that ignores TERM/HUP still running under it.
+        let mut donor = interactive_zsh();
+        let shell = poll_term(&donor, PtyTerm::shell_pid).expect("no shell pid");
+        std::thread::sleep(std::time::Duration::from_millis(700)); // reach the prompt
+        donor.send(STUBBORN_JOB);
+        let kids = wait_for_descendants(shell, |kids| !kids.is_empty());
+        assert!(!kids.is_empty(), "the probe job never started");
+        let pids: Vec<u32> = kids.iter().map(|&(p, _, _)| p).collect();
+
+        donor.mark_handed_off(); // the fd moved on: this pane must not reap anything
+        drop(donor);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        // SAFETY: signal 0 only probes existence.
+        assert!(
+            pids.iter().all(|&p| unsafe { libc::kill(p as i32, 0) } == 0),
+            "losing the pane is not a reap - that is precisely why the branch has to ask for one"
+        );
+
+        super::reap_orphaned_session(shell);
+        let survivors = survivors_of(&pids);
+        assert!(survivors.is_empty(), "an unadoptable pane's session leaked: {survivors:?}");
     }
 
     #[test]
