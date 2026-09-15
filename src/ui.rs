@@ -1029,27 +1029,27 @@ pub(crate) fn render_grid(
     // Clickable links: when active (enabled + configured modifier held, or no modifier), underline
     // the link under the pointer and open it on click. Kept off the selection path so plain drags
     // still select text.
-    let mut link_underline: Option<(f32, f32, f32)> = None; // (x0, x1, y)
+    let mut link_underlines: Vec<(f32, f32, f32)> = Vec::new(); // (x0, x1, y) per wrapped row
     if link_active
         && let Some(p) = ui.input(|i| i.pointer.hover_pos())
         && rect.contains(p)
     {
         let row = (((p.y - origin.y) / ch) as usize).min(snap.rows.saturating_sub(1));
-        let row_text: String = (0..snap.cols).map(|c| snap.cells[row * snap.cols + c].c).collect();
         let col = (((p.x - origin.x) / cw) as usize).min(snap.cols.saturating_sub(1));
-        if let Some(link) = crate::links::find_in_row(&row_text)
-            .into_iter()
-            .find(|l| col >= l.start && col < l.start + l.len)
-        {
-            link_underline = Some((
-                origin.x + link.start as f32 * cw,
-                origin.x + (link.start + link.len) as f32 * cw,
-                origin.y + (row as f32 + 1.0) * ch - 1.5,
-            ));
+        let rows: Vec<String> = (0..snap.rows)
+            .map(|r| (0..snap.cols).map(|c| snap.cells[r * snap.cols + c].c).collect())
+            .collect();
+        if let Some(link) = crate::links::link_at(&rows, row, col) {
+            link_underlines.extend(link.spans.iter().map(|s| {
+                (
+                    origin.x + s.col as f32 * cw,
+                    origin.x + (s.col + s.len) as f32 * cw,
+                    origin.y + (s.row as f32 + 1.0) * ch - 1.5,
+                )
+            }));
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             if resp.clicked() {
-                let text: String = row_text.chars().skip(link.start).take(link.len).collect();
-                crate::links::open(&text, link.kind, term.cwd().as_deref());
+                crate::links::open(&link.text, link.kind, term.cwd().as_deref());
             }
         }
     }
@@ -1178,8 +1178,8 @@ pub(crate) fn render_grid(
         );
     }
 
-    // Underline the hovered (command-held) link.
-    if let Some((x0, x1, y)) = link_underline {
+    // Underline the hovered (command-held) link, one segment per row it wraps over.
+    for (x0, x1, y) in link_underlines {
         painter.hline(x0..=x1, y, egui::Stroke::new(1.0, fade(colors::accent())));
     }
 

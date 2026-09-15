@@ -2064,6 +2064,38 @@ mod tests {
             .collect()
     }
 
+    /// Full-width rows (no trailing trim) - what the renderer hands the link hit-test.
+    fn snap_rows_padded(term: &PtyTerm) -> Vec<String> {
+        let snap = term.grid_snapshot();
+        snap.cells.chunks(snap.cols).map(|r| r.iter().map(|c| c.c).collect()).collect()
+    }
+
+    #[test]
+    fn real_pty_a_path_wrapped_by_the_terminal_is_still_one_link() {
+        // Grounds the rule `links::link_at` keys on: when the pty wraps a line, the last column of
+        // the first row really does hold a glyph and the tail really does start at column 0. Half a
+        // path was clickable before this - a narrow window broke every long link.
+        let path = "/private/tmp/claude/scratchpad/og/scrobble-start.png";
+        let term = e2e_term_sized(
+            24,
+            6,
+            &format!("printf '{path}'; i=0; while [ $i -lt 40 ]; do sleep 1; i=$((i+1)); done"),
+        );
+        assert!(
+            poll_term(&term, |t| snap_rows(t)[0].starts_with("/private").then_some(())).is_some(),
+            "the probe never printed its path"
+        );
+        let rows = snap_rows_padded(&term);
+        assert_eq!(rows[0].chars().count(), 24, "rows arrive padded to the full width");
+        assert!(rows[0].chars().next_back().is_some_and(|c| c != ' '), "the wrap fills column 23");
+        assert!(rows[1].starts_with("tchpad/og"), "the tail continues at column 0");
+
+        let hit = crate::links::link_at(&rows, 1, 3).expect("the tail must resolve to a link");
+        assert_eq!(hit.text, path, "hovering the tail must yield the whole path");
+        assert_eq!(hit.spans.len(), 3, "the path covers three rows at 24 columns");
+        reap_probe(&term);
+    }
+
     #[test]
     fn real_pty_a_replayed_screen_keeps_every_row_where_it_was() {
         // The "only the last line came back?" question. Content is placed at rows 10-12 of a 24-row

@@ -77,6 +77,96 @@ pub(crate) fn find_in_row(text: &str) -> Vec<Link> {
     out
 }
 
+/// One row's slice of a link, in character columns.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LinkSpan {
+    pub(crate) row: usize,
+    pub(crate) col: usize,
+    pub(crate) len: usize,
+}
+
+/// The link under the pointer, joined back together across the rows it wraps over.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HitLink {
+    pub(crate) kind: LinkKind,
+    pub(crate) text: String,
+    pub(crate) spans: Vec<LinkSpan>,
+}
+
+/// A row with a glyph in its last column runs on into the next row - either the terminal
+/// hard-wrapped it (the tail starts at column 0) or a TUI wrapped it itself (the tail starts
+/// after its own indent). Both leave the last column filled.
+fn overflows(row: &str) -> bool {
+    row.chars().next_back().is_some_and(|c| !c.is_whitespace() && c != '\0')
+}
+
+fn blank(row: &str) -> bool {
+    row.chars().all(|c| c.is_whitespace() || c == '\0')
+}
+
+/// One row's contribution to the joined line: where it sits on the grid, and where its text
+/// starts within that line.
+struct Piece {
+    span: LinkSpan,
+    joined_start: usize,
+}
+
+/// Find the link at `(row, col)` of a visible grid, following the wrap in both directions so a
+/// path or URL broken over two rows is one link. `rows` holds every visible row, each padded to
+/// the full column count. Continuation rows contribute their text minus the leading indent.
+pub(crate) fn link_at(rows: &[String], row: usize, col: usize) -> Option<HitLink> {
+    if row >= rows.len() || blank(&rows[row]) {
+        return None;
+    }
+    let mut first = row;
+    while first > 0 && overflows(&rows[first - 1]) {
+        first -= 1;
+    }
+    let mut last = row;
+    while overflows(&rows[last]) && last + 1 < rows.len() && !blank(&rows[last + 1]) {
+        last += 1;
+    }
+
+    let mut joined = String::new();
+    let mut pieces: Vec<Piece> = Vec::new();
+    for (i, text) in rows[first..=last].iter().enumerate() {
+        let indent =
+            if i == 0 { 0 } else { text.chars().take_while(|c| c.is_whitespace()).count() };
+        let span = LinkSpan {
+            row: first + i,
+            col: indent,
+            len: text.chars().count().saturating_sub(indent),
+        };
+        let joined_start = joined.chars().count();
+        joined.extend(text.chars().skip(indent));
+        pieces.push(Piece { span, joined_start });
+    }
+
+    let hit = pieces.iter().find_map(|p| {
+        (p.span.row == row && col >= p.span.col && col < p.span.col + p.span.len)
+            .then(|| p.joined_start + (col - p.span.col))
+    })?;
+    let link =
+        find_in_row(&joined).into_iter().find(|l| hit >= l.start && hit < l.start + l.len)?;
+    let spans = pieces
+        .iter()
+        .filter_map(|p| {
+            let lo = link.start.max(p.joined_start);
+            let hi = (link.start + link.len).min(p.joined_start + p.span.len);
+            (lo < hi).then(|| LinkSpan {
+                row: p.span.row,
+                col: p.span.col + (lo - p.joined_start),
+                len: hi - lo,
+            })
+        })
+        .collect();
+    Some(HitLink {
+        kind: link.kind,
+        text: joined.chars().skip(link.start).take(link.len).collect(),
+        spans,
+    })
+}
+
 /// Resolve a clicked link to what should be handed to `open`: URLs pass through; paths are
 /// `~`-expanded and made absolute against `cwd`.
 pub(crate) fn resolve_target(text: &str, kind: LinkKind, cwd: Option<&str>, home: &str) -> String {
@@ -170,6 +260,62 @@ mod tests {
         assert_eq!(find_in_row("http://10.0.0.1:8080/x")[0].kind, LinkKind::Url);
         // Version strings don't match (only 3 dots + digits do; 1.2.3 has 2 dots).
         assert!(kinds("v1.2.3 released").is_empty());
+    }
+
+    fn grid(rows: &[&str], cols: usize) -> Vec<String> {
+        rows.iter().map(|r| format!("{r:cols$}")).collect()
+    }
+
+    #[test]
+    fn joins_a_hard_wrapped_path() {
+        // Terminal wrap: the tail starts at column 0 of the next row.
+        let rows = grid(&["see /usr/local/share/doc/very-long-na", "me.txt here"], 37);
+        let hit = link_at(&rows, 0, 10).unwrap();
+        assert_eq!(hit.text, "/usr/local/share/doc/very-long-name.txt");
+        assert_eq!(
+            hit.spans,
+            vec![LinkSpan { row: 0, col: 4, len: 33 }, LinkSpan { row: 1, col: 0, len: 6 },]
+        );
+    }
+
+    #[test]
+    fn joins_an_app_wrapped_path_across_its_indent() {
+        // A TUI that wraps its own output indents the tail; the first row is still flush right.
+        let rows = grid(&["  x /tmp/scratchpad/og/scrobble-st", "    art.png"], 34);
+        let hit = link_at(&rows, 1, 6).unwrap();
+        assert_eq!(hit.text, "/tmp/scratchpad/og/scrobble-start.png");
+        assert_eq!(
+            hit.spans,
+            vec![LinkSpan { row: 0, col: 4, len: 30 }, LinkSpan { row: 1, col: 4, len: 7 },]
+        );
+    }
+
+    #[test]
+    fn hovering_either_half_yields_the_whole_link() {
+        let rows = grid(&["https://example.com/a/very/long/pa", "  th?q=1"], 34);
+        let from_head = link_at(&rows, 0, 0).unwrap();
+        let from_tail = link_at(&rows, 1, 4).unwrap();
+        assert_eq!(from_head, from_tail);
+        assert_eq!(from_head.text, "https://example.com/a/very/long/path?q=1");
+        assert_eq!(from_head.kind, LinkKind::Url);
+    }
+
+    #[test]
+    fn a_row_that_ends_short_does_not_join() {
+        let rows = grid(&["/etc/hosts", "/tmp/other"], 20);
+        let hit = link_at(&rows, 0, 2).unwrap();
+        assert_eq!(hit.text, "/etc/hosts");
+        assert_eq!(hit.spans, vec![LinkSpan { row: 0, col: 0, len: 10 }]);
+    }
+
+    #[test]
+    fn unwrapped_link_keeps_its_single_row_span() {
+        let rows = grid(&["open /usr/local/bin/x now"], 40);
+        let hit = link_at(&rows, 0, 7).unwrap();
+        assert_eq!(hit.text, "/usr/local/bin/x");
+        assert_eq!(hit.spans, vec![LinkSpan { row: 0, col: 5, len: 16 }]);
+        assert!(link_at(&rows, 0, 0).is_none()); // "open" is not a link
+        assert!(link_at(&rows, 1, 0).is_none()); // out of range
     }
 
     #[test]
