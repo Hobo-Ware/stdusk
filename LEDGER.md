@@ -2109,6 +2109,31 @@ THIS process - a regression kills the test binary, the loudest possible assertio
 - `pty_victims` costs ~10ms per pane (one process-table refresh + a `getsid` per process, measured
   over 456 processes). Teardown-only; never call it from a frame path.
 
+## Wrapped links are one link (post-1.6.6; 350 tests)
+Reported: a long path that broke over two rows was only half clickable, and widening the window
+"fixed" it. The hit-test read ONE grid row (`links::find_in_row(row_text)`), so the tail on the
+next row was a separate (usually unrecognised) string.
+
+- **`links::link_at(rows, row, col)`** now joins the rows a line wraps over, finds links in the
+  joined text, and maps the match back to a per-row span list (`HitLink { kind, text, spans }`).
+  The renderer underlines every span and opens the joined text.
+- **The rule it keys on: a row whose LAST column holds a glyph runs on into the next row.** That
+  covers both wrap sources with one test, which matters because the reported case is the second:
+  - the terminal hard-wrapped (tail starts at column 0). MEASURED on a real pty in
+    `real_pty_a_path_wrapped_by_the_terminal_is_still_one_link` - a 51-char path in a 24-column pty
+    fills column 23 and continues at column 0 of the next row, three rows in total.
+  - a TUI wrapped its own output and INDENTED the tail (Claude Code's `● Reading <path>` block in
+    the report: the continuation sits under the bullet, so it can never start at column 0).
+    Continuation rows therefore contribute their text minus the leading indent.
+- **Known cost of the rule**: a link that ends flush at the last column followed by an unrelated
+  indented line joins into one bogus link. Rare (text ending exactly on the last column is nearly
+  always wrapped) and the damage is a wrong underline + a dead `open`. Preferred over a
+  WRAPLINE-flag-only join, which would miss the app-wrapped case entirely.
+- Cost per hovered frame: the visible rows are built as strings (~50 x 200 chars) instead of one
+  row. Only while the pointer is over a pane with links active; not the per-cell path.
+- Tests +6 (344 -> 350): 5 pure cases in `links.rs` (hard wrap, indented app wrap, hover from
+  either half, no-join when the row ends short, single-row regression) + the real-pty one above.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
