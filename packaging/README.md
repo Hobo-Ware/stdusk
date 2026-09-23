@@ -34,7 +34,7 @@ brew install hobo-ware/tap/stdusk   # installs to /Applications + links the `std
 
 The release workflow signs + notarizes **automatically when the five GitHub secrets below are
 configured**, and skips both (with a log line) when they aren't. Unsigned builds ship ad-hoc
-signed (Rust's linker default) and the generated cask carries a `postflight` that strips
+signed (Rust's linker default) and the generated cask carries a `postflight_steps` block that strips
 `com.apple.quarantine` so Gatekeeper doesn't hard-block the GUI launch; signed + notarized
 builds get a cask **without** that postflight (the workflow bakes the difference in via the
 `sign` step's `signed` output). A manually-downloaded unsigned `.app` (not via brew) may still

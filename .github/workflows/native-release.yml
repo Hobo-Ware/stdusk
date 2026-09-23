@@ -127,11 +127,10 @@ jobs:
             POSTFLIGHT=""
           else
             POSTFLIGHT='
-            postflight do
+            postflight_steps do
               # Ad-hoc signed, not notarized: strip quarantine so Gatekeeper does not hard-block
               # the GUI launch. Signed releases omit this block (baked by the release workflow).
-              system_command "/usr/bin/xattr",
-                             args: ["-dr", "com.apple.quarantine", "#{appdir}/stdusk.app"]
+              run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/stdusk.app"]
             end
           '
           fi
@@ -146,6 +145,8 @@ jobs:
             name "stdusk"
             desc "Native Rust quake terminal with a real GUI tab bar and ambient AI-CLI awareness"
             homepage "https://github.com/Hobo-Ware/stdusk"
+
+            depends_on :macos
 
             app "stdusk.app"
             binary "#{appdir}/stdusk.app/Contents/MacOS/stdusk"

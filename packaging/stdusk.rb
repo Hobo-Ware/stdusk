@@ -12,16 +12,17 @@ cask "stdusk" do
   desc "Native Rust quake terminal with a real GUI tab bar and ambient AI-CLI awareness"
   homepage "https://github.com/Hobo-Ware/stdusk"
 
+  depends_on :macos
+
   app "stdusk.app"
   binary "#{appdir}/stdusk.app/Contents/MacOS/stdusk"
 
   # Only present on UNSIGNED builds: the workflow omits this block when the release was
   # Developer ID signed + notarized (secrets configured - see packaging/README.md).
-  postflight do
+  postflight_steps do
     # Ad-hoc signed, not notarized: strip quarantine so Gatekeeper doesn't hard-block the GUI
     # launch.
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/stdusk.app"]
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/stdusk.app"]
   end
 
   zap trash: "~/.config/stdusk"
