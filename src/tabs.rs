@@ -246,6 +246,21 @@ pub(crate) fn new_tab_index(pins: &[bool], from: usize) -> usize {
     right_of.max(pinned)
 }
 
+/// Where a new tab goes (`terminal.new_tab_position` / `terminal.plus_button_position`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NewTabPosition {
+    AfterCurrent,
+    End,
+}
+
+/// Unknown values fall back to `AfterCurrent`.
+pub(crate) fn new_tab_position(s: &str) -> NewTabPosition {
+    match s.to_ascii_lowercase().as_str() {
+        "end" | "last" => NewTabPosition::End,
+        _ => NewTabPosition::AfterCurrent,
+    }
+}
+
 pub(crate) fn pin_target(pins: &[bool], i: usize) -> (bool, usize) {
     let pin = !pins[i];
     let count = (0..pins.len()).filter(|&j| if j == i { pin } else { pins[j] }).count();
@@ -285,6 +300,7 @@ pub(crate) fn aggregate_cmd(
 /// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
 pub(crate) enum TabAction {
     New,
+    NewFromPlusButton,
     NewWithProfile(usize), // index into cfg.profiles
     Duplicate(usize),
     Rename(usize),
@@ -461,9 +477,17 @@ fn shell_quote(s: &str) -> String {
 
 impl Stdusk {
     pub(crate) fn new_tab(&mut self, ctx: &egui::Context) {
+        self.new_tab_at(new_tab_position(&self.cfg.terminal.new_tab_position), ctx);
+    }
+
+    fn new_tab_at(&mut self, pos: NewTabPosition, ctx: &egui::Context) {
         let cwd = self.tabs.get(self.active).and_then(|t| t.focused_term().cwd());
         let tab = spawn_tab(&self.cfg, ctx, cwd);
-        self.insert_tab(tab, self.active);
+        let from = match pos {
+            NewTabPosition::AfterCurrent => self.active,
+            NewTabPosition::End => self.tabs.len(),
+        };
+        self.insert_tab(tab, from);
     }
 
     /// Place a freshly created tab just right of `from` and focus it. Indices at or after the
@@ -1093,7 +1117,7 @@ impl Stdusk {
                     let plus_tip = ui::shortcut_tip("New tab", &self.cfg.hotkeys.new_tab);
                     let plus = icon_button(ui, icons::PLUS, &plus_tip);
                     if plus.clicked() {
-                        action = Some(TabAction::New);
+                        action = Some(TabAction::NewFromPlusButton);
                     }
                     // Right-click the "+" for a per-profile spawn menu (only when configured).
                     if !self.cfg.profiles.is_empty() {
@@ -1194,6 +1218,10 @@ impl Stdusk {
     pub(crate) fn apply_tab_action(&mut self, action: Option<TabAction>, ctx: &egui::Context) {
         match action {
             Some(TabAction::New) => self.new_tab(ctx),
+            Some(TabAction::NewFromPlusButton) => {
+                let pos = new_tab_position(&self.cfg.terminal.plus_button_position);
+                self.new_tab_at(pos, ctx);
+            }
             Some(TabAction::NewWithProfile(pi)) => {
                 if let Some(p) = self.cfg.profiles.get(pi).cloned() {
                     let tab = spawn_profile_tab(&self.cfg, ctx, &p);
@@ -1271,6 +1299,30 @@ mod tests {
         assert_eq!(new_tab_index(&[true, true], 0), 2); // all pinned
         // A stale/out-of-range index must not panic or produce an out-of-bounds insert.
         assert_eq!(new_tab_index(&[false, false], 9), 2);
+    }
+
+    #[test]
+    fn plus_button_opens_at_the_end_and_cmd_t_after_current_by_default() {
+        let cfg = crate::config::Config::default();
+        assert_eq!(new_tab_position(&cfg.terminal.plus_button_position), NewTabPosition::End);
+        assert_eq!(new_tab_position(&cfg.terminal.new_tab_position), NewTabPosition::AfterCurrent);
+        assert_eq!(new_tab_index(&[false, false, false], 3), 3);
+        assert_eq!(new_tab_index(&[true, true], 2), 2);
+    }
+
+    #[test]
+    fn new_tab_position_parse() {
+        let cases = [
+            ("end", NewTabPosition::End),
+            ("End", NewTabPosition::End),
+            ("last", NewTabPosition::End),
+            ("after_current", NewTabPosition::AfterCurrent),
+            ("nonsense", NewTabPosition::AfterCurrent),
+            ("", NewTabPosition::AfterCurrent),
+        ];
+        for (input, want) in cases {
+            assert_eq!(new_tab_position(input), want, "input {input:?}");
+        }
     }
 
     /// Adopt `st` with ONE handed-over pane whose metadata carries `cwd`, exactly the way a

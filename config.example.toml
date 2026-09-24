@@ -59,6 +59,8 @@ minimum_contrast = 4.0    # nudge text toward black/white to meet this WCAG rati
 right_click = "menu"      # right-click on a pane: "menu" (context menu) | "paste" | "clipboard"
                           # (copy the selection, else paste); paste/clipboard hold >=250ms for the menu
 focus_follows_mouse = false # hovering a split pane focuses it without clicking
+new_tab_position = "after_current" # Cmd+T, menus, palette: "after_current" | "end"
+plus_button_position = "end"       # the tab bar's + button: "end" | "after_current"
 
 [session]
 restore = true            # reopen last session's tabs (cwd/title/color) on launch

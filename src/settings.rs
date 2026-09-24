@@ -9,7 +9,7 @@ use eframe::egui;
 
 use crate::colors::{self, Theme};
 use crate::ui::{self, icons};
-use crate::{Stdusk, config, sync, terminal, themes};
+use crate::{Stdusk, config, sync, tabs, terminal, themes};
 
 /// Left nav width (outer, incl. margins).
 const NAV_W: f32 = 184.0;
@@ -1237,6 +1237,29 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 crate::widgets::toggle_switch(ui, &mut t.warn_on_close_running);
             },
         );
+        for (name, desc, value) in [
+            (
+                "New tab position",
+                "Where Cmd+T, menus and the palette open a tab",
+                &mut t.new_tab_position,
+            ),
+            (
+                "+ button position",
+                "Where the tab bar's + button opens a tab",
+                &mut t.plus_button_position,
+            ),
+        ] {
+            row(ui, name, desc, |ui| {
+                ui.horizontal(|ui| {
+                    for (label, v) in [("After current", "after_current"), ("End", "end")] {
+                        let selected = tabs::new_tab_position(value) == tabs::new_tab_position(v);
+                        if crate::widgets::chip(ui, label, selected).clicked() {
+                            *value = v.into();
+                        }
+                    }
+                });
+            });
+        }
     });
 
     subheading(ui, "Paste");

@@ -196,6 +196,8 @@ pub(crate) struct Terminal {
     pub(crate) minimum_contrast: f32, // WCAG ratio text is nudged to meet, 1 (off) ..= 21
     pub(crate) right_click: String, // "menu" | "paste" | "clipboard" (copy selection, else paste)
     pub(crate) focus_follows_mouse: bool, // hovering a pane focuses it (no click)
+    pub(crate) new_tab_position: String, // Cmd+T / menus / palette: "after_current" | "end"
+    pub(crate) plus_button_position: String, // the tab bar's + button: "end" | "after_current"
 }
 
 impl Default for Appearance {
@@ -259,6 +261,8 @@ impl Default for Terminal {
             minimum_contrast: 4.0,
             right_click: "menu".into(),
             focus_follows_mouse: false,
+            new_tab_position: "after_current".into(),
+            plus_button_position: "end".into(),
         }
     }
 }
@@ -429,6 +433,8 @@ mod tests {
         assert_eq!(c.terminal.minimum_contrast, 4.0); // Tabby's default; 1.0 = off
         assert_eq!(c.terminal.right_click, "menu"); // Tabby default
         assert!(!c.terminal.focus_follows_mouse); // Tabby default
+        assert_eq!(c.terminal.new_tab_position, "after_current");
+        assert_eq!(c.terminal.plus_button_position, "end");
     }
 
     #[test]
