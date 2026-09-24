@@ -2134,6 +2134,27 @@ next row was a separate (usually unrecognised) string.
 - Tests +6 (344 -> 350): 5 pure cases in `links.rs` (hard wrap, indented app wrap, hover from
   either half, no-join when the row ends short, single-row regression) + the real-pty one above.
 
+## Tab contrast, new-tab placement, close focus (post-1.6.7; 356 tests)
+Three separate reports, three commits.
+
+- **Active tab contrast.** On light themes the active fill (`bg * 0.90`) sat 3% below the strip
+  (`bg * 0.93`), contrast ~1.07 (iceberg-light), so focused/unfocused tabs looked the same. New
+  `colors::active_tab()`: light themes blend bg 75% toward white (strip drops to `bg * 0.89`), dark
+  themes blend bg 14% toward fg, floored with `ensure_contrast` because dim-fg schemes (lavandula,
+  encom) barely move. `active_tab_stands_clear_of_the_strip_on_every_scheme` asserts >= 1.25 on the
+  whole pack (iceberg-light now ~1.46, one-half-dark ~1.65 from 1.39). `elevated()` is unchanged
+  (menus still use it). Screenshot-verified on iceberg-light + one-half-dark.
+- **New-tab placement.** `terminal.new_tab_position` (Cmd+T, menus, palette, pane menu, second-launch
+  requests; default `after_current`) and `terminal.plus_button_position` (the + button; default
+  `end`). The + button emits `TabAction::NewFromPlusButton`. `End` reuses `new_tab_index` with
+  `from = len`. Both are chips in Settings > Terminal.
+- **Close focus.** `Stdusk.focus_history` (tab ids, newest first) is refreshed at frame end via
+  `tabs::record_focus`; `close_tab` picks the index with `tabs::active_after_close`: closing the
+  active tab goes to the most recently focused tab still open, closing any other tab keeps the
+  current one (it used to shift to the neighbor when the closed tab sat left of it). The manual
+  index fix-up in `handle_shell_exits` went away since `close_tab` now does it. `prev_active`
+  (Cmd+O) is still its own index-based slot.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
