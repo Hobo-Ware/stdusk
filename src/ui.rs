@@ -756,7 +756,7 @@ const TAB_SLOT_W: f32 = 18.0; // trailing slot: close-x on hover, CLI badge whil
 const TAB_GAP: f32 = 6.0;
 const TAB_MINI_W: f32 = 15.0; // split-layout preview glyph
 
-/// Flat Tabby-style tab: dark bg (elevated when active), optional per-tab colored underline
+/// Flat Tabby-style tab: strip bg (lifted `active_tab` fill when active), optional per-tab colored underline
 /// flush with the strip's bottom edge, a split-layout preview glyph, and progress as a thin bar
 /// on the TOP edge. The TRAILING (right) slot exists only while relevant: it shows the CLI
 /// brand badge while an AI CLI runs in the tab, and hovering the tab swaps it for the close-x
@@ -812,7 +812,7 @@ pub(crate) fn draw_tab(
         p.rect_filled(
             rect,
             egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, // top-rounded tab shape
-            colors::elevated(),
+            colors::active_tab(),
         );
     }
     let mut x = rect.left() + TAB_PAD_X;

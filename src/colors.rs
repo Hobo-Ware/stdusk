@@ -185,8 +185,25 @@ pub(crate) fn elevated() -> Color32 {
     shade(theme().bg, if is_dark() { 1.28 } else { 0.90 }) // active-tab bg, set off from the bar
 }
 pub(crate) fn titlebar() -> Color32 {
-    shade(theme().bg, if is_dark() { 0.72 } else { 0.93 }) // tab-bar strip, separated from the body
+    titlebar_in(&theme())
 }
+/// Tab-bar strip, separated from the body.
+fn titlebar_in(t: &Theme) -> Color32 {
+    shade(t.bg, if theme_is_dark(t) { 0.72 } else { 0.89 })
+}
+/// Active-tab fill, lifted above the strip on both theme kinds: toward fg on dark (floored,
+/// since dim-fg schemes barely move), toward white on light.
+pub(crate) fn active_tab() -> Color32 {
+    active_tab_in(&theme())
+}
+fn active_tab_in(t: &Theme) -> Color32 {
+    if theme_is_dark(t) {
+        ensure_contrast(blend(t.bg, t.fg, 0.14), titlebar_in(t), ACTIVE_TAB_MIN_CONTRAST)
+    } else {
+        blend(t.bg, Color32::WHITE, 0.75)
+    }
+}
+const ACTIVE_TAB_MIN_CONTRAST: f32 = 1.25;
 pub(crate) fn border() -> Color32 {
     shade(theme().bg, if is_dark() { 1.6 } else { 0.78 }) // hairline divider
 }
@@ -277,6 +294,11 @@ pub(crate) fn tab_colors() -> [Color32; 12] {
         rgb(0xc6, 0x78, 0xdd), // purple
         rgb(0xff, 0x79, 0xc6), // pink
     ]
+}
+
+fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
+    let l = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+    Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
 }
 
 fn shade(c: Color32, factor: f32) -> Color32 {
@@ -443,6 +465,14 @@ mod tests {
         }
         for t in [one_half_dark(), one_half_light(), dracula(), tokyo_night()] {
             assert!(contrast_ratio(legible_dim(&t), t.bg) >= 2.99);
+        }
+    }
+
+    #[test]
+    fn active_tab_stands_clear_of_the_strip_on_every_scheme() {
+        for (name, t) in crate::themes::all_schemes() {
+            let ratio = contrast_ratio(active_tab_in(t), titlebar_in(t));
+            assert!(ratio >= ACTIVE_TAB_MIN_CONTRAST, "{name}: active tab vs strip {ratio}");
         }
     }
 
