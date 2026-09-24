@@ -246,6 +246,33 @@ pub(crate) fn new_tab_index(pins: &[bool], from: usize) -> usize {
     right_of.max(pinned)
 }
 
+pub(crate) fn record_focus(history: &mut Vec<u64>, id: u64) {
+    if history.first() == Some(&id) {
+        return;
+    }
+    history.retain(|h| *h != id);
+    history.insert(0, id);
+}
+
+/// The active index after the tab at `closed` was removed. Closing the active tab focuses the
+/// most recently focused tab still open (`history` = ids, newest first); closing another tab
+/// keeps the same tab focused. `remaining` = tab ids after the removal (never empty).
+pub(crate) fn active_after_close(
+    closed: usize,
+    active: usize,
+    remaining: &[u64],
+    history: &[u64],
+) -> usize {
+    let last = remaining.len().saturating_sub(1);
+    if closed != active {
+        return if closed < active { active - 1 } else { active }.min(last);
+    }
+    history
+        .iter()
+        .find_map(|id| remaining.iter().position(|r| r == id))
+        .unwrap_or_else(|| active.min(last))
+}
+
 /// Where a new tab goes (`terminal.new_tab_position` / `terminal.plus_button_position`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NewTabPosition {
@@ -511,13 +538,16 @@ impl Stdusk {
                     self.closed.remove(0);
                 }
             }
+            let closed_id = tab.id;
             self.tabs.remove(i);
+            self.focus_history.retain(|id| *id != closed_id);
         }
         if self.tabs.is_empty() {
             let tab = spawn_tab(&self.cfg, ctx, None);
             self.tabs.push(tab);
         }
-        self.active = self.active.min(self.tabs.len() - 1);
+        let ids: Vec<u64> = self.tabs.iter().map(|t| t.id).collect();
+        self.active = active_after_close(i, self.active, &ids, &self.focus_history);
     }
 
     /// Apply `terminal.on_exit` to panes whose shell has exited: close the pane (tab on its
@@ -560,11 +590,7 @@ impl Stdusk {
                         tab.focused = f;
                     }
                 } else {
-                    let was_active = self.active;
                     self.close_tab(ti, ctx);
-                    if ti < was_active {
-                        self.active = was_active - 1; // removal shifted the tabs left
-                    }
                 }
             }
         }
@@ -1308,6 +1334,34 @@ mod tests {
         assert_eq!(new_tab_position(&cfg.terminal.new_tab_position), NewTabPosition::AfterCurrent);
         assert_eq!(new_tab_index(&[false, false, false], 3), 3);
         assert_eq!(new_tab_index(&[true, true], 2), 2);
+    }
+
+    #[test]
+    fn closing_the_active_tab_focuses_the_last_focused_one() {
+        // Tabs 10..=14, user went 11 -> 14 -> 12 and closes 12 (index 2).
+        let remaining = [10, 11, 13, 14];
+        assert_eq!(active_after_close(2, 2, &remaining, &[14, 11]), 3);
+        // Closed id still at the front of the history is skipped (it's gone from `remaining`).
+        assert_eq!(active_after_close(2, 2, &remaining, &[12, 11, 14]), 1);
+        // No usable history: fall back to the same slot, clamped.
+        assert_eq!(active_after_close(2, 2, &remaining, &[]), 2);
+        assert_eq!(active_after_close(4, 4, &remaining, &[99]), 3);
+    }
+
+    #[test]
+    fn closing_another_tab_keeps_the_active_one_focused() {
+        let remaining = [10, 12, 13];
+        assert_eq!(active_after_close(0, 2, &remaining, &[13, 10]), 1); // left of active: shift
+        assert_eq!(active_after_close(3, 2, &[10, 11, 12], &[12]), 2); // right of active: stays
+    }
+
+    #[test]
+    fn record_focus_keeps_most_recent_first_without_duplicates() {
+        let mut h = Vec::new();
+        for id in [1, 2, 3, 2, 2] {
+            record_focus(&mut h, id);
+        }
+        assert_eq!(h, vec![2, 3, 1]);
     }
 
     #[test]

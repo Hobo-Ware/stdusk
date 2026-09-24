@@ -65,6 +65,7 @@ struct Stdusk {
     tabs: Vec<Tab>,
     active: usize,
     prev_active: usize, // previously active tab index, for toggle-last-tab (Cmd+O)
+    focus_history: Vec<u64>, // tab ids, most recently focused first; picks the tab after a close
     cfg: Config,
     hotkey_mgr: GlobalHotKeyManager, // kept alive so the registration persists
     registered_hotkey: String, // the hotkey string currently registered (live re-registration)
@@ -369,6 +370,7 @@ impl Stdusk {
             tabs,
             active,
             prev_active: 0,
+            focus_history: Vec::new(),
             cfg,
             hotkey_mgr: mgr,
             registered_hotkey,
@@ -1369,6 +1371,9 @@ impl eframe::App for Stdusk {
         // index-based `lastTabIndex`; a stale index after closes clamps to tab 1 at use).
         if self.active != active_at_frame_start {
             self.prev_active = active_at_frame_start;
+        }
+        if let Some(id) = self.tabs.get(self.active).map(|t| t.id) {
+            tabs::record_focus(&mut self.focus_history, id);
         }
         // Broadcast mode is bound to the CURRENT tab: switching away (any path - click, keybind,
         // palette, close) exits it, so keys can never fan out in a tab you're not looking at.
