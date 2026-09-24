@@ -170,3 +170,49 @@ jobs:
           bundle into /Applications (Spotlight-findable) and links \`stdusk\` onto your PATH.
           Drop it into the tap at \`Casks/stdusk.rb\`." \
             --verify-tag
+
+      # Tap update, OPTIONAL: runs only when the HOMEBREW_TAP_DEPLOY_KEY secret (a write deploy
+      # key on Hobo-Ware/homebrew-tap, see packaging/README.md) is set; github.token cannot push
+      # to another repo. Without it the cask stays a release asset to copy over by hand.
+      - name: Check tap deploy key
+        id: tapkey
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_DEPLOY_KEY" ]; then
+            echo "HOMEBREW_TAP_DEPLOY_KEY not configured - skipping the tap update." \
+                 "Setup: packaging/README.md."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.tapkey.outputs.present == 'true'
+        with:
+          repository: Hobo-Ware/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Update Homebrew tap
+        if: steps.tapkey.outputs.present == 'true'
+        run: |
+          VERSION="${{ steps.v.outputs.version }}"
+          CASK="tap/Casks/stdusk.rb"
+          CURRENT=$(sed -n 's/^  version "\(.*\)"$/\1/p' "$CASK")
+          # A manual re-run for an older tag must not roll the tap back.
+          NEWEST=$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -1)
+          if [ -n "$CURRENT" ] && [ "$NEWEST" != "$VERSION" ]; then
+            echo "Tap already ships $CURRENT (newer than $VERSION) - leaving it alone."
+            exit 0
+          fi
+          cp dist/stdusk.rb "$CASK"
+          cd tap
+          if git diff --quiet; then
+            echo "Tap cask already matches this build."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "stdusk ${VERSION}"
+          git push origin HEAD

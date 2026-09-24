@@ -13,6 +13,22 @@ onto your PATH).
    Release, and generates the cask with the real `sha256`. Two assets:
    - `stdusk-<version>-universal.app.zip` - the app bundle
    - `stdusk.rb` - the cask, ready for the tap
+4. The same workflow commits `stdusk.rb` to `Hobo-Ware/homebrew-tap` as `stdusk <version>`, so
+   `brew upgrade` sees the release right away. Needs the tap deploy key below; without it the step
+   is skipped and the cask has to be copied over by hand. A manual re-run for an older tag never
+   rolls the tap back.
+
+### Tap deploy key (one-time)
+
+`github.token` can't push to another repo, so the release job pushes with a deploy key scoped to
+the tap alone:
+
+```sh
+ssh-keygen -t ed25519 -N "" -C "stdusk release -> homebrew-tap" -f tap_key
+gh repo deploy-key add tap_key.pub -R Hobo-Ware/homebrew-tap -t "stdusk release" -w
+gh secret set HOMEBREW_TAP_DEPLOY_KEY -R Hobo-Ware/stdusk < tap_key
+rm tap_key tap_key.pub
+```
 
 ## Homebrew tap (one-time)
 
