@@ -2166,11 +2166,11 @@ chip. UX was picked from a clickable mockup (layout A "repo chip" + palette entr
 - **Assignment.** `repo::repo_root` walks up to the nearest `.git`; a worktree's `.git` file
   (`gitdir: <main>/.git/worktrees/<name>`, absolute or relative, verified on real worktrees) folds
   into the main repo, any other `.git` file (submodule) is its own repo. Paths are normalized
-  lexically, not canonicalized (`/var` vs `/private/var` would split groups). Cmd+T, Duplicate and
-  Restart inherit the source tab's group; restore/reopen/handoff derive it from the saved `repo`
-  (new `SavedTab.repo`) or the saved cwd. A repo tab keeps its group through later `cd`s. An
-  `Other` tab joins the first repo its shell enters (`Tab::join_repo_from_cwd`, re-probed only when
-  the cwd string changes), with a "Grouped under X" toast when it's the active tab.
+  lexically, not canonicalized (`/var` vs `/private/var` would split groups). A tab follows its
+  focused pane's cwd (`Tab::follow_cwd_repo` + `repo::regroup`, re-probed only when the cwd string
+  changes): `cd` into another repo moves it there, a folder outside any repo moves it to `Other`,
+  with a "Moved to X" toast for the active tab. This replaced the mockup's "tab stays put" pick
+  after real use (1.7.2). `SavedTab.repo` only seeds the group until the cwd is known.
 - **Scoped actions.** Cmd+1..9, Ctrl+Tab, palette Next/Prev, the Tabs popup, drag-reorder and
   Cmd+Shift+arrows act on visible tabs only (`repo::neighbor` swaps across hidden tabs; pinned tabs
   stay a global prefix so the pin check still holds). Close Others/Left/Right keep other repos'
