@@ -1000,6 +1000,7 @@ pub(crate) struct GridStyle {
     pub(crate) blink: bool,       // blink the cursor (focused pane only)
     pub(crate) ligatures: bool,   // draw symbol ligatures
     pub(crate) min_contrast: f32, // nudge cell fg to this WCAG ratio vs its bg; <=1 = off
+    pub(crate) app_mouse: bool,   // the app gets pointer reports: no local selection or links
 }
 
 pub(crate) fn render_grid(
@@ -1015,7 +1016,8 @@ pub(crate) fn render_grid(
     style: GridStyle,
     search_marks: &[crate::search::Match], // all find-bar matches (empty when the bar is closed)
 ) -> egui::Response {
-    let GridStyle { cursor, dimmed, link_active, blink, ligatures, min_contrast } = style;
+    let GridStyle { cursor, dimmed, link_active, blink, ligatures, min_contrast, app_mouse } =
+        style;
     // BOLD cells switch to the real bold face when one exists; metrics stay derived from the
     // regular face (a bold glyph may run a hair wider - Tabby-equivalent tradeoff).
     let cell_font = |bold: bool| if bold { bold_font.unwrap_or(font) } else { font };
@@ -1031,6 +1033,7 @@ pub(crate) fn render_grid(
     // still select text.
     let mut link_underlines: Vec<(f32, f32, f32)> = Vec::new(); // (x0, x1, y) per wrapped row
     if link_active
+        && !app_mouse
         && let Some(p) = ui.input(|i| i.pointer.hover_pos())
         && rect.contains(p)
     {
@@ -1053,28 +1056,30 @@ pub(crate) fn render_grid(
             }
         }
     }
-    if resp.triple_clicked() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let (line, col, _) = hit(p);
-            term.select_line(line, col);
+    if !app_mouse {
+        if resp.triple_clicked() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let (line, col, _) = hit(p);
+                term.select_line(line, col);
+            }
+        } else if resp.double_clicked() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let (line, col, _) = hit(p);
+                term.select_word(line, col);
+            }
+        } else if resp.drag_started() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let (line, col, right) = hit(p);
+                term.start_selection(line, col, right);
+            }
+        } else if resp.dragged() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let (line, col, right) = hit(p);
+                term.update_selection(line, col, right);
+            }
+        } else if resp.clicked() {
+            term.clear_selection();
         }
-    } else if resp.double_clicked() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let (line, col, _) = hit(p);
-            term.select_word(line, col);
-        }
-    } else if resp.drag_started() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let (line, col, right) = hit(p);
-            term.start_selection(line, col, right);
-        }
-    } else if resp.dragged() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let (line, col, right) = hit(p);
-            term.update_selection(line, col, right);
-        }
-    } else if resp.clicked() {
-        term.clear_selection();
     }
 
     // Unfocused panes fade their CONTENT (Tabby-style) by scaling its alpha down, leaving the
