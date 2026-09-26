@@ -73,6 +73,20 @@ cargo run -- --screenshot /tmp/x.png    # visual-test harness: demo tabs -> PNG 
 The screenshot harness (`--screenshot`) renders representative demo tabs and saves a
 PNG so UI changes are self-verified without a user round-trip. See `ui.md`.
 
+## Showcase page
+
+`site/index.html` (deployed to stdusk.hoboware.dev on push to `main`) and the README's
+"What it does" list are the public face. When work is done, check both against what shipped:
+
+- A user-visible feature, a new default hotkey, or a changed count (color schemes, detected
+  AI CLIs) gets added or corrected there, in the same branch.
+- Removed or renamed behavior comes off; never leave a claim the app no longer backs.
+- The nav version pill tracks `Cargo.toml`'s version on every release bump.
+- Screenshots come from the `--screenshot` harness run under an isolated `--state-dir`, never a
+  personal session, and are compressed per the global PNG rules before committing.
+- Internal refactors, tests and fixes to things the page never mentioned need no change - say so
+  in the wrap-up instead of skipping silently.
+
 ## Commit standards
 
 - Conventional Commits, scoped `(native)`: `feat(native): ...`, `fix(native): ...`,
@@ -89,6 +103,7 @@ are macOS-tuned). Keep Linux/Windows paths compiling but don't block on their po
 ## Quick checklist
 
 - [ ] Read `LEDGER.md` + `PLAN.md` before coding; update `LEDGER.md` after.
+- [ ] Showcase check: `site/index.html` + README feature list still match what shipped.
 - [ ] New code lands in the module that owns its boundary (see layout).
 - [ ] Build checked via real exit code, not a piped `tail`.
 - [ ] Commit message is Conventional, scoped `(native)`, hyphens only, clean author.
