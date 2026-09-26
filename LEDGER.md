@@ -2188,9 +2188,8 @@ chip. UX was picked from a clickable mockup (layout A "repo chip" + palette entr
   trips, bracket matching and palette entries; headless `run_ui` test clicks the chip then a row.
   Screenshots: `STDUSK_SHOT_REPOS=1 --screenshot` shows the chip + pip; grouping off is unchanged.
   Live `--state-dir` run confirmed grouping on real repos (worktree folded, `/tmp` in Other) via
-  the saved session. **Not verified live:** the Cmd+Shift+[ / ] chord - synthetic keystrokes
-  from this environment are dropped by macOS (Cmd+T did not fire either), so it needs a human
-  press.
+  the saved session. The Cmd+Shift+[ / ] chord was confirmed by the user on the release build
+  (synthetic keystrokes from the agent environment are dropped by macOS, so it needed a human).
 - Not built (declined for now): a "Move to repo" tab-menu item.
 
 ## Theme reports for apps that cache colors (post-1.7.0; 378 tests)
@@ -2231,7 +2230,7 @@ forwarded the WHEEL to apps with mouse reporting on; presses, releases and motio
   selection and link clicks in `render_grid`. Right/middle click stay local (menu, paste).
 - Tests: click press/release cell mapping, outside-press ignore + clamped held release, modifier
   bits, motion per tracking mode with per-cell dedupe.
-- Not verified live: clicking Claude Code's X (synthetic input is dropped in this environment).
+- Verified live by the user on 1.7.3: Claude Code's file panel X closes the panel.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
