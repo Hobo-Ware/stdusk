@@ -196,7 +196,7 @@ fn clipboard_image_only() -> bool {
     let Ok(mut cb) = arboard::Clipboard::new() else {
         return false;
     };
-    let has_text = cb.get_text().ok().is_some_and(|t| !t.is_empty());
+    let has_text = cb.get_text().is_ok_and(|t| !t.is_empty());
     !has_text && cb.get_image().is_ok()
 }
 
