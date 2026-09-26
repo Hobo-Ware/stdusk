@@ -2217,6 +2217,22 @@ alacritty_terminal drops private modes it doesn't know, so the mode was never ev
 - Also: `macos.rs` `ok().is_some_and` -> `is_ok_and` (clippy 1.98 `manual_is_variant_and`, the
   cause of the red `native (rust)` CI on 1.6.9 and 1.7.0).
 
+## Mouse clicks reach apps that asked for them (post-1.7.2; 383 tests)
+Report: Claude Code's file panel close X did nothing in stdusk but works elsewhere. stdusk only
+forwarded the WHEEL to apps with mouse reporting on; presses, releases and motion were never sent
+(`sgr_mouse` existed, nothing called it for buttons).
+
+- `mouse::pointer_reports` turns a frame's egui events into SGR 1006 reports for one pane: left
+  press (inside the grid only) and release (wherever it lands, clamped, so no press is orphaned),
+  motion for ?1003 always and for ?1002 while the button is held, once per cell change. Alt/Ctrl
+  set bits 8/16. `PointerTracker` (held + last cell) lives in egui temp data per pane.
+- `workspace.rs` sends them when the app has button tracking + SGR on, no modal is open, and Shift
+  is up (Shift keeps local selection, the xterm convention). `GridStyle.app_mouse` then skips local
+  selection and link clicks in `render_grid`. Right/middle click stay local (menu, paste).
+- Tests: click press/release cell mapping, outside-press ignore + clamped held release, modifier
+  bits, motion per tracking mode with per-cell dedupe.
+- Not verified live: clicking Claude Code's X (synthetic input is dropped in this environment).
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
