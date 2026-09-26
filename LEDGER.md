@@ -2211,8 +2211,8 @@ alacritty_terminal drops private modes it doesn't know, so the mode was never ev
   Panes adopted from 1.7.0 or older don't carry it; restart Claude Code there once.
 - Tests: scanner table + split cases, a real-pty round trip (app enables 2031, reads the 9-byte
   report, disables), adopted-pane flag carry, handoff metadata round trip.
-- Not verified live: that Claude Code's panel actually repaints on the report (needs a human theme
-  switch with Claude running).
+- Verified live by the user: with Claude Code running, a light/dark switch repaints its file panel
+  and prompt highlight in the new theme.
 - Also: `macos.rs` `ok().is_some_and` -> `is_ok_and` (clippy 1.98 `manual_is_variant_and`, the
   cause of the red `native (rust)` CI on 1.6.9 and 1.7.0).
 
