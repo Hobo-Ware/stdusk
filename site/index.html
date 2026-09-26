@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>stdusk - the machine speaks back</title>
-<meta name="description" content="A quake-style terminal with a real GUI tab bar. Native Rust, no Chromium. Progress on tabs, ambient AI-CLI awareness, drops from the top edge on a keystroke.">
+<meta name="description" content="A quake-style terminal with a real GUI tab bar. Native Rust, no Chromium. Progress on tabs, AI-CLI badges, repo tabs, restarts that keep your shells alive, and 204 color schemes.">
+<meta name="theme-color" content="#0b0b0f">
 <link rel="icon" href="stdusk-logo.png">
 <meta property="og:title" content="stdusk - the machine speaks back">
 <meta property="og:description" content="A quake-style terminal with a real GUI tab bar. Native Rust, no Chromium.">
@@ -18,126 +19,248 @@
 <meta name="twitter:title" content="stdusk - the machine speaks back">
 <meta name="twitter:description" content="A quake-style terminal with a real GUI tab bar. Native Rust, no Chromium.">
 <meta name="twitter:image" content="https://stdusk.hoboware.dev/stdusk-og.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#0d0d11; --bg2:#141419; --panel:#17171d; --line:#26262f;
-    --fg:#eceded; --muted:#9a9aa6; --dim:#6b6b78;
-    --red:#e5484d; --red2:#ff6b5e; --sun:#ff8a5b; --white:#f6f7f8;
-    --accent:#e5484d;
-    --mono:ui-monospace,"SF Mono",Menlo,"JetBrains Mono",Consolas,monospace;
-    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    --bg:#0b0b0f; --bg2:#121217; --panel:#15151b; --panel2:#1a1a21; --line:#24242d; --line2:#33333f;
+    --fg:#eeeef0; --muted:#9d9daa; --dim:#6a6a78;
+    --red:#e5484d; --red2:#ff6b5e; --sun:#ff9d5c; --gold:#ffc46b; --blue:#7aa2f7; --green:#3fb950;
+    --term:#282c34;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --dusk:linear-gradient(100deg,var(--gold) 0%,var(--sun) 30%,var(--red2) 60%,var(--red) 100%);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{scroll-behavior:smooth}
   body{
     background:var(--bg); color:var(--fg); font-family:var(--sans);
-    line-height:1.6; -webkit-font-smoothing:antialiased;
-    overflow-x:hidden;
+    line-height:1.6; -webkit-font-smoothing:antialiased; overflow-x:hidden;
   }
   a{color:inherit;text-decoration:none}
-  .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+  img{display:block;max-width:100%;height:auto}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+  @media(max-width:520px){.wrap{padding:0 16px}}
+  .mono{font-family:var(--mono)}
+  .grad{background:var(--dusk);-webkit-background-clip:text;background-clip:text;color:transparent}
 
-  /* ambient dusk glow */
   body::before{
-    content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
     background:
-      radial-gradient(60vw 40vh at 80% -5%, rgba(229,72,77,.18), transparent 60%),
-      radial-gradient(50vw 35vh at 15% 8%, rgba(255,138,91,.10), transparent 60%),
-      linear-gradient(180deg,#0e0e13,#0a0a0d 60%);
+      radial-gradient(70vw 50vh at 78% -10%, rgba(229,72,77,.22), transparent 60%),
+      radial-gradient(55vw 40vh at 12% 4%, rgba(255,157,92,.12), transparent 60%),
+      linear-gradient(180deg,#0e0e13,#0a0a0d 55%);
+  }
+  body::after{
+    content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.5;
+    background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+    background-size:56px 56px;
+    mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 75%);
+    -webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 75%);
   }
 
-  /* nav */
-  nav{
-    position:sticky;top:0;z-index:20;backdrop-filter:blur(12px);
-    background:rgba(13,13,17,.72);border-bottom:1px solid var(--line);
-  }
-  nav .wrap{display:flex;align-items:center;gap:14px;height:60px}
+  nav{position:sticky;top:0;z-index:30;backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4);background:rgba(11,11,15,.7);border-bottom:1px solid rgba(255,255,255,.06)}
+  nav .wrap{display:flex;align-items:center;gap:18px;height:62px}
   nav img{width:30px;height:30px;border-radius:8px}
-  nav .brand{font-weight:700;letter-spacing:-.02em;font-size:18px}
+  nav .brand{font-weight:800;letter-spacing:-.03em;font-size:18px}
+  nav .ver{font-family:var(--mono);font-size:11.5px;color:var(--red2);background:rgba(229,72,77,.12);border:1px solid rgba(229,72,77,.25);padding:2px 8px;border-radius:99px}
   nav .spacer{flex:1}
   nav .navlink{color:var(--muted);font-size:14px;font-weight:500;transition:color .15s}
   nav .navlink:hover{color:var(--fg)}
-  @media(max-width:620px){nav .navlink.hideable{display:none}}
+  nav .gh{display:inline-flex;align-items:center;gap:7px;color:var(--fg);font-size:14px;font-weight:600;border:1px solid var(--line2);padding:7px 13px;border-radius:10px;transition:border-color .15s,background .15s}
+  nav .gh:hover{border-color:#4a4a58;background:rgba(255,255,255,.03)}
+  @media(max-width:760px){nav .navlink{display:none}}
 
-  /* hero */
-  header{padding:76px 0 40px;text-align:center}
-  .logo-lg{width:104px;height:104px;border-radius:24px;box-shadow:0 20px 60px -18px rgba(229,72,77,.5);margin-bottom:26px}
-  h1{font-size:clamp(48px,9vw,88px);font-weight:800;letter-spacing:-.045em;line-height:.98}
-  .tagline{font-family:var(--mono);color:var(--red2);font-size:clamp(14px,2.4vw,19px);margin-top:14px;letter-spacing:.02em}
-  .tagline .cur{display:inline-block;width:.6ch;height:1.05em;background:var(--red);vertical-align:-.16em;margin-left:2px;animation:blink 1.05s steps(1) infinite}
+  header{padding:88px 0 0;text-align:center;position:relative}
+  .pill{display:inline-flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);border:1px solid var(--line2);background:rgba(21,21,27,.7);border-radius:99px;padding:6px 14px 6px 6px;margin-bottom:28px;transition:border-color .2s}
+  .pill:hover{border-color:#4a4a58}
+  .pill b{font-weight:700;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:var(--dusk);padding:3px 9px;border-radius:99px}
+  h1{font-size:clamp(46px,8.6vw,104px);font-weight:900;letter-spacing:-.055em;line-height:.95}
+  h1 .grad{padding-right:.04em}
+  .tagline{font-family:var(--mono);color:var(--red2);font-size:clamp(14px,2.2vw,18px);margin-top:18px;letter-spacing:.02em}
+  .cur{display:inline-block;width:.6ch;height:1.05em;background:var(--red);vertical-align:-.16em;margin-left:3px;animation:blink 1.05s steps(1) infinite}
   @keyframes blink{50%{opacity:0}}
-  .sub{max-width:600px;margin:22px auto 0;color:var(--muted);font-size:clamp(16px,2.2vw,19px)}
+  .sub{max-width:640px;margin:22px auto 0;color:var(--muted);font-size:clamp(16px,2.1vw,19px)}
   .sub b{color:var(--fg);font-weight:600}
 
-  /* install */
-  .cta{display:flex;gap:14px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:34px}
+  .cta{display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:34px}
   .cmd{
-    display:inline-flex;align-items:center;gap:14px;font-family:var(--mono);font-size:15px;
-    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 16px;
-    color:var(--fg);cursor:pointer;transition:border-color .15s, transform .06s;
+    display:inline-flex;align-items:center;gap:14px;font-family:var(--mono);font-size:14.5px;
+    background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:13px 16px;
+    color:var(--fg);cursor:pointer;transition:border-color .15s,transform .06s;max-width:100%
   }
-  .cmd:hover{border-color:#3a3a46}
+  .cmd:hover{border-color:#4a4a58}
   .cmd:active{transform:translateY(1px)}
   .cmd .prompt{color:var(--red)}
-  .cmd .copy{color:var(--dim);font-size:12px;border-left:1px solid var(--line);padding-left:12px;font-family:var(--sans)}
+  .cmd .txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cmd .copy{color:var(--dim);font-size:12px;border-left:1px solid var(--line2);padding-left:12px;font-family:var(--sans);flex:none}
   .btn{
     display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;
-    padding:13px 22px;border-radius:12px;border:1px solid var(--line);color:var(--fg);
-    background:linear-gradient(180deg,#1c1c23,#141419);transition:border-color .15s,transform .06s;
+    padding:13px 22px;border-radius:12px;border:1px solid var(--line2);color:var(--fg);
+    background:linear-gradient(180deg,#1d1d25,#15151b);transition:border-color .15s,transform .06s,box-shadow .2s;
   }
-  .btn:hover{border-color:#3a3a46}
+  .btn:hover{border-color:#4a4a58}
   .btn:active{transform:translateY(1px)}
-  .btn.primary{background:linear-gradient(180deg,var(--red2),var(--red));border-color:transparent;color:#fff;box-shadow:0 10px 30px -10px rgba(229,72,77,.6)}
+  .btn.primary{background:linear-gradient(180deg,var(--red2),var(--red));border-color:transparent;color:#fff;box-shadow:0 10px 34px -10px rgba(229,72,77,.7)}
+  .btn.primary:hover{box-shadow:0 14px 40px -10px rgba(229,72,77,.9)}
+  .fine{margin-top:16px;font-size:13px;color:var(--dim)}
 
-  /* terminal demo */
-  .stage{padding:44px 0 20px}
-  .term{
-    max-width:860px;margin:0 auto;border:1px solid var(--line);border-radius:14px;overflow:hidden;
-    background:var(--bg2);box-shadow:0 40px 90px -40px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.02) inset;
+  .summon{margin-top:64px;display:flex;justify-content:center;align-items:center;gap:10px;font-size:13px;color:var(--dim)}
+  kbd{font-family:var(--mono);font-size:12px;font-weight:500;color:var(--fg);background:linear-gradient(180deg,#24242d,#1a1a21);border:1px solid var(--line2);border-bottom-width:2px;border-radius:6px;padding:2px 7px;min-width:24px;display:inline-block;text-align:center}
+  .summon button{all:unset;cursor:pointer;display:inline-flex;gap:5px;align-items:center}
+  .summon button:hover kbd{border-color:var(--red)}
+  .stage{position:relative;margin-top:18px;perspective:1600px}
+  .stage::before{content:"";position:absolute;left:10%;right:10%;top:10%;bottom:-10%;background:radial-gradient(closest-side,rgba(229,72,77,.35),transparent);filter:blur(40px);z-index:-1}
+  .quake{
+    border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.08);
+    box-shadow:0 50px 120px -40px rgba(0,0,0,.95),0 0 0 1px rgba(0,0,0,.5);
+    background:var(--term);transform-origin:top center;
+    transition:transform .5s cubic-bezier(.2,.9,.25,1.05),opacity .35s;
   }
-  .tabbar{display:flex;align-items:stretch;background:#101015;border-bottom:1px solid var(--line);height:40px;font-family:var(--mono);font-size:12.5px}
-  .tab{display:flex;align-items:center;gap:8px;padding:0 14px;color:var(--muted);border-right:1px solid var(--line);position:relative;white-space:nowrap}
-  .tab .n{color:var(--dim)}
-  .tab.active{background:var(--bg2);color:var(--fg)}
-  .tab.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--red)}
-  .tab .prog{position:absolute;left:0;bottom:0;height:2px;background:linear-gradient(90deg,var(--sun),var(--red));width:0;transition:width .3s linear}
-  .badge{font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;letter-spacing:.03em}
-  .badge.ai{background:rgba(229,72,77,.16);color:var(--red2)}
-  .badge.g{background:rgba(96,165,250,.16);color:#7aa2f7}
-  .dot{width:9px;height:9px;border-radius:50%}
-  .plus{color:var(--dim);padding:0 12px;display:flex;align-items:center}
-  .screen{padding:18px 20px;font-family:var(--mono);font-size:13.5px;line-height:1.7;min-height:230px;color:#d7d7de}
-  .screen .g{color:#3fb950}.screen .r{color:var(--red2)}.screen .b{color:#7aa2f7}.screen .y{color:#e3b341}.screen .m{color:var(--muted)}
-  .screen .p{color:var(--red)}
-  .bar{display:inline-block;color:var(--sun)}
-  .cursorblk{display:inline-block;width:8px;height:16px;background:var(--red);vertical-align:-3px;animation:blink 1.05s steps(1) infinite}
+  .quake.up{transform:translateY(-40px) scaleY(.02);opacity:0;transition:transform .32s cubic-bezier(.6,0,.9,.4),opacity .3s .05s}
+  .quake img{width:100%;height:auto}
+  .edge{height:3px;background:var(--dusk);border-radius:3px 3px 0 0;width:40%;margin:0 auto;opacity:.8}
 
-  /* sections */
-  section{padding:60px 0}
-  .eyebrow{font-family:var(--mono);color:var(--red);font-size:13px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:12px}
-  h2{font-size:clamp(28px,4.5vw,40px);font-weight:800;letter-spacing:-.03em;line-height:1.1}
-  .lead{color:var(--muted);font-size:18px;max-width:680px;margin-top:16px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);margin-top:72px;border:1px solid var(--line);border-radius:16px;background:rgba(21,21,27,.6);overflow:hidden}
+  .stat{padding:22px 20px;text-align:center;border-right:1px solid var(--line)}
+  .stat:last-child{border-right:0}
+  .stat .v{font-size:clamp(26px,4vw,36px);font-weight:800;letter-spacing:-.04em;line-height:1.1}
+  .stat .l{font-size:13px;color:var(--muted);margin-top:4px}
+  @media(max-width:720px){.stats{grid-template-columns:repeat(2,1fr)}.stat:nth-child(2){border-right:0}.stat:nth-child(-n+2){border-bottom:1px solid var(--line)}}
+
+  section{padding:96px 0 0}
+  .eyebrow{font-family:var(--mono);color:var(--red2);font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:14px}
+  h2{font-size:clamp(30px,4.8vw,50px);font-weight:800;letter-spacing:-.04em;line-height:1.05}
+  .lead{color:var(--muted);font-size:clamp(16px,2vw,18.5px);max-width:660px;margin-top:18px}
   .lead b{color:var(--fg);font-weight:600}
+  .center{text-align:center}.center .lead{margin-left:auto;margin-right:auto}
 
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:38px}
-  @media(max-width:820px){.grid{grid-template-columns:repeat(2,1fr)}}
-  @media(max-width:520px){.grid{grid-template-columns:1fr}}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;transition:border-color .2s,transform .2s}
-  .card:hover{border-color:#38323a;transform:translateY(-3px)}
-  .card .ic{font-size:22px;margin-bottom:12px}
-  .card h3{font-size:16px;font-weight:700;letter-spacing:-.01em}
-  .card p{color:var(--muted);font-size:14.5px;margin-top:7px}
+  .spot{display:grid;grid-template-columns:1fr 1.15fr;gap:56px;align-items:center;padding:56px 0}
+  .spot.flip{grid-template-columns:1.15fr 1fr}
+  .spot.flip .copyblk{order:2}
+  .spot + .spot{border-top:1px solid var(--line)}
+  @media(max-width:900px){.spot,.spot.flip{grid-template-columns:1fr;gap:32px}.spot.flip .copyblk{order:0}}
+  .copyblk h3{font-size:clamp(24px,3.2vw,32px);font-weight:800;letter-spacing:-.03em;line-height:1.15}
+  .copyblk p{color:var(--muted);font-size:16.5px;margin-top:14px}
+  .copyblk p b{color:var(--fg);font-weight:600}
+  .copyblk code{font-family:var(--mono);font-size:.88em;color:var(--fg);background:var(--panel2);border:1px solid var(--line);padding:1px 6px;border-radius:5px}
+  .tag{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:14px;color:var(--sun);background:rgba(255,157,92,.1);border:1px solid rgba(255,157,92,.25)}
+  .ticks{list-style:none;margin-top:18px;display:grid;gap:8px}
+  .ticks li{color:var(--muted);font-size:15px;padding-left:24px;position:relative}
+  .ticks li::before{content:"";position:absolute;left:2px;top:.55em;width:11px;height:6px;border-left:2px solid var(--red2);border-bottom:2px solid var(--red2);transform:rotate(-45deg)}
 
-  .case{background:linear-gradient(180deg,rgba(229,72,77,.05),transparent);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-  .case p{font-size:18px;color:var(--muted);max-width:720px;margin-top:16px}
-  .case p b{color:var(--fg);font-weight:600}
+  .win{background:var(--term);border:1px solid rgba(255,255,255,.08);border-radius:14px;overflow:hidden;box-shadow:0 40px 90px -45px rgba(0,0,0,.95)}
+  .tabbar{display:flex;align-items:stretch;background:#21252b;height:42px;font-family:var(--mono);font-size:12.5px;overflow:hidden}
+  .tab{flex:0 1 190px;min-width:0;display:flex;align-items:center;gap:8px;padding:0 14px;color:#8b919d;position:relative;white-space:nowrap}
+  .tab .t{overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .tab .n{color:#5c6370;flex:none}
+  .tab .end{margin-left:auto;flex:none;display:flex;align-items:center;gap:6px}
+  .tab.active{background:var(--term);color:#e6e6e6;border-radius:8px 8px 0 0;margin-top:5px}
+  .tab .under{position:absolute;left:0;right:0;bottom:0;height:3px}
+  .tab .prog{position:absolute;left:0;bottom:0;height:3px;background:linear-gradient(90deg,var(--sun),var(--red));width:0;transition:width .2s linear}
+  .plus{color:#5c6370;padding:0 12px;display:flex;align-items:center;font-size:18px}
+  .screen{padding:16px 18px;font-family:var(--mono);font-size:13px;line-height:1.65;min-height:250px;color:#d7dae0;white-space:pre-wrap;word-break:break-all}
+  .screen .g{color:#98c379}.screen .r{color:#e06c75}.screen .b{color:#61afef}.screen .y{color:#e5c07b}.screen .m{color:#7f848e}.screen .c{color:#56b6c2}
+  .cursorblk{display:inline-block;width:8px;height:15px;background:#61afef;vertical-align:-2px;animation:blink 1.05s steps(1) infinite}
 
-  footer{padding:56px 0 72px;border-top:1px solid var(--line);color:var(--dim);font-size:14px}
+  .clis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:18px}
+  @media(max-width:520px){.clis{grid-template-columns:repeat(2,1fr)}}
+  .cli{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.05);font-family:var(--mono);font-size:13px;color:#d7dae0;transition:transform .2s,border-color .2s}
+  .cli:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.14)}
+  .cli .sw{width:10px;height:10px;border-radius:3px;flex:none;box-shadow:0 0 12px currentColor}
+  .cli .st{margin-left:auto;font-size:10.5px;color:#7f848e}
+  .cli.busy .st{color:var(--gold)}
+
+  .chipdemo{padding:18px;display:flex;flex-direction:column;gap:14px}
+  .rchip{align-self:flex-start;display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:13px;background:#2c313a;border:1px solid rgba(255,255,255,.08);color:#e6e6e6;padding:6px 12px;border-radius:8px;position:relative}
+  .rchip .dot{width:8px;height:8px;border-radius:50%}
+  .rchip .cnt{color:#7f848e}
+  .rchip .pip{position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 2px var(--term)}
+  .rlist{background:#21252b;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:6px;font-family:var(--mono);font-size:13px;box-shadow:0 20px 40px -20px rgba(0,0,0,.8)}
+  .rrow{display:grid;grid-template-columns:12px 1fr auto 70px 10px;gap:10px;align-items:center;padding:9px 10px;border-radius:7px;color:#c8ccd4}
+  .rrow.on{background:#2c313a;color:#fff}
+  .rrow .dot{width:8px;height:8px;border-radius:50%}
+  .rrow .cnt{color:#7f848e;font-size:12px}
+  .rrow .mini{height:4px;border-radius:2px;background:rgba(255,255,255,.07);overflow:hidden}
+  .rrow .mini i{display:block;height:100%;background:linear-gradient(90deg,var(--sun),var(--red))}
+  .rrow .att{width:7px;height:7px;border-radius:50%}
+
+  .handoff{padding:26px 22px;display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:center;font-family:var(--mono);font-size:12.5px}
+  .proc{border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:14px;background:rgba(0,0,0,.18)}
+  .proc .h{font-size:11px;color:#7f848e;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px}
+  .proc .v{color:#e6e6e6;font-weight:700;margin-bottom:10px}
+  .fd{display:flex;align-items:center;gap:8px;color:#abb2bf;padding:4px 0}
+  .fd i{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+  .proc.old{opacity:.75}
+  .proc.old .fd i{animation:fade 3.2s infinite}
+  .proc.new .fd i{animation:glow 3.2s infinite}
+  @keyframes fade{0%,40%{background:var(--green);box-shadow:0 0 8px var(--green)}60%,100%{background:#3a3f4b;box-shadow:none}}
+  @keyframes glow{0%,40%{background:#3a3f4b;box-shadow:none}60%,100%{background:var(--green);box-shadow:0 0 8px var(--green)}}
+  .pipe{display:flex;flex-direction:column;align-items:center;gap:6px;color:#7f848e;font-size:11px;text-align:center}
+  .pipe .ln{width:70px;height:2px;background:repeating-linear-gradient(90deg,var(--sun) 0 8px,transparent 8px 14px);background-size:28px 2px;animation:flow .8s linear infinite}
+  @keyframes flow{to{background-position:28px 0}}
+  @media(max-width:520px){.handoff{grid-template-columns:1fr}.pipe .ln{width:2px;height:40px;background:repeating-linear-gradient(180deg,var(--sun) 0 8px,transparent 8px 14px)}}
+  .handnote{padding:0 22px 22px;font-family:var(--mono);font-size:12px;color:#7f848e}
+  .handnote b{color:var(--green);font-weight:500}
+
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:44px}
+  @media(max-width:980px){.grid{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:720px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:460px){.grid{grid-template-columns:1fr}}
+  .card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;transition:border-color .2s,transform .2s;overflow:hidden}
+  .card::before{content:"";position:absolute;inset:0;background:radial-gradient(260px circle at var(--mx,50%) var(--my,-40%),rgba(255,107,94,.12),transparent 60%);opacity:0;transition:opacity .25s;pointer-events:none}
+  .card:hover{border-color:#3b3440;transform:translateY(-3px)}
+  .card:hover::before{opacity:1}
+  .card .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:14px;color:var(--red2);background:rgba(229,72,77,.1);border:1px solid rgba(229,72,77,.22);margin-bottom:14px}
+  .card h4{font-size:15px;font-weight:700;letter-spacing:-.01em}
+  .card p{color:var(--muted);font-size:14px;margin-top:6px;line-height:1.55}
+
+  .keys{display:grid;grid-template-columns:repeat(3,1fr);gap:0 36px;margin-top:40px;border:1px solid var(--line);border-radius:16px;padding:10px 26px;background:rgba(21,21,27,.6)}
+  @media(max-width:900px){.keys{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.keys{grid-template-columns:1fr;padding:6px 16px}}
+  .key{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px dashed var(--line);font-size:14.5px;color:var(--muted)}
+  .key span:last-child{display:flex;gap:4px;flex:none}
+
+  .vs{margin-top:40px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:rgba(21,21,27,.6)}
+  .vs table{width:100%;border-collapse:collapse;font-size:15px}
+  .vs th,.vs td{padding:15px 18px;text-align:left;border-bottom:1px solid var(--line)}
+  .vs tr:last-child td{border-bottom:0}
+  .vs th{font-size:12.5px;font-weight:600;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;background:rgba(0,0,0,.2)}
+  .vs th.us{color:var(--red2)}
+  .vs td{color:var(--muted)}
+  .vs td:first-child{color:var(--fg);font-weight:500}
+  .vs td.us{background:rgba(229,72,77,.06);color:var(--fg);font-weight:600}
+  .yes{color:var(--green)}.no{color:var(--dim)}
+  @media(max-width:640px){.vs{overflow-x:auto}.vs table{min-width:560px}}
+
+  .install{margin-top:40px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:820px){.install{grid-template-columns:1fr}}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .step .num{font-family:var(--mono);font-size:12px;color:var(--red2)}
+  .step h4{font-size:17px;font-weight:700;margin-top:6px}
+  .step p{color:var(--muted);font-size:14.5px;margin-top:8px}
+  .step pre{margin-top:12px;font-family:var(--mono);font-size:13px;background:#0e0e12;border:1px solid var(--line);border-radius:9px;padding:11px 13px;overflow-x:auto;color:var(--fg)}
+  .step pre .p{color:var(--red)}
+
+  .finale{margin-top:110px;padding:84px 24px;text-align:center;border-top:1px solid var(--line);background:radial-gradient(60% 100% at 50% 0%,rgba(229,72,77,.13),transparent 70%)}
+  .finale h2{font-size:clamp(34px,6vw,64px)}
+
+  footer{padding:40px 0 56px;border-top:1px solid var(--line);color:var(--dim);font-size:14px}
   footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
+  footer img{width:24px;height:24px;border-radius:6px}
   footer a{color:var(--muted)}footer a:hover{color:var(--fg)}
   footer .spacer{flex:1}
+
   .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--red);color:#fff;padding:10px 18px;border-radius:10px;font-size:14px;font-weight:600;opacity:0;pointer-events:none;transition:.25s;z-index:50}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s cubic-bezier(.2,.8,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+  @media(prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+    .reveal{opacity:1;transform:none}
+  }
 </style>
 </head>
 <body>
@@ -145,72 +268,255 @@
 <nav><div class="wrap">
   <img src="stdusk-logo.png" alt="stdusk logo">
   <span class="brand">stdusk</span>
+  <span class="ver">v1.7.2</span>
   <span class="spacer"></span>
-  <a class="navlink hideable" href="#features">Features</a>
-  <a class="navlink hideable" href="#why">Why</a>
-  <a class="navlink" href="https://github.com/Hobo-Ware/stdusk">GitHub</a>
+  <a class="navlink" href="#features">Features</a>
+  <a class="navlink" href="#keys">Keys</a>
+  <a class="navlink" href="#why">Why</a>
+  <a class="navlink" href="#install">Install</a>
+  <a class="gh" href="https://github.com/Hobo-Ware/stdusk">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    GitHub
+  </a>
 </div></nav>
 
 <header><div class="wrap">
-  <img class="logo-lg" src="stdusk-logo.png" alt="stdusk">
-  <h1>stdusk</h1>
+  <a class="pill" href="#repos"><b>New in 1.7</b> Tabs group by git repo and follow your <span class="mono">cd</span></a>
+  <h1>Your terminal,<br><span class="grad">at dusk.</span></h1>
   <div class="tagline">the machine speaks back<span class="cur"></span></div>
   <p class="sub">A quake-style terminal with a <b>real GUI tab bar</b>. Native Rust, no Chromium, no apologies. It drops from the top edge on a keystroke, shows you what your machine is actually doing, and gets out of the way.</p>
   <div class="cta">
-    <div class="cmd" id="cmd" title="Click to copy">
-      <span><span class="prompt">$</span> brew install hobo-ware/tap/stdusk</span>
+    <div class="cmd" id="cmd" role="button" tabindex="0" title="Click to copy">
+      <span class="txt"><span class="prompt">$</span> brew install hobo-ware/tap/stdusk</span>
       <span class="copy" id="copylbl">copy</span>
     </div>
-    <a class="btn primary" href="https://github.com/Hobo-Ware/stdusk/releases/latest">Download</a>
-    <a class="btn" href="https://github.com/Hobo-Ware/stdusk">★ GitHub</a>
+    <a class="btn primary" href="https://github.com/Hobo-Ware/stdusk/releases/latest">Download for macOS</a>
+  </div>
+  <p class="fine">Free and MIT licensed. macOS first, Apple Silicon and Intel.</p>
+
+  <div class="summon"><button id="summon" aria-label="Toggle the window">Press <kbd>Ctrl</kbd><kbd>`</kbd></button> to summon it. Try it here.</div>
+  <div class="stage">
+    <div class="edge"></div>
+    <div class="quake" id="quake"><img src="shot-tabs.png" width="2800" height="840" alt="stdusk showing the repo chip, a pinned tab with the Claude badge, and a build in the terminal"></div>
+  </div>
+
+  <div class="stats reveal">
+    <div class="stat"><div class="v grad">1</div><div class="l">native binary</div></div>
+    <div class="stat"><div class="v grad">0</div><div class="l">Chromium processes</div></div>
+    <div class="stat"><div class="v grad">204</div><div class="l">color schemes built in</div></div>
+    <div class="stat"><div class="v grad">6</div><div class="l">AI CLIs it recognizes</div></div>
   </div>
 </div></header>
 
-<div class="stage"><div class="wrap">
-  <div class="term">
-    <div class="tabbar">
-      <div class="tab"><span class="n">1</span> server<span class="prog" style="width:100%"></span></div>
-      <div class="tab active"><span class="n">2</span> deploy.sh <span class="badge ai">AI</span><span class="prog" id="ptab" style="width:0"></span></div>
-      <div class="tab"><span class="n">3</span> <span class="dot" style="background:#7aa2f7"></span> agent <span class="badge g">✦</span></div>
-      <span class="plus">+</span>
-    </div>
-    <div class="screen" id="screen"></div>
-  </div>
-</div></div>
-
 <section id="features"><div class="wrap">
-  <div class="eyebrow">What it does</div>
-  <h2>Glance, don't babysit.</h2>
-  <p class="lead">Everything a local-shell terminal should be, plus the three things that make stdusk worth summoning.</p>
-  <div class="grid">
-    <div class="card"><div class="ic">📊</div><h3>Progress on tabs</h3><p>apt, pip, npm, curl, your 3am migration - if it prints <b>N%</b>, the tab wears a progress bar. You glance, you don't watch.</p></div>
-    <div class="card"><div class="ic">🤖</div><h3>Ambient CLI awareness</h3><p>a <b>claude</b>, a <b>gemini</b>, a <b>codex</b> running across your tabs? Each tab tells you which, in its brand colors.</p></div>
-    <div class="card"><div class="ic">⚡</div><h3>Quake drop-down</h3><p>Borderless, top-edge, global hotkey, hide-on-blur. There when you call, gone when you don't. No Dock clutter.</p></div>
-    <div class="card"><div class="ic">🎨</div><h3>Real GUI tabs</h3><p>Colored, renameable, reorderable, split-aware. Pixels, not ASCII art - painted by <b>egui</b>.</p></div>
-    <div class="card"><div class="ic">🔍</div><h3>Search &amp; palette</h3><p>Cmd+F scrollback search with regex; Cmd+Shift+P command palette, every action two keystrokes away.</p></div>
-    <div class="card"><div class="ic">🖼️</div><h3>A real settings GUI</h3><p>Browse 200+ color schemes with live preview, keyboard-navigable, apply before you save.</p></div>
-    <div class="card"><div class="ic">🚀</div><h3>Profiles</h3><p>Named launchers with their own shell, args, cwd, env and tab color. One right-click away.</p></div>
-    <div class="card"><div class="ic">☁️</div><h3>Settings sync</h3><p>Push your config to your own private git repo, pull it anywhere. Your credentials, no OAuth middleman.</p></div>
-    <div class="card"><div class="ic">✅</div><h3>Supreme defaults</h3><p>Truecolor, mouse copy, cwd-aware tabs, bracketed paste, OSC 52 clipboard, session restore. It just works.</p></div>
+  <div class="center reveal">
+    <div class="eyebrow">What it does</div>
+    <h2>Glance, don't babysit.</h2>
+    <p class="lead">Everything a local-shell terminal should be, plus the few things that make stdusk worth summoning.</p>
+  </div>
+
+  <div class="spot reveal">
+    <div class="copyblk">
+      <span class="tag">The crown jewel</span>
+      <h3>Progress bars live on the tab.</h3>
+      <p>apt, pip, npm, curl, cargo, your 3am migration. If it prints <b>N%</b> or speaks <code>OSC 9;4</code>, the tab wears a progress bar. Switch away, keep working, glance back.</p>
+      <ul class="ticks">
+        <li>The bar turns red when the app reports an error</li>
+        <li>Split tabs add up the progress of every pane</li>
+        <li>A notification when a long command finishes while stdusk is hidden</li>
+      </ul>
+    </div>
+    <div class="win">
+      <div class="tabbar">
+        <div class="tab"><span class="n">1</span><span class="t">server</span><span class="under" style="background:#98c379"></span></div>
+        <div class="tab active"><span class="n">2</span><span class="t">deploy</span><span class="prog" id="ptab"></span></div>
+        <div class="tab"><span class="n">3</span><span class="t">notes</span></div>
+        <span class="plus">+</span>
+      </div>
+      <div class="screen" id="screen"></div>
+    </div>
+  </div>
+
+  <div class="spot flip reveal">
+    <div class="copyblk">
+      <span class="tag">Ambient awareness</span>
+      <h3>Know which agent is thinking.</h3>
+      <p>Got a <b>claude</b>, a <b>codex</b> and a <b>gemini</b> spread across seven tabs? Each tab shows which one it runs, with that tool's own logo. No plugins, no config: stdusk reads the process tree.</p>
+      <ul class="ticks">
+        <li>Claude Code, Codex, Gemini, Copilot, Aider, Cursor</li>
+        <li>Paste a screenshot straight into Claude Code with <code>Ctrl+V</code></li>
+        <li>Light/dark switches reach apps that cache colors (DEC mode 2031)</li>
+      </ul>
+    </div>
+    <div class="win">
+      <div class="tabbar">
+        <div class="tab active"><span class="n">1</span><span class="t">api</span><span class="end" style="color:#d97757;font-weight:700">A\</span></div>
+        <div class="tab"><span class="n">2</span><span class="t">web</span><span class="end" style="color:#4f8ff7">&#10022;</span></div>
+        <div class="tab"><span class="n">3</span><span class="t">infra</span><span class="end" style="color:#e6e6e6">&#9711;</span></div>
+        <span class="plus">+</span>
+      </div>
+      <div class="clis">
+        <div class="cli busy"><span class="sw" style="background:#d97757;color:#d97757"></span>claude<span class="st">thinking</span></div>
+        <div class="cli"><span class="sw" style="background:#e6e6e6;color:#e6e6e6"></span>codex<span class="st">idle</span></div>
+        <div class="cli busy"><span class="sw" style="background:#4f8ff7;color:#4f8ff7"></span>gemini<span class="st">running</span></div>
+        <div class="cli"><span class="sw" style="background:#8957e5;color:#8957e5"></span>copilot<span class="st">idle</span></div>
+        <div class="cli"><span class="sw" style="background:#14b8a6;color:#14b8a6"></span>aider<span class="st">idle</span></div>
+        <div class="cli"><span class="sw" style="background:#a3a3a3;color:#a3a3a3"></span>cursor<span class="st">idle</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spot reveal" id="repos">
+    <div class="copyblk">
+      <span class="tag">New in 1.7</span>
+      <h3>Tabs that know their repo.</h3>
+      <p>Turn on <b>group by repo</b> and the tab bar shows only the repo you're in, behind a small chip. <code>cd</code> into another repo and the tab moves there with you. Git worktrees fold into their main repo.</p>
+      <ul class="ticks">
+        <li>Switch repos with <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>]</kbd> or the palette</li>
+        <li>A dot on the chip when a hidden repo needs you</li>
+        <li>Lands on the tab you used last in that repo</li>
+      </ul>
+    </div>
+    <div class="win chipdemo">
+      <span class="rchip"><span class="dot" style="background:#56b6c2"></span>stdusk <span class="cnt">3</span> &#9662;<span class="pip"></span></span>
+      <div class="rlist">
+        <div class="rrow on"><span class="dot" style="background:#56b6c2"></span>stdusk<span class="cnt">3 tabs</span><span class="mini"><i style="width:68%"></i></span><span></span></div>
+        <div class="rrow"><span class="dot" style="background:#c678dd"></span>trakt-web<span class="cnt">4 tabs</span><span class="mini"><i style="width:0"></i></span><span class="att" style="background:var(--blue)"></span></div>
+        <div class="rrow"><span class="dot" style="background:#e5c07b"></span>work/api<span class="cnt">2 tabs</span><span class="mini"><i style="width:35%"></i></span><span class="att" style="background:#e06c75"></span></div>
+        <div class="rrow"><span class="dot" style="background:#5c6370"></span>Other<span class="cnt">1 tab</span><span class="mini"><i style="width:0"></i></span><span></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spot flip reveal">
+    <div class="copyblk">
+      <span class="tag">Updates without the pain</span>
+      <h3>Restart. Keep every shell.</h3>
+      <p>When <code>brew upgrade</code> lands a new version, a dot on the gear offers a restart. The old window hands its <b>live shells</b> to the new one over a local socket, with the screen and recent scrollback replayed. Your running build, your SSH session, your agent: still there.</p>
+      <ul class="ticks">
+        <li>Same tabs, splits, titles, colors and folders</li>
+        <li>If anything goes wrong, the old window just stays up</li>
+        <li>Quitting still ends everything, as it should</li>
+      </ul>
+    </div>
+    <div class="win">
+      <div class="handoff">
+        <div class="proc old"><div class="h">stdusk 1.7.1</div><div class="v">handing over</div><div class="fd"><i></i>zsh - cargo build</div><div class="fd"><i></i>ssh prod</div><div class="fd"><i></i>claude</div></div>
+        <div class="pipe"><div class="ln"></div>live ptys</div>
+        <div class="proc new"><div class="h">stdusk 1.7.2</div><div class="v">adopting</div><div class="fd"><i></i>zsh - cargo build</div><div class="fd"><i></i>ssh prod</div><div class="fd"><i></i>claude</div></div>
+      </div>
+      <div class="handnote">$ <b>3 shells reattached</b>, 0 killed</div>
+    </div>
+  </div>
+
+  <div class="spot reveal">
+    <div class="copyblk">
+      <span class="tag">Make it yours</span>
+      <h3>A real settings screen.</h3>
+      <p>Press <kbd>Cmd</kbd><kbd>,</kbd> and browse <b>204 color schemes</b> with a live preview. Filter light or dark, pick one for each, and let stdusk follow the system. Every scheme gets a contrast floor, so nothing turns unreadable.</p>
+      <ul class="ticks">
+        <li>Fonts, Nerd Fonts, ligatures, line spacing, opacity</li>
+        <li>Profiles with their own shell, folder, env and color</li>
+        <li>Remap every hotkey. Fully usable from the keyboard</li>
+      </ul>
+    </div>
+    <div class="win"><img src="shot-schemes.png" width="2800" height="1440" loading="lazy" alt="The stdusk color scheme browser with a live preview"></div>
   </div>
 </div></section>
 
-<section class="case" id="why"><div class="wrap">
-  <div class="eyebrow">The case</div>
-  <h2>Refuse the tradeoff.</h2>
-  <p>Text-grid terminals (tmux, kitty, ghostty) are efficient, but they render tabs as <b>text</b> - they can never look like a GUI. Electron terminals look gorgeous but bill you a few hundred megabytes of RAM for the privilege.</p>
-  <p>stdusk refuses the tradeoff. <b>egui</b> paints real pixel-perfect tabs. <b>alacritty_terminal</b> drives the grid on the GPU. The whole thing is one native binary that starts instantly and sits quiet until you summon it.</p>
+<section id="more"><div class="wrap">
+  <div class="center reveal">
+    <div class="eyebrow">And the rest</div>
+    <h2>Supreme defaults.</h2>
+    <p class="lead">The things you only notice when a terminal gets them wrong.</p>
+  </div>
+  <div class="grid reveal" id="cards">
+    <div class="card"><div class="ic">&#8595;</div><h4>Quake or window</h4><p>Drops from the top edge on a global hotkey, hides on blur, follows your Space. Or set <span class="mono">mode = "window"</span>.</p></div>
+    <div class="card"><div class="ic">&#9707;</div><h4>Split panes</h4><p>Split right or down, drag to resize, zoom a pane, and broadcast typing to every pane at once.</p></div>
+    <div class="card"><div class="ic">/</div><h4>Scrollback search</h4><p><kbd>Cmd</kbd><kbd>F</kbd> with regex, case and whole-word toggles. Every match highlighted.</p></div>
+    <div class="card"><div class="ic">&gt;</div><h4>Command palette</h4><p><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>P</kbd>, fuzzy search. Every action, profile and repo two keys away.</p></div>
+    <div class="card"><div class="ic">&#8635;</div><h4>Session restore</h4><p>Tabs, splits, folders, names, colors and pins come back after a quit.</p></div>
+    <div class="card"><div class="ic">&#8599;</div><h4>Clickable links</h4><p>URLs, file paths and IPs, even when they wrap over two lines.</p></div>
+    <div class="card"><div class="ic">&#8681;</div><h4>Drop files in</h4><p>Drag files onto a pane and their paths land at the prompt, safely quoted.</p></div>
+    <div class="card"><div class="ic">~</div><h4>Autosuggestions</h4><p>Optional fish-style ghost text from your zsh history. Right arrow accepts.</p></div>
+    <div class="card"><div class="ic">&#10003;</div><h4>Shell integration</h4><p>Injected for you. Tabs show when a command fails and new tabs open in the same folder.</p></div>
+    <div class="card"><div class="ic">&#8644;</div><h4>Settings sync</h4><p>Push your config to your own private git repo and pull it anywhere. No accounts.</p></div>
+    <div class="card"><div class="ic">1</div><h4>One instance</h4><p>Launch it again and you get a new tab in the running window, not a second app.</p></div>
+    <div class="card"><div class="ic">&#9673;</div><h4>Tab power tools</h4><p>Color, rename, pin, drag to reorder, reopen closed tabs, close others. Choose where new tabs go.</p></div>
+    <div class="card"><div class="ic">&#9788;</div><h4>Follows the OS</h4><p>Pick a light and a dark scheme. stdusk switches with macOS and tells your apps.</p></div>
+    <div class="card"><div class="ic">&#9635;</div><h4>Mouse that works</h4><p>Select and copy, drag with auto-scroll, SGR mouse reporting for TUIs, middle-click paste.</p></div>
+    <div class="card"><div class="ic">Aa</div><h4>Proper type</h4><p>Truecolor, real bold faces, dim text, wide characters, emoji and ligatures that sit right.</p></div>
+    <div class="card"><div class="ic">&#9679;</div><h4>Menu bar icon</h4><p>No Dock clutter in quake mode. Show, hide, restart and quit from the menu bar.</p></div>
+  </div>
 </div></section>
 
-<section><div class="wrap">
-  <div class="eyebrow">The name</div>
-  <h2>std* meets dusk.</h2>
-  <p class="lead"><span style="font-family:var(--mono)">stdin</span>, <span style="font-family:var(--mono)">stdout</span>, <span style="font-family:var(--mono)">stderr</span> - meets <em>dusk</em>. A terminal stream at the faded end of the day. The machine speaks back.</p>
+<section id="keys"><div class="wrap">
+  <div class="reveal">
+    <div class="eyebrow">Muscle memory</div>
+    <h2>Every action, two keys away.</h2>
+    <p class="lead">macOS-native defaults. Remap any of them in Settings, or in <span class="mono">config.toml</span>.</p>
+  </div>
+  <div class="keys reveal">
+    <div class="key"><span>Summon / hide</span><span><kbd>Ctrl</kbd><kbd>`</kbd></span></div>
+    <div class="key"><span>New tab</span><span><kbd>Cmd</kbd><kbd>T</kbd></span></div>
+    <div class="key"><span>Reopen closed tab</span><span><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>T</kbd></span></div>
+    <div class="key"><span>Split right</span><span><kbd>Cmd</kbd><kbd>D</kbd></span></div>
+    <div class="key"><span>Split down</span><span><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>D</kbd></span></div>
+    <div class="key"><span>Broadcast input</span><span><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>I</kbd></span></div>
+    <div class="key"><span>Find</span><span><kbd>Cmd</kbd><kbd>F</kbd></span></div>
+    <div class="key"><span>Command palette</span><span><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>P</kbd></span></div>
+    <div class="key"><span>Settings</span><span><kbd>Cmd</kbd><kbd>,</kbd></span></div>
+    <div class="key"><span>Last tab</span><span><kbd>Cmd</kbd><kbd>O</kbd></span></div>
+    <div class="key"><span>Next repo</span><span><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>]</kbd></span></div>
+    <div class="key"><span>Clear everything</span><span><kbd>Cmd</kbd><kbd>K</kbd></span></div>
+  </div>
 </div></section>
+
+<section id="why"><div class="wrap">
+  <div class="reveal">
+    <div class="eyebrow">The case</div>
+    <h2>Refuse the tradeoff.</h2>
+    <p class="lead">Text-grid terminals (tmux, kitty, ghostty) are fast, but they draw tabs as <b>text</b>. They can never look like a GUI. Electron terminals look gorgeous and charge you a few hundred megabytes of RAM for it. stdusk does both: <b>egui</b> paints real tabs, <b>alacritty_terminal</b> runs the grid, and it all ships as one native binary.</p>
+  </div>
+  <div class="vs reveal">
+    <table>
+      <thead><tr><th></th><th>Text-grid terminals</th><th>Electron terminals</th><th class="us">stdusk</th></tr></thead>
+      <tbody>
+        <tr><td>Real GUI tab bar</td><td class="no">no, text cells</td><td class="yes">yes</td><td class="us"><span class="yes">yes</span></td></tr>
+        <tr><td>Native, no browser engine</td><td class="yes">yes</td><td class="no">no</td><td class="us"><span class="yes">yes</span></td></tr>
+        <tr><td>Progress bars on tabs</td><td class="no">rare</td><td class="no">some</td><td class="us"><span class="yes">yes</span></td></tr>
+        <tr><td>AI-CLI badges</td><td class="no">no</td><td class="no">no</td><td class="us"><span class="yes">yes</span></td></tr>
+        <tr><td>Quake drop-down built in</td><td class="no">some</td><td class="no">some</td><td class="us"><span class="yes">yes</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div></section>
+
+<section id="install"><div class="wrap">
+  <div class="reveal">
+    <div class="eyebrow">Get it</div>
+    <h2>Three steps. One of them is a keystroke.</h2>
+  </div>
+  <div class="install reveal">
+    <div class="step"><div class="num">01</div><h4>Install</h4><p>Lands in /Applications and puts the <span class="mono">stdusk</span> CLI on your PATH.</p><pre><span class="p">$</span> brew install hobo-ware/tap/stdusk</pre></div>
+    <div class="step"><div class="num">02</div><h4>Summon</h4><p>Hit <kbd>Ctrl</kbd><kbd>`</kbd> anywhere. It drops from the top edge. Hit it again and it's gone.</p><pre><span class="p">[quake]</span> hotkey = "Ctrl+Grave"</pre></div>
+    <div class="step"><div class="num">03</div><h4>Make it yours</h4><p>Press <kbd>Cmd</kbd><kbd>,</kbd> or edit the file by hand. Same thing, the GUI just saves it.</p><pre>~/.config/stdusk/config.toml</pre></div>
+  </div>
+</div></section>
+
+<div class="finale reveal">
+  <div class="eyebrow">std* meets dusk</div>
+  <h2><span class="mono" style="font-weight:700">stdin</span>, <span class="mono" style="font-weight:700">stdout</span>, <span class="grad">stdusk.</span></h2>
+  <p class="lead" style="margin:18px auto 0">A terminal stream at the faded end of the day. The machine speaks back.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/Hobo-Ware/stdusk/releases/latest">Download for macOS</a>
+    <a class="btn" href="https://github.com/Hobo-Ware/stdusk">Star on GitHub</a>
+  </div>
+</div>
 
 <footer><div class="wrap">
-  <img src="stdusk-logo.png" alt="" style="width:26px;height:26px;border-radius:7px">
-  <span>stdusk by <a href="https://github.com/Hobo-Ware">HoboWare</a></span>
+  <img src="stdusk-logo.png" alt="">
+  <span>stdusk by <a href="https://github.com/Hobo-Ware">HoboWare</a>, tools for the discerning degenerate</span>
   <span class="spacer"></span>
   <a href="https://github.com/Hobo-Ware/stdusk">GitHub</a>
   <a href="https://github.com/Hobo-Ware/stdusk/releases">Releases</a>
@@ -221,55 +527,60 @@
 <div class="toast" id="toast">Copied to clipboard</div>
 
 <script>
-// copy install command
+const INSTALL='brew install hobo-ware/tap/stdusk';
 const cmd=document.getElementById('cmd'),toast=document.getElementById('toast'),copylbl=document.getElementById('copylbl');
-cmd.addEventListener('click',()=>{
-  navigator.clipboard.writeText('brew install hobo-ware/tap/stdusk').then(()=>{
+function copyInstall(){
+  navigator.clipboard.writeText(INSTALL).then(()=>{
     copylbl.textContent='copied';toast.classList.add('show');
     setTimeout(()=>{copylbl.textContent='copy';toast.classList.remove('show')},1600);
   });
+}
+cmd.addEventListener('click',copyInstall);
+cmd.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();copyInstall()}});
+
+const quake=document.getElementById('quake');
+function toggleQuake(){quake.classList.toggle('up')}
+document.getElementById('summon').addEventListener('click',toggleQuake);
+document.addEventListener('keydown',e=>{if(e.ctrlKey&&(e.code==='Backquote'||e.key==='`')){e.preventDefault();toggleQuake()}});
+
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+
+document.getElementById('cards').addEventListener('pointermove',e=>{
+  const c=e.target.closest('.card');if(!c)return;
+  const r=c.getBoundingClientRect();
+  c.style.setProperty('--mx',(e.clientX-r.left)+'px');c.style.setProperty('--my',(e.clientY-r.top)+'px');
 });
 
-// terminal demo: type a command, run it, fill the active tab's progress bar
 const screen=document.getElementById('screen'),ptab=document.getElementById('ptab');
-const lines=[
-  {h:'<span class="p">~/app</span> <span class="m">$</span> ',t:'./deploy.sh --prod',d:34},
-  {h:'',t:''},
-  {h:'<span class="b">→</span> building release artifacts',t:'',d:0},
-];
-const post=[
-  '<span class="g">✓</span> compiled in 4.2s',
-  '<span class="y">↑</span> uploading  <span class="bar" id="ascii"></span> <span id="pct">0%</span>',
-  '',
-  '<span class="g">✓</span> deployed to prod <span class="m">· https://stdusk.hoboware.dev</span>',
-  '<span class="p">~/app</span> <span class="m">$</span> <span class="cursorblk"></span>',
-];
-function esc(s){return s}
-let html='';
-function typeLine(i){
-  if(i>=lines.length){runProgress();return;}
-  const ln=lines[i];
-  if(!ln.t){html+=ln.h+'\n';screen.innerHTML=html;setTimeout(()=>typeLine(i+1),ln.d?ln.d*10:260);return;}
-  let j=0;const base=html+ln.h;
-  (function ch(){
-    screen.innerHTML=base+ln.t.slice(0,j)+'<span class="cursorblk"></span>';
-    if(j++<ln.t.length){setTimeout(ch,ln.d);}
-    else{html=base+ln.t+'\n';screen.innerHTML=html;setTimeout(()=>typeLine(i+1),420);}
-  })();
+const PROMPT='<span class="r">~/app</span> <span class="m">$</span> ';
+const bar=v=>{const n=Math.round(v/5);return '█'.repeat(n)+'░'.repeat(20-n)};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function demo(){
+  for(;;){
+    let html='';ptab.style.width='0';
+    screen.innerHTML=PROMPT+'<span class="cursorblk"></span>';
+    await sleep(700);
+    const cmdText='./deploy.sh --prod';
+    for(let j=1;j<=cmdText.length;j++){screen.innerHTML=PROMPT+cmdText.slice(0,j)+'<span class="cursorblk"></span>';await sleep(45)}
+    html=PROMPT+cmdText+'\n';await sleep(350);
+    html+='<span class="b">→</span> building release artifacts\n';screen.innerHTML=html;await sleep(700);
+    html+='<span class="g">✓</span> compiled in 4.2s\n';screen.innerHTML=html;await sleep(300);
+    let p=0;
+    while(p<100){
+      p=Math.min(100,p+Math.random()*8+3);
+      screen.innerHTML=html+'<span class="y">↑</span> uploading  <span class="c">'+bar(p)+'</span> '+Math.round(p)+'%\n';
+      ptab.style.width=p+'%';await sleep(150);
+    }
+    html+='<span class="y">↑</span> uploading  <span class="c">'+bar(100)+'</span> 100%\n';
+    await sleep(400);
+    html+='\n<span class="g">✓</span> deployed to prod <span class="m">· 12 hosts healthy</span>\n'+PROMPT+'<span class="cursorblk"></span>';
+    screen.innerHTML=html;
+    await sleep(4200);
+  }
 }
-function runProgress(){
-  let p=0;const asciiFor=v=>{const n=Math.round(v/5);return '█'.repeat(n)+'░'.repeat(20-n)};
-  html+=post[0]+'\n'+post[1]+'\n';screen.innerHTML=html;
-  const ascii=document.getElementById('ascii'),pct=document.getElementById('pct');
-  const iv=setInterval(()=>{
-    p=Math.min(100,p+Math.random()*9+3);
-    ascii.textContent=asciiFor(p);pct.textContent=Math.round(p)+'%';
-    ptab.style.width=p+'%';
-    if(p>=100){clearInterval(iv);ascii.textContent=asciiFor(100);pct.textContent='100%';
-      setTimeout(()=>{html+=post[2]+'\n'+post[3]+'\n'+post[4];screen.innerHTML=html;},400);}
-  },160);
-}
-setTimeout(()=>typeLine(0),500);
+const demoObs=new IntersectionObserver(es=>{if(es[0].isIntersecting){demoObs.disconnect();demo()}},{threshold:.3});
+demoObs.observe(screen);
 </script>
 </body>
 </html>
