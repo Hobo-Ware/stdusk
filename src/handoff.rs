@@ -126,6 +126,10 @@ pub(crate) struct PaneMeta {
     /// an upgrade refuse the handoff, and the user already paid that once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cmd_running: Option<bool>,
+    /// Theme reports (mode 2031) the app enabled; see `terminal::Adopted`. Defaulted like
+    /// `cmd_running`, so no `PROTOCOL` bump.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) theme_reports: bool,
     /// The pane's screen (plus a bounded tail of scrollback) as ANSI, base64'd - what lets the
     /// successor show what was ALREADY on screen instead of a blank grid. See `screen`.
     ///
@@ -540,6 +544,7 @@ impl crate::Stdusk {
                         cmd_running: cmd_running(term.cmd_state()),
                         screen: encode_screen(&term.screen_dump()),
                         title_osc: clamp_title(term.title_osc()),
+                        theme_reports: term.theme_reports(),
                     },
                     fd,
                 ));
@@ -700,6 +705,7 @@ mod tests {
             alt_screen: n % 2 == 1,
             cmd_running: n.is_multiple_of(2).then_some(n == 0),
             title_osc: (n == 1).then(|| "claude - pane 1".to_owned()),
+            theme_reports: n == 1,
             // A dump big enough to prove the metadata survives past one socket buffer.
             screen: encode_screen(format!("\x1b[0mpane-{n} screen{}", "x".repeat(9000)).as_bytes()),
         }
@@ -996,6 +1002,7 @@ mod tests {
                 cmd_running: cmd_running(term.cmd_state()),
                 screen: encode_screen(&term.screen_dump()),
                 title_osc: clamp_title(term.title_osc()),
+                theme_reports: term.theme_reports(),
             },
             fd,
         )];

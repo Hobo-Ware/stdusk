@@ -6,7 +6,7 @@ use eframe::egui::Color32;
 use std::sync::{LazyLock, RwLock};
 
 /// A full theme: default bg/fg/cursor + the 16 ANSI colors. UI-chrome colors are derived.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Theme {
     pub(crate) bg: Color32,
     pub(crate) fg: Color32,
@@ -28,7 +28,7 @@ pub(crate) fn set(theme: Theme) {
     *THEME.write().unwrap() = theme;
 }
 
-fn theme() -> Theme {
+pub(crate) fn theme() -> Theme {
     *THEME.read().unwrap()
 }
 

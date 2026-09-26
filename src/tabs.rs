@@ -192,6 +192,7 @@ fn adopt_saved_tree(
             cmd_running: meta.cmd_running,
             replay: crate::handoff::decode_screen(meta.screen.as_ref()),
             title_osc: crate::handoff::clamp_title(meta.title_osc.clone()),
+            theme_reports: meta.theme_reports,
         };
         PtyTerm::adopt(ctx.clone(), handover, &opts).unwrap_or_else(|_| {
             eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
@@ -1448,6 +1449,7 @@ mod tests {
             cmd_running: None,
             screen: None,
             title_osc: title_osc.map(Into::into),
+            theme_reports: false,
         };
         let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
         let tab = adopt_saved_tab(&Config::default(), &egui::Context::default(), st, &mut panes);
@@ -1573,6 +1575,27 @@ mod tests {
             Some("vim README.md"),
             "the title still rides along - it just does not win"
         );
+    }
+
+    #[test]
+    fn an_adopted_pane_keeps_the_theme_reports_its_app_enabled() {
+        for enabled in [true, false] {
+            let (rx, _tx) = std::io::pipe().expect("pipe");
+            let meta = crate::handoff::PaneMeta {
+                cols: 80,
+                rows: 24,
+                theme_reports: enabled,
+                ..Default::default()
+            };
+            let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
+            let tab = adopt_saved_tab(
+                &Config::default(),
+                &egui::Context::default(),
+                &session::SavedTab::default(),
+                &mut panes,
+            );
+            assert_eq!(tab.focused_term().theme_reports(), enabled);
+        }
     }
 
     #[test]

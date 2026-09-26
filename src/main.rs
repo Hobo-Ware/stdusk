@@ -18,6 +18,7 @@ mod instance;
 mod keys;
 mod links;
 mod macos;
+mod modes;
 mod mouse;
 mod osc;
 mod palette;
@@ -101,6 +102,7 @@ struct Stdusk {
     flash: f64,                   // bell visual-flash expiry (egui time); 0 = none
     zoom: f32,                    // font-size multiplier (Cmd +/-/0)
     theme_name: String,           // currently-applied theme (to detect OS light/dark changes)
+    reported_theme: colors::Theme, // theme last announced to mode-2031 apps (see modes.rs)
     next_theme_check: f64,        // egui time of the next throttled OS-appearance read
     sys: sysinfo::System,         // process table for CLI-awareness scans
     next_cli_scan: f64,           // egui time of the next throttled procwatch scan
@@ -418,6 +420,7 @@ impl Stdusk {
             flash: 0.0,
             zoom: 1.0,
             theme_name,
+            reported_theme: colors::theme(),
             next_theme_check: 0.0,
             sys: sysinfo::System::new(),
             next_cli_scan: 0.0,
@@ -474,6 +477,20 @@ impl Stdusk {
                 .collect(),
             active: self.active,
             window,
+        }
+    }
+
+    fn report_theme_change(&mut self) {
+        let theme = colors::theme();
+        if theme == self.reported_theme {
+            return;
+        }
+        self.reported_theme = theme;
+        let dark = colors::is_dark();
+        for tab in &mut self.tabs {
+            for term in tab.root_mut().leaves_mut() {
+                term.report_theme(dark);
+            }
         }
     }
 
@@ -887,6 +904,7 @@ impl eframe::App for Stdusk {
                 }
             }
         }
+        self.report_theme_change();
 
         let mut active_joined = false;
         for (i, tab) in self.tabs.iter_mut().enumerate() {

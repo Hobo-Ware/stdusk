@@ -141,6 +141,7 @@ pub(crate) struct GridSnap {
 }
 
 /// Per-tab observable state, written by the reader thread, read by the UI.
+#[allow(clippy::struct_excessive_bools)] // independent per-pane flags, not a mode
 #[derive(Default)]
 pub(crate) struct TabState {
     pub(crate) progress: Progress,
@@ -156,6 +157,7 @@ pub(crate) struct TabState {
     pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
     pub(crate) exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
     pub(crate) title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
+    pub(crate) theme_reports: bool,
 }
 
 /// Grid sizing. History (scrollback) comes from `Config::scrolling_history`, not here.
@@ -392,6 +394,9 @@ pub(crate) struct Adopted {
     /// the app re-emits its title only when something changes, so without it a Claude/vim pane falls
     /// back to its cwd basename for the rest of the session.
     pub(crate) title_osc: Option<String>,
+    /// Had the app enabled theme reports (mode 2031)? It enables them once at startup, so an adopted
+    /// pane that forgot would never be told about a theme change again.
+    pub(crate) theme_reports: bool,
 }
 
 /// How this pane's pty master is owned. A spawned pane keeps `portable_pty`'s master (its proven
@@ -457,6 +462,7 @@ fn spawn_reader(c: ReaderCtx) {
         let mut parser: Processor = Processor::new();
         let mut prog = ProgressScanner::new(detect_progress);
         let mut osc = OscScanner::new();
+        let mut theme_reports = crate::modes::ThemeReportScanner::new();
         let mut buf = [0u8; 8192];
         let mut cmd_started: Option<std::time::Instant> = None; // for notify-when-done
         loop {
@@ -465,6 +471,7 @@ fn spawn_reader(c: ReaderCtx) {
                 Ok(n) => {
                     let chunk = &buf[..n];
                     let osc_events = osc.feed(chunk);
+                    let theme_toggle = theme_reports.feed(chunk);
                     let prompt_started = osc_events
                         .iter()
                         .any(|e| matches!(e, OscEvent::Shell(ShellEvent::PromptStart)));
@@ -554,6 +561,12 @@ fn spawn_reader(c: ReaderCtx) {
                         s.progress = progress;
                         s.activity = true; // any output chunk counts (notify-on-activity)
                         s.saw_output = true;
+                        if prompt_started {
+                            s.theme_reports = false;
+                        }
+                        if let Some(on) = theme_toggle {
+                            s.theme_reports = on;
+                        }
                         if let Some(c) = cwd_update {
                             s.cwd = Some(c);
                         }
@@ -703,8 +716,18 @@ impl PtyTerm {
         handover: Adopted,
         opts: &SpawnOpts,
     ) -> std::io::Result<Self> {
-        let Adopted { fd, cols, rows, pgid, alive, alt_screen, cmd_running, replay, title_osc } =
-            handover;
+        let Adopted {
+            fd,
+            cols,
+            rows,
+            pgid,
+            alive,
+            alt_screen,
+            cmd_running,
+            replay,
+            title_osc,
+            theme_reports,
+        } = handover;
         let redraw_ctx = ctx.clone(); // the reader thread takes `ctx`; the nudger needs one too
         // Separate dups for the reader thread and the writer: both sides of the same pty master,
         // independently owned, exactly like `try_clone_reader` + `take_writer` give us on a spawn.
@@ -719,6 +742,7 @@ impl PtyTerm {
         let state = Arc::new(Mutex::new(TabState {
             cwd: opts.cwd.clone(),
             title_osc,
+            theme_reports,
             ..TabState::default()
         }));
         let replies = Arc::new(Mutex::new(Vec::new()));
@@ -881,6 +905,16 @@ impl PtyTerm {
         #[cfg(unix)]
         if let Some(pid) = self.shell_pid {
             kill_pty_session(pid as i32);
+        }
+    }
+
+    pub(crate) fn theme_reports(&self) -> bool {
+        self.state.lock().unwrap().theme_reports
+    }
+
+    pub(crate) fn report_theme(&mut self, dark: bool) {
+        if self.theme_reports() {
+            self.send(crate::modes::theme_report(dark));
         }
     }
 
@@ -1931,6 +1965,7 @@ mod tests {
                 cmd_running,
                 replay: if replay { donor.screen_dump() } else { Vec::new() },
                 title_osc: crate::handoff::clamp_title(donor.title_osc()),
+                theme_reports: false,
             },
             &opts,
         )
@@ -2313,6 +2348,7 @@ mod tests {
                 cmd_running: Some(false),
                 replay: Vec::new(),
                 title_osc: None,
+                theme_reports: false,
             },
             &opts,
         )
@@ -2417,6 +2453,22 @@ mod tests {
         term.send(&wheel_sgr(1, 2, 4)); // wheel up at cell (2,4) -> ESC[<64;3;5M
         poll_term(&term, |t| grid_text(t).contains("E[<64;3;5M").then_some(()))
             .expect("wheel SGR report never reached the app");
+    }
+
+    #[test]
+    fn real_pty_theme_reports_reach_an_app_that_enabled_them() {
+        // The app enables mode 2031, reads exactly one report (9 bytes, ESC shown as 'E' so it
+        // lands in the grid), then disables the mode again.
+        let mut term = e2e_term(
+            "stty raw -echo; printf '\\033[?2031h'; head -c 9 | tr '\\033' 'E'; \
+             printf '\\033[?2031l'; sleep 5",
+        );
+        poll_term(&term, |t| t.theme_reports().then_some(())).expect("mode 2031 never tracked");
+        term.report_theme(false);
+        poll_term(&term, |t| grid_text(t).contains("E[?997;2n").then_some(()))
+            .expect("the light report never reached the app");
+        poll_term(&term, |t| (!t.theme_reports()).then_some(()))
+            .expect("the app's reset of mode 2031 was missed");
     }
 
     #[test]
