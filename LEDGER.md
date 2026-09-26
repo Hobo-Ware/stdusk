@@ -2155,6 +2155,44 @@ Three separate reports, three commits.
   index fix-up in `handle_shell_exits` went away since `close_tab` now does it. `prev_active`
   (Cmd+O) is still its own index-based slot.
 
+## Repo tabs (post-1.6.9; 371 tests)
+`appearance.group_by_repo` (default off; Settings > Appearance > Window). Each tab has a
+`repo::Group` (`Repo(root)` or `Other`) and the bar shows only the active tab's group behind a repo
+chip. UX was picked from a clickable mockup (layout A "repo chip" + palette entries).
+
+- **Model.** The tab list stays flat; `Stdusk::visible_tabs()` filters it. The current repo is the
+  active tab's group, so there is no separate field to keep in sync. Switching repo lands on that
+  repo's most recently focused tab (`repo::landing_tab` over `focus_history`).
+- **Assignment.** `repo::repo_root` walks up to the nearest `.git`; a worktree's `.git` file
+  (`gitdir: <main>/.git/worktrees/<name>`, absolute or relative, verified on real worktrees) folds
+  into the main repo, any other `.git` file (submodule) is its own repo. Paths are normalized
+  lexically, not canonicalized (`/var` vs `/private/var` would split groups). Cmd+T, Duplicate and
+  Restart inherit the source tab's group; restore/reopen/handoff derive it from the saved `repo`
+  (new `SavedTab.repo`) or the saved cwd. A repo tab keeps its group through later `cd`s. An
+  `Other` tab joins the first repo its shell enters (`Tab::join_repo_from_cwd`, re-probed only when
+  the cwd string changes), with a "Grouped under X" toast when it's the active tab.
+- **Scoped actions.** Cmd+1..9, Ctrl+Tab, palette Next/Prev, the Tabs popup, drag-reorder and
+  Cmd+Shift+arrows act on visible tabs only (`repo::neighbor` swaps across hidden tabs; pinned tabs
+  stay a global prefix so the pin check still holds). Close Others/Left/Right keep other repos'
+  tabs. Closing a tab prefers history from the same repo (`repo::history_preferring`). Cmd+O stays
+  global and may switch repo.
+- **Chip.** `repo::chip_picker`: dot (stable color from `tab_colors` by path hash), name, tab
+  count, caret; a pip when another repo has progress, a failed command or notify-on-activity. The
+  list shows each repo's count, mini progress bar and attention dot. Names get the parent folder
+  prefixed when two repos share a basename.
+- **Keys + palette.** `[hotkeys] next_repo` / `prev_repo` (Cmd+Shift+] / [). egui-winit reports
+  Shift+[ as the logical `{`, so `hotkey_matches` folds curly onto square brackets. Palette gets
+  "Switch Repo: <name>" entries while grouping is on.
+- **Verified.** Unit tests for root detection (temp dirs: repo, nested, absolute + relative
+  worktree, submodule, none), ordering, labels, landing/close/step logic, config + session round
+  trips, bracket matching and palette entries; headless `run_ui` test clicks the chip then a row.
+  Screenshots: `STDUSK_SHOT_REPOS=1 --screenshot` shows the chip + pip; grouping off is unchanged.
+  Live `--state-dir` run confirmed grouping on real repos (worktree folded, `/tmp` in Other) via
+  the saved session. **Not verified live:** the Cmd+Shift+[ / ] chord - synthetic keystrokes
+  from this environment are dropped by macOS (Cmd+T did not fire either), so it needs a human
+  press.
+- Not built (declined for now): a "Move to repo" tab-menu item.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
