@@ -249,6 +249,8 @@ fn key_from_name(name: &str) -> Option<egui::Key> {
         "/" | "slash" => Key::Slash,
         "\\" | "backslash" => Key::Backslash,
         "-" | "minus" => Key::Minus,
+        "[" | "openbracket" => Key::OpenBracket,
+        "]" | "closebracket" => Key::CloseBracket,
         "=" | "plus" | "equals" => Key::Equals, // shared physical key, normalized
         "`" | "grave" | "backtick" | "backquote" => Key::Backtick,
         "space" => Key::Space,
@@ -274,13 +276,19 @@ fn key_from_name(name: &str) -> Option<egui::Key> {
 /// Does a pressed (key, modifiers) match a `[hotkeys]` spec? EXACT modifier match (Cmd+T does
 /// not fire on Cmd+Shift+T and vice versa); a spec that doesn't parse (or is empty = unbound)
 /// never matches. Pressed `Plus` is normalized to `Equals` so "Cmd+=" keeps zooming on layouts
-/// where the same key reports either. NOTE (macOS): `mods.command` is Cmd, `mods.ctrl` is the
+/// where the same key reports either; likewise egui-winit reports Shift+[ as the logical `{`, so
+/// curly brackets fold onto their square keys. NOTE (macOS): `mods.command` is Cmd, `mods.ctrl` is the
 /// real Ctrl - the comparison relies on that split.
 pub(crate) fn hotkey_matches(spec: &str, key: egui::Key, mods: egui::Modifiers) -> bool {
     let Some((want_mods, want_key)) = parse_hotkey_spec(spec) else {
         return false;
     };
-    let key = if key == egui::Key::Plus { egui::Key::Equals } else { key };
+    let key = match key {
+        egui::Key::Plus => egui::Key::Equals,
+        egui::Key::OpenCurlyBracket => egui::Key::OpenBracket,
+        egui::Key::CloseCurlyBracket => egui::Key::CloseBracket,
+        other => other,
+    };
     key == want_key
         && mods.command == want_mods.command
         && mods.ctrl == want_mods.ctrl
@@ -465,6 +473,22 @@ mod tests {
         assert!(hotkey_matches("Cmd+=", Key::Plus, cmd)); // shifted layouts report Plus
         assert!(hotkey_matches("Cmd+Plus", Key::Equals, cmd));
         assert!(hotkey_matches("Cmd+-", Key::Minus, cmd));
+    }
+
+    #[test]
+    fn repo_switch_binds_match_square_or_curly_brackets() {
+        let cmd_shift = Modifiers { shift: true, ..mods(false, false, true) };
+        let cases = [
+            ("Cmd+Shift+]", Key::CloseBracket, true),
+            ("Cmd+Shift+]", Key::CloseCurlyBracket, true),
+            ("Cmd+Shift+[", Key::OpenBracket, true),
+            ("Cmd+Shift+[", Key::OpenCurlyBracket, true),
+            ("Cmd+Shift+[", Key::CloseCurlyBracket, false),
+        ];
+        for (spec, key, want) in cases {
+            assert_eq!(hotkey_matches(spec, key, cmd_shift), want, "{spec} vs {key:?}");
+        }
+        assert!(!hotkey_matches("Cmd+Shift+]", Key::CloseBracket, mods(false, false, true)));
     }
 
     #[test]

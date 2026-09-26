@@ -676,6 +676,7 @@ mod tests {
                         a: Box::new(SavedPane::Leaf { cwd: Some("/left".into()) }),
                         b: Box::new(SavedPane::Leaf { cwd: Some("/right".into()) }),
                     }),
+                    repo: None,
                 },
                 SavedTab {
                     cwd: Some("/solo".into()),

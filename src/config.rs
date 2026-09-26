@@ -49,6 +49,8 @@ pub(crate) struct Hotkeys {
     pub(crate) zoom_in: String,
     pub(crate) zoom_out: String,
     pub(crate) zoom_reset: String,
+    pub(crate) next_repo: String,
+    pub(crate) prev_repo: String,
 }
 
 impl Default for Hotkeys {
@@ -69,6 +71,8 @@ impl Default for Hotkeys {
             zoom_in: "Cmd+=".into(),
             zoom_out: "Cmd+-".into(),
             zoom_reset: "Cmd+0".into(),
+            next_repo: "Cmd+Shift+]".into(),
+            prev_repo: "Cmd+Shift+[".into(),
         }
     }
 }
@@ -133,6 +137,7 @@ pub(crate) struct Appearance {
     pub(crate) theme_light: String,
     pub(crate) theme_dark: String,
     pub(crate) tab_width: String, // "fixed" (equal widths, the default) | "dynamic" (fit title)
+    pub(crate) group_by_repo: bool,
 }
 
 #[allow(clippy::struct_excessive_bools)] // independent quake toggles, not a mode
@@ -212,6 +217,7 @@ impl Default for Appearance {
             theme_light: "one-half-light".into(),
             theme_dark: "one-half-dark".into(),
             tab_width: "fixed".into(),
+            group_by_repo: false,
         }
     }
 }
@@ -729,6 +735,20 @@ name = "ops"
         assert_eq!(h.zoom_in, "Cmd+=");
         assert_eq!(h.zoom_out, "Cmd+-");
         assert_eq!(h.zoom_reset, "Cmd+0");
+        assert_eq!(h.next_repo, "Cmd+Shift+]");
+        assert_eq!(h.prev_repo, "Cmd+Shift+[");
+    }
+
+    #[test]
+    fn repo_grouping_is_off_by_default_and_round_trips() {
+        let mut cfg = Config::default();
+        assert!(!cfg.appearance.group_by_repo);
+        cfg.appearance.group_by_repo = true;
+        let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
+        assert!(back.appearance.group_by_repo);
+        for spec in [&back.hotkeys.next_repo, &back.hotkeys.prev_repo] {
+            assert!(crate::keys::parse_hotkey_spec(spec).is_some(), "{spec} must parse");
+        }
     }
 
     #[test]

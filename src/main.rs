@@ -24,6 +24,7 @@ mod palette;
 mod pane;
 mod procwatch;
 mod progress;
+mod repo;
 mod screen;
 mod search;
 mod session;
@@ -264,6 +265,18 @@ impl Stdusk {
                 }
                 tab.broadcast = true;
             }
+            // STDUSK_SHOT_REPOS: group the demo tabs under two repos + Other so the repo chip
+            // (and its activity pip, from a busy tab in another repo) is capturable.
+            if std::env::var("STDUSK_SHOT_REPOS").is_ok() {
+                cfg.appearance.group_by_repo = true;
+                let stdusk = repo::Group::Repo("/Users/demo/Git/stdusk".into());
+                let web = repo::Group::Repo("/Users/demo/Git/trakt-web".into());
+                let groups = [stdusk.clone(), stdusk, web, repo::Group::Other];
+                for (t, g) in tabs.iter_mut().zip(groups) {
+                    t.group = g;
+                }
+                tabs[2].activity_notified = true;
+            }
             // STDUSK_SHOT_SETTLE_MS: eframe captures at cumulative pass 2, which beats the
             // pty readers - sleep here (before the first pass) so demo-shell output lands in
             // the grid. The bold-face pixel proof drives real SGR output through $SHELL.
@@ -456,6 +469,7 @@ impl Stdusk {
                     pane: Some(session::SavedPane::from_tree(t.root(), &|term: &PtyTerm| {
                         session::SavedPane::Leaf { cwd: term.cwd() }
                     })),
+                    repo: t.group.to_saved(),
                 })
                 .collect(),
             active: self.active,
@@ -874,6 +888,19 @@ impl eframe::App for Stdusk {
             }
         }
 
+        let mut active_joined = false;
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            let joined = tab.join_repo_from_cwd();
+            active_joined |= joined && i == self.active;
+        }
+        if active_joined
+            && self.grouping()
+            && let Some(name) = self.active_group_label()
+        {
+            let now = ctx.input(|i| i.time);
+            self.toast = Some((format!("Grouped under {name}"), now + 1.8));
+        }
+
         // Auto-title unrenamed tabs: the shell's OSC 0/2 title (when dynamic_title) beats the
         // cwd basename; a user rename always wins.
         for tab in &mut self.tabs {
@@ -998,6 +1025,7 @@ impl eframe::App for Stdusk {
         let mut kb_scroll_lines: Option<i32> = None; // Ctrl+Shift+Up/Down: one line (Tabby bind)
         let mut kb_tab_cycle: Option<i32> = None; // Ctrl+Tab next (+1) / Ctrl+Shift+Tab prev (-1)
         let mut kb_toggle_last = false; // (Cmd+O) jump to the previously active tab
+        let mut kb_repo_cycle: Option<i32> = None;
         let mut kb_reopen = false; // (Cmd+Shift+T) reopen last closed tab
         let mut kb_resize: Option<(pane::SplitDir, f32)> = None; // Cmd+Ctrl+arrow: resize focused pane
         let mut kb_move_tab: Option<i32> = None; // Cmd+Shift+←/→: move the active tab
@@ -1065,6 +1093,10 @@ impl eframe::App for Stdusk {
                     kb_zoom = Some(-1);
                 } else if keys::hotkey_matches(&hk.zoom_reset, key, mods) {
                     kb_zoom = Some(0);
+                } else if keys::hotkey_matches(&hk.next_repo, key, mods) {
+                    kb_repo_cycle = Some(1);
+                } else if keys::hotkey_matches(&hk.prev_repo, key, mods) {
+                    kb_repo_cycle = Some(-1);
                 }
             }
             // Tab SWITCHING stays live while only the settings view is up: settings behaves
@@ -1176,14 +1208,17 @@ impl eframe::App for Stdusk {
         if let Some(i) = clicked {
             self.active = i;
         }
-        if let Some(n) = kb_switch
-            && n < self.tabs.len()
-        {
-            self.active = n;
+        let switch_target = kb_switch.and_then(|n| self.visible_tabs().get(n).copied());
+        if let Some(i) = switch_target {
+            self.active = i;
         }
         if let Some(d) = kb_tab_cycle {
-            let len = self.tabs.len() as i32;
-            self.active = (self.active as i32 + d).rem_euclid(len) as usize;
+            self.cycle_visible(d);
+        }
+        if let Some(d) = kb_repo_cycle
+            && self.grouping()
+        {
+            self.cycle_group(d);
         }
         if kb_toggle_last {
             self.active = ui::toggle_last_target(self.prev_active, self.tabs.len());
@@ -1191,9 +1226,7 @@ impl eframe::App for Stdusk {
         // A switch to a terminal tab hides the settings VIEW like any tab switch would; the
         // settings TAB (and the staged edits behind it) stays until explicitly closed.
         if self.settings_open
-            && (clicked.is_some()
-                || kb_tab_cycle.is_some()
-                || kb_switch.is_some_and(|n| n < self.tabs.len()))
+            && (clicked.is_some() || kb_tab_cycle.is_some() || switch_target.is_some())
         {
             self.settings_open = false;
         }

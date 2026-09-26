@@ -10,7 +10,7 @@ use crate::progress::Progress;
 use crate::terminal::{self, PtyTerm};
 use crate::ui::{self, draw_tab, icons, tint};
 use crate::widgets::{color_swatch, icon_button, style_menu};
-use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch, session};
+use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch, repo, session};
 
 /// Width the bar's right-side controls need: "+", the Tabs popup, the gear, and their
 /// spacing/spacer - reserved when splitting the rest into equal fixed-width tabs.
@@ -38,6 +38,8 @@ pub(crate) struct Tab {
     pub(crate) broadcast: bool,      // route keystrokes/paste to EVERY pane (Tabby pane-focus-all)
     pub(crate) notify_activity: bool, // menu toggle: notify on new output while unviewed
     pub(crate) activity_notified: bool, // notify-on-activity fired; re-armed when viewed
+    pub(crate) group: repo::Group,
+    repo_probed_cwd: Option<String>,
 }
 
 impl Tab {
@@ -53,6 +55,18 @@ impl Tab {
     pub(crate) fn focused_term_mut(&mut self) -> &mut PtyTerm {
         let path = self.focused.clone();
         self.root_mut().leaf_at_mut(&path).expect("focused leaf")
+    }
+    pub(crate) fn join_repo_from_cwd(&mut self) -> bool {
+        if self.group != repo::Group::Other {
+            return false;
+        }
+        let cwd = self.focused_term().cwd();
+        if cwd == self.repo_probed_cwd {
+            return false;
+        }
+        self.group = repo::Group::for_cwd(cwd.as_deref());
+        self.repo_probed_cwd = cwd;
+        self.group != repo::Group::Other
     }
 }
 
@@ -89,12 +103,15 @@ fn tab_with_root(root: pane::Pane<PtyTerm>) -> Tab {
         broadcast: false,
         notify_activity: false,
         activity_notified: false,
+        group: repo::Group::Other,
+        repo_probed_cwd: None,
     }
 }
 
 pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
-    let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
-    tab_with_root(pane::Pane::leaf(term))
+    let group = repo::Group::for_cwd(cwd.as_deref());
+    let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd.clone()));
+    Tab { group, repo_probed_cwd: cwd, ..tab_with_root(pane::Pane::leaf(term)) }
 }
 
 /// Apply a saved tab's presentation to a rebuilt one: the persisted rename, color and pin. Shared
@@ -109,6 +126,11 @@ fn apply_saved_tab(tab: &mut Tab, st: &session::SavedTab) {
     }
     tab.color = st.color.as_deref().and_then(session::hex_to_color);
     tab.pinned = st.pinned;
+    tab.group = st
+        .repo
+        .as_ref()
+        .map_or_else(|| repo::Group::for_cwd(st.cwd.as_deref()), |r| repo::Group::Repo(r.into()));
+    tab.repo_probed_cwd.clone_from(&st.cwd);
 }
 
 /// A saved tab's layout: its stored pane tree, or a single pane in the flat `cwd` (sessions written
@@ -342,6 +364,7 @@ pub(crate) enum TabAction {
     CloseRight(usize),
     CloseLeft(usize),
     OpenPalette, // from the Tabs menu's discoverability row
+    SwitchRepo(repo::Group),
 }
 
 /// While dragging the tab at `from`, the neighbor to swap with once the pointer's x
@@ -509,7 +532,10 @@ impl Stdusk {
 
     fn new_tab_at(&mut self, pos: NewTabPosition, ctx: &egui::Context) {
         let cwd = self.tabs.get(self.active).and_then(|t| t.focused_term().cwd());
-        let tab = spawn_tab(&self.cfg, ctx, cwd);
+        let mut tab = spawn_tab(&self.cfg, ctx, cwd);
+        if let Some(src) = self.tabs.get(self.active) {
+            tab.group = src.group.clone();
+        }
         let from = match pos {
             NewTabPosition::AfterCurrent => self.active,
             NewTabPosition::End => self.tabs.len(),
@@ -531,6 +557,7 @@ impl Stdusk {
     }
 
     pub(crate) fn close_tab(&mut self, i: usize, ctx: &egui::Context) {
+        let history = self.close_history(i);
         if let Some(tab) = self.tabs.get(i) {
             if let Some(cwd) = tab.focused_term().cwd() {
                 self.closed.push(cwd); // remember for reopen (Cmd+Shift+T)
@@ -547,7 +574,7 @@ impl Stdusk {
             self.tabs.push(tab);
         }
         let ids: Vec<u64> = self.tabs.iter().map(|t| t.id).collect();
-        self.active = active_after_close(i, self.active, &ids, &self.focus_history);
+        self.active = active_after_close(i, self.active, &ids, &history);
     }
 
     /// Apply `terminal.on_exit` to panes whose shell has exited: close the pane (tab on its
@@ -597,6 +624,12 @@ impl Stdusk {
         ctx.request_repaint(); // drain any further exited panes next frame
     }
 
+    /// `close_tabs_where` limited to the tabs the bar shows: other repos' tabs are always kept.
+    fn close_in_group(&mut self, focus: usize, keep: impl Fn(usize) -> bool) {
+        let visible = self.visible_tabs();
+        self.close_tabs_where(|j| !visible.contains(&j) || keep(j), focus);
+    }
+
     /// Close every tab whose index fails `keep`, remembering cwds for reopen. The tab at
     /// `focus` (which must pass `keep`) becomes active.
     fn close_tabs_where(&mut self, keep: impl Fn(usize) -> bool, focus: usize) {
@@ -630,11 +663,8 @@ impl Stdusk {
     }
 
     pub(crate) fn move_tab(&mut self, i: usize, dir: i32) {
-        let j = i as i32 + dir;
-        if j < 0 || j as usize >= self.tabs.len() {
-            return;
-        }
-        let j = j as usize;
+        let visible = self.visible_tabs();
+        let Some(j) = repo::neighbor(&visible, i, dir) else { return };
         // Never reorder across the pinned boundary (Tabby `swapTabs` refuses too).
         if self.tabs[i].pinned != self.tabs[j].pinned {
             return;
@@ -1017,6 +1047,12 @@ impl Stdusk {
                     if window_mode {
                         ui.add_space(crate::WINDOW_TRAFFIC_INSET);
                     }
+                    if self.grouping()
+                        && let Some(g) = self.repo_chip(ui)
+                    {
+                        action = Some(TabAction::SwitchRepo(g));
+                    }
+                    let visible = self.visible_tabs();
                     // Right-edge settings control: the gear (BAR_CONTROLS_W already reserves
                     // its ICON_TOGGLE_W) OR - once a session exists - the wider Settings tab
                     // that REPLACES it. `settings_extra` is the delta the swap adds beyond the
@@ -1032,18 +1068,19 @@ impl Stdusk {
                         ui::TabWidthMode::Dynamic => None,
                         ui::TabWidthMode::Fixed => Some(ui::fixed_tab_width(
                             ui.available_width() - BAR_CONTROLS_W - settings_extra,
-                            self.tabs.len(),
+                            visible.len(),
                             4.0,
                         )),
                     };
                     // Drag-to-reorder state, derived per frame (nothing persists): the tab
                     // whose drag response is active + the pointer x, plus every tab's rect.
-                    let mut rects: Vec<egui::Rect> = Vec::with_capacity(self.tabs.len());
+                    let mut rects: Vec<egui::Rect> = Vec::with_capacity(visible.len());
                     let mut drag: Option<(usize, f32)> = None;
                     // Color-menu hover preview: last frame's hovered swatch tints the tab now;
                     // this frame's hover is collected for the next (immediate-mode handoff).
                     let prev_preview = self.color_preview;
-                    for (i, tab) in self.tabs.iter().enumerate() {
+                    for (pos, &i) in visible.iter().enumerate() {
+                        let tab = &self.tabs[i];
                         let active = i == self.active;
                         let shown_color = match prev_preview {
                             Some((id, c)) if id == tab.id => c,
@@ -1066,7 +1103,7 @@ impl Stdusk {
                         );
                         let (resp, close) = draw_tab(
                             ui,
-                            Some(i + 1),
+                            Some(pos + 1),
                             tab.id,
                             &tab.title,
                             active,
@@ -1096,7 +1133,7 @@ impl Stdusk {
                             && ui.input(|inp| inp.pointer.is_decidedly_dragging())
                             && let Some(p) = resp.interact_pointer_pos()
                         {
-                            drag = Some((i, p.x));
+                            drag = Some((pos, p.x));
                         }
                         rects.push(resp.rect);
                         resp.context_menu(|ui| {
@@ -1133,9 +1170,9 @@ impl Stdusk {
                             && let Some(to) = drag_swap_target(&rects, from, px)
                         {
                             action = Some(if to < from {
-                                TabAction::MoveLeft(from)
+                                TabAction::MoveLeft(visible[from])
                             } else {
-                                TabAction::MoveRight(from)
+                                TabAction::MoveRight(visible[from])
                             });
                         }
                     }
@@ -1155,10 +1192,12 @@ impl Stdusk {
                     let mgr = icon_button(ui, icons::APP_WINDOW, "Tabs");
                     egui::Popup::menu(&mgr).show(|ui| {
                         style_menu(ui);
-                        for (i, tab) in self.tabs.iter().enumerate() {
+                        for (pos, &i) in visible.iter().enumerate() {
                             let shortcut =
-                                if i < 9 { format!("Cmd+{}", i + 1) } else { String::new() };
-                            if crate::widgets::menu_item(ui, &tab.title, &shortcut).clicked() {
+                                if pos < 9 { format!("Cmd+{}", pos + 1) } else { String::new() };
+                            if crate::widgets::menu_item(ui, &self.tabs[i].title, &shortcut)
+                                .clicked()
+                            {
                                 clicked = Some(i);
                             }
                         }
@@ -1256,7 +1295,10 @@ impl Stdusk {
             }
             Some(TabAction::Duplicate(i)) => {
                 let cwd = self.tabs.get(i).and_then(|t| t.focused_term().cwd());
-                let tab = spawn_tab(&self.cfg, ctx, cwd);
+                let mut tab = spawn_tab(&self.cfg, ctx, cwd);
+                if let Some(src) = self.tabs.get(i) {
+                    tab.group = src.group.clone();
+                }
                 self.insert_tab(tab, i); // beside its source, not at the far end
             }
             Some(TabAction::Rename(i)) => {
@@ -1279,14 +1321,15 @@ impl Stdusk {
                 }
             }
             Some(TabAction::Close(i)) => self.request_close_tab(i, ctx),
+            Some(TabAction::SwitchRepo(g)) => self.switch_group(&g),
             Some(TabAction::OpenPalette) => {
                 if self.palette.is_none() {
                     self.palette = Some(crate::palette::PaletteState::new());
                 }
             }
-            Some(TabAction::CloseOthers(i)) => self.close_tabs_where(|j| j == i, i),
-            Some(TabAction::CloseRight(i)) => self.close_tabs_where(|j| j <= i, i),
-            Some(TabAction::CloseLeft(i)) => self.close_tabs_where(|j| j >= i, i),
+            Some(TabAction::CloseOthers(i)) => self.close_in_group(i, |j| j == i),
+            Some(TabAction::CloseRight(i)) => self.close_in_group(i, |j| j <= i),
+            Some(TabAction::CloseLeft(i)) => self.close_in_group(i, |j| j >= i),
             Some(TabAction::Restart(i)) => {
                 // Fresh shell in the same cwd; keep the tab's identity (title/color/rename).
                 if let Some(old) = self.tabs.get(i) {
@@ -1297,6 +1340,7 @@ impl Stdusk {
                     fresh.color = old.color;
                     fresh.pinned = old.pinned;
                     fresh.notify_activity = old.notify_activity;
+                    fresh.group = old.group.clone();
                     self.tabs[i] = fresh;
                 }
             }
@@ -1418,8 +1462,14 @@ mod tests {
             cwd: Some("/tmp/beta".into()),
             pinned: true,
             pane: Some(session::SavedPane::Leaf { cwd: Some("/tmp/beta".into()) }),
+            repo: Some("/Users/x/Git/stdusk".into()),
         };
         let (tab, _tx) = adopt_one(&st, Some("/tmp/beta"));
+        assert_eq!(
+            tab.group,
+            repo::Group::Repo("/Users/x/Git/stdusk".into()),
+            "a tab that cd'd out of its repo keeps it across a handoff"
+        );
         assert_eq!(tab.title, "build");
         assert!(tab.renamed, "a restored rename must keep auto-titling off");
         assert_eq!(tab.color, session::hex_to_color("#e06c75"));

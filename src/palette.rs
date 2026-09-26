@@ -31,6 +31,7 @@ impl PaletteState {
 pub(crate) enum PaletteCmd {
     NewTab,
     NewTabWithProfile(usize), // index into cfg.profiles (dynamic entries, appended after ALL)
+    SwitchRepo(usize),
     CloseTab,
     DuplicateTab,
     ReopenTab,
@@ -80,12 +81,20 @@ impl PaletteCmd {
         Self::Quit,
     ];
 
-    fn label(self, profiles: &[config::Profile]) -> std::borrow::Cow<'static, str> {
+    fn label(
+        self,
+        profiles: &[config::Profile],
+        repos: &[String],
+    ) -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed(match self {
             Self::NewTab => "New Tab",
             Self::NewTabWithProfile(i) => {
                 let name = profiles.get(i).map_or("?", |p| p.name.as_str());
                 return std::borrow::Cow::Owned(format!("New Tab: {name}"));
+            }
+            Self::SwitchRepo(i) => {
+                let name = repos.get(i).map_or("?", String::as_str);
+                return std::borrow::Cow::Owned(format!("Switch Repo: {name}"));
             }
             Self::CloseTab => "Close Tab",
             Self::DuplicateTab => "Duplicate Tab",
@@ -147,11 +156,14 @@ fn fuzzy_match(query: &str, label: &str) -> Option<i64> {
 
 /// All commands matching `query` (static commands + one "New Tab: <name>" entry per profile),
 /// best score first; ties keep candidate order (stable sort).
-fn filter_commands(query: &str, profiles: &[config::Profile]) -> Vec<PaletteCmd> {
-    let candidates =
-        PaletteCmd::ALL.into_iter().chain((0..profiles.len()).map(PaletteCmd::NewTabWithProfile));
-    let mut scored: Vec<(i64, PaletteCmd)> =
-        candidates.filter_map(|c| fuzzy_match(query, &c.label(profiles)).map(|s| (s, c))).collect();
+fn filter_commands(query: &str, profiles: &[config::Profile], repos: &[String]) -> Vec<PaletteCmd> {
+    let candidates = PaletteCmd::ALL
+        .into_iter()
+        .chain((0..profiles.len()).map(PaletteCmd::NewTabWithProfile))
+        .chain((0..repos.len()).map(PaletteCmd::SwitchRepo));
+    let mut scored: Vec<(i64, PaletteCmd)> = candidates
+        .filter_map(|c| fuzzy_match(query, &c.label(profiles, repos)).map(|s| (s, c)))
+        .collect();
     scored.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
     scored.into_iter().map(|(_, c)| c).collect()
 }
@@ -197,7 +209,8 @@ impl Stdusk {
                 if r.changed() {
                     st.selected = 0;
                 }
-                let filtered = filter_commands(&st.query, &self.cfg.profiles);
+                let repos = if self.grouping() { self.group_labels() } else { Vec::new() };
+                let filtered = filter_commands(&st.query, &self.cfg.profiles, &repos);
                 let shown = filtered.len().min(MAX_ROWS);
                 ui.add_space(6.0);
                 if shown == 0 {
@@ -225,7 +238,7 @@ impl Stdusk {
                     ui.painter().text(
                         rect.left_center() + egui::vec2(8.0, 0.0),
                         egui::Align2::LEFT_CENTER,
-                        cmd.label(&self.cfg.profiles),
+                        cmd.label(&self.cfg.profiles, &repos),
                         egui::FontId::proportional(15.0),
                         colors::fg(),
                     );
@@ -269,8 +282,13 @@ impl Stdusk {
                 let now = ctx.input(|i| i.time);
                 self.toggle_broadcast(now);
             }
-            PaletteCmd::NextTab => self.cycle_tab(1),
-            PaletteCmd::PrevTab => self.cycle_tab(-1),
+            PaletteCmd::SwitchRepo(i) => {
+                if let Some(g) = self.group_order().get(i).cloned() {
+                    self.switch_group(&g);
+                }
+            }
+            PaletteCmd::NextTab => self.cycle_visible(1),
+            PaletteCmd::PrevTab => self.cycle_visible(-1),
             PaletteCmd::ToggleLastTab => {
                 self.active = ui::toggle_last_target(self.prev_active, self.tabs.len());
             }
@@ -323,12 +341,6 @@ impl Stdusk {
             tab.focused = f;
         }
     }
-
-    /// Cycle the active tab by `d` with wraparound (same as Ctrl+Tab / Ctrl+Shift+Tab).
-    fn cycle_tab(&mut self, d: i32) {
-        let len = self.tabs.len() as i32;
-        self.active = (self.active as i32 + d).rem_euclid(len) as usize;
-    }
 }
 
 #[cfg(test)]
@@ -365,25 +377,25 @@ mod tests {
 
     #[test]
     fn filter_empty_query_lists_all_in_enum_order() {
-        assert_eq!(filter_commands("", &[]), PaletteCmd::ALL.to_vec());
+        assert_eq!(filter_commands("", &[], &[]), PaletteCmd::ALL.to_vec());
     }
 
     #[test]
     fn filter_ranks_new_tab_first_for_nt() {
-        let f = filter_commands("nt", &[]);
+        let f = filter_commands("nt", &[], &[]);
         assert_eq!(f[0], PaletteCmd::NewTab);
         assert!(f.contains(&PaletteCmd::RenameTab)); // still matches, just lower
     }
 
     #[test]
     fn filter_drops_non_matches() {
-        assert!(filter_commands("zzzz", &[]).is_empty());
+        assert!(filter_commands("zzzz", &[], &[]).is_empty());
     }
 
     #[test]
     fn filter_ties_keep_enum_order() {
         assert_eq!(
-            filter_commands("split", &[]),
+            filter_commands("split", &[], &[]),
             vec![PaletteCmd::SplitRight, PaletteCmd::SplitDown]
         );
     }
@@ -405,16 +417,36 @@ mod tests {
     #[test]
     fn profiles_append_entries_with_named_labels() {
         let ps = profiles(&["work", "ops"]);
-        let f = filter_commands("", &ps);
+        let f = filter_commands("", &ps, &[]);
         assert_eq!(f.len(), PaletteCmd::ALL.len() + 2);
         assert_eq!(f[PaletteCmd::ALL.len()], PaletteCmd::NewTabWithProfile(0));
-        assert_eq!(PaletteCmd::NewTabWithProfile(1).label(&ps), "New Tab: ops");
+        assert_eq!(PaletteCmd::NewTabWithProfile(1).label(&ps, &[]), "New Tab: ops");
+    }
+
+    #[test]
+    fn repo_entries_append_after_profiles_and_filter_by_name() {
+        let ps = profiles(&["work"]);
+        let repos = ["stdusk".to_string(), "trakt-web".to_string()];
+        let f = filter_commands("", &ps, &repos);
+        assert_eq!(
+            f[f.len() - 3..],
+            [
+                PaletteCmd::NewTabWithProfile(0),
+                PaletteCmd::SwitchRepo(0),
+                PaletteCmd::SwitchRepo(1)
+            ]
+        );
+        assert_eq!(PaletteCmd::SwitchRepo(1).label(&ps, &repos), "Switch Repo: trakt-web");
+        assert_eq!(filter_commands("trakt", &ps, &repos)[0], PaletteCmd::SwitchRepo(1));
+        assert!(
+            !filter_commands("", &ps, &[]).iter().any(|c| matches!(c, PaletteCmd::SwitchRepo(_)))
+        );
     }
 
     #[test]
     fn profile_entries_filter_by_profile_name() {
         let ps = profiles(&["work"]);
-        let f = filter_commands("work", &ps);
+        let f = filter_commands("work", &ps, &[]);
         assert_eq!(f, vec![PaletteCmd::NewTabWithProfile(0)]);
     }
 }

@@ -45,6 +45,9 @@ pub(crate) struct SavedTab {
     /// session files loading unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pane: Option<SavedPane>,
+    /// The repo root the tab is grouped under; absent for the Other group and older sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) repo: Option<String>,
 }
 
 /// A tab's split layout, persisted so re-open restores every pane (not just the first). Mirrors
@@ -184,6 +187,7 @@ mod tests {
                     cwd: Some("/tmp".into()),
                     pinned: true,
                     pane: Some(SavedPane::Leaf { cwd: Some("/tmp".into()) }),
+                    repo: Some("/Users/x/Git/stdusk".into()),
                 },
                 SavedTab {
                     title: None,
@@ -191,6 +195,7 @@ mod tests {
                     cwd: Some("/home/x".into()),
                     pinned: false,
                     pane: None,
+                    repo: None,
                 },
             ],
             active: 1,

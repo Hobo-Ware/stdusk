@@ -1068,6 +1068,14 @@ fn appearance_section(
                 }
             });
         });
+        row(
+            ui,
+            "Group tabs by repo",
+            "Show one git repo's tabs at a time, with a repo switcher",
+            |ui| {
+                crate::widgets::toggle_switch(ui, &mut a.group_by_repo);
+            },
+        );
     });
 
     subheading(ui, "Text");
@@ -1642,6 +1650,8 @@ fn hotkeys_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> HotkeysFx {
         hotkey_row(ui, "Close pane / tab", &d.close, &mut h.close, &mut fx);
         hotkey_row(ui, "Reopen closed tab", &d.reopen, &mut h.reopen, &mut fx);
         hotkey_row(ui, "Toggle last tab", &d.toggle_last_tab, &mut h.toggle_last_tab, &mut fx);
+        hotkey_row(ui, "Next repo", &d.next_repo, &mut h.next_repo, &mut fx);
+        hotkey_row(ui, "Previous repo", &d.prev_repo, &mut h.prev_repo, &mut fx);
     });
     subheading(ui, "Panes");
     rows(ui, |ui| {

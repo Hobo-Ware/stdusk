@@ -50,6 +50,7 @@ src/
   session.rs     session save/restore (tabs, cwd, title, color)
   shell.rs       login+interactive shell launch + shell-integration injection
   procwatch.rs   AI-CLI process detection for tab badges
+  repo.rs        repo groups: git-root detection, the repo chip, repo switching (appearance.group_by_repo)
   tray.rs        macOS menu-bar status item
 ```
 
