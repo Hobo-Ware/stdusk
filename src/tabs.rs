@@ -56,17 +56,15 @@ impl Tab {
         let path = self.focused.clone();
         self.root_mut().leaf_at_mut(&path).expect("focused leaf")
     }
-    pub(crate) fn join_repo_from_cwd(&mut self) -> bool {
-        if self.group != repo::Group::Other {
-            return false;
-        }
+    pub(crate) fn follow_cwd_repo(&mut self) -> bool {
         let cwd = self.focused_term().cwd();
-        if cwd == self.repo_probed_cwd {
+        let Some(group) = repo::regroup(cwd.as_deref(), self.repo_probed_cwd.as_deref()) else {
             return false;
-        }
-        self.group = repo::Group::for_cwd(cwd.as_deref());
+        };
         self.repo_probed_cwd = cwd;
-        self.group != repo::Group::Other
+        let moved = group != self.group;
+        self.group = group;
+        moved
     }
 }
 
@@ -130,7 +128,6 @@ fn apply_saved_tab(tab: &mut Tab, st: &session::SavedTab) {
         .repo
         .as_ref()
         .map_or_else(|| repo::Group::for_cwd(st.cwd.as_deref()), |r| repo::Group::Repo(r.into()));
-    tab.repo_probed_cwd.clone_from(&st.cwd);
 }
 
 /// A saved tab's layout: its stored pane tree, or a single pane in the flat `cwd` (sessions written
@@ -533,10 +530,7 @@ impl Stdusk {
 
     fn new_tab_at(&mut self, pos: NewTabPosition, ctx: &egui::Context) {
         let cwd = self.tabs.get(self.active).and_then(|t| t.focused_term().cwd());
-        let mut tab = spawn_tab(&self.cfg, ctx, cwd);
-        if let Some(src) = self.tabs.get(self.active) {
-            tab.group = src.group.clone();
-        }
+        let tab = spawn_tab(&self.cfg, ctx, cwd);
         let from = match pos {
             NewTabPosition::AfterCurrent => self.active,
             NewTabPosition::End => self.tabs.len(),
@@ -1296,10 +1290,7 @@ impl Stdusk {
             }
             Some(TabAction::Duplicate(i)) => {
                 let cwd = self.tabs.get(i).and_then(|t| t.focused_term().cwd());
-                let mut tab = spawn_tab(&self.cfg, ctx, cwd);
-                if let Some(src) = self.tabs.get(i) {
-                    tab.group = src.group.clone();
-                }
+                let tab = spawn_tab(&self.cfg, ctx, cwd);
                 self.insert_tab(tab, i); // beside its source, not at the far end
             }
             Some(TabAction::Rename(i)) => {
@@ -1341,7 +1332,6 @@ impl Stdusk {
                     fresh.color = old.color;
                     fresh.pinned = old.pinned;
                     fresh.notify_activity = old.notify_activity;
-                    fresh.group = old.group.clone();
                     self.tabs[i] = fresh;
                 }
             }
@@ -1470,7 +1460,7 @@ mod tests {
         assert_eq!(
             tab.group,
             repo::Group::Repo("/Users/x/Git/stdusk".into()),
-            "a tab that cd'd out of its repo keeps it across a handoff"
+            "the saved repo is the starting group until the render loop checks the cwd"
         );
         assert_eq!(tab.title, "build");
         assert!(tab.renamed, "a restored rename must keep auto-titling off");

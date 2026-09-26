@@ -906,17 +906,17 @@ impl eframe::App for Stdusk {
         }
         self.report_theme_change();
 
-        let mut active_joined = false;
+        let mut active_moved = false;
         for (i, tab) in self.tabs.iter_mut().enumerate() {
-            let joined = tab.join_repo_from_cwd();
-            active_joined |= joined && i == self.active;
+            let moved = tab.follow_cwd_repo();
+            active_moved |= moved && i == self.active;
         }
-        if active_joined
+        if active_moved
             && self.grouping()
             && let Some(name) = self.active_group_label()
         {
             let now = ctx.input(|i| i.time);
-            self.toast = Some((format!("Grouped under {name}"), now + 1.8));
+            self.toast = Some((format!("Moved to {name}"), now + 1.8));
         }
 
         // Auto-title unrenamed tabs: the shell's OSC 0/2 title (when dynamic_title) beats the

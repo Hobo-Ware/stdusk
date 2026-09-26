@@ -1,6 +1,6 @@
 //! Repo groups (`appearance.group_by_repo`): every tab belongs to the git repo it was opened in,
-//! and the tab bar shows one repo's tabs at a time behind a repo chip. A tab keeps its repo through
-//! later `cd`s; a tab outside any repo sits in `Other` until its shell first enters one.
+//! and the tab bar shows one repo's tabs at a time behind a repo chip. A tab follows its shell: a
+//! `cd` into another repo moves it there, and a folder outside any repo moves it to `Other`.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -72,6 +72,12 @@ fn lexical_normalize(p: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// The group a tab moves to once its cwd is known and differs from the one last checked.
+pub(crate) fn regroup(cwd: Option<&str>, probed: Option<&str>) -> Option<Group> {
+    let cwd = cwd?;
+    (Some(cwd) != probed).then(|| Group::for_cwd(Some(cwd)))
 }
 
 /// Distinct groups in first-appearance order, with `Other` always last.
@@ -452,6 +458,26 @@ mod tests {
         let dir = scratch("plain");
         assert_eq!(Group::for_cwd(dir.to_str()), Group::Other);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn regroup_follows_the_cwd_into_and_out_of_repos() {
+        let root = scratch("regroup");
+        let repo_dir = root.join("web");
+        std::fs::create_dir_all(repo_dir.join(".git")).unwrap();
+        let plain = root.join("notes");
+        std::fs::create_dir_all(&plain).unwrap();
+        let (r, p) = (repo_dir.to_str().unwrap(), plain.to_str().unwrap());
+        assert_eq!(
+            regroup(Some(r), Some(p)),
+            Some(Group::Repo(repo_dir.clone())),
+            "cd into a repo"
+        );
+        assert_eq!(regroup(Some(p), Some(r)), Some(Group::Other), "cd out of any repo");
+        assert_eq!(regroup(Some(r), None), Some(Group::Repo(repo_dir.clone())), "first known cwd");
+        assert_eq!(regroup(Some(r), Some(r)), None, "unchanged cwd: no disk walk");
+        assert_eq!(regroup(None, Some(r)), None, "unknown cwd keeps the group");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
