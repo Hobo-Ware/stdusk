@@ -2193,6 +2193,30 @@ chip. UX was picked from a clickable mockup (layout A "repo chip" + palette entr
   press.
 - Not built (declined for now): a "Move to repo" tab-menu item.
 
+## Theme reports for apps that cache colors (post-1.7.0; 378 tests)
+Report: after a light/dark switch, Claude Code's file panel and prompt highlight kept the old theme.
+Claude Code paints those with explicit RGB derived from the colors it queried (OSC 10/11) at startup.
+Read from its binary (2.1.283): it enables DEC mode 2031 (`THEME_NOTIFY`, its `themeReports` mode)
+unconditionally and parses `CSI ? 997 ; 1|2 n`. stdusk never sent that report, and
+alacritty_terminal drops private modes it doesn't know, so the mode was never even tracked.
+
+- `modes::ThemeReportScanner` watches pty output for `CSI ? Pm h/l` containing 2031 (split-safe,
+  proptest split invariant; carry capped at 64 bytes). The reader keeps `TabState.theme_reports`,
+  cleared on OSC 133;A so a crashed app can't leave `997` junk going into the shell.
+- `Stdusk::report_theme_change` compares the live `colors::theme()` to the last one reported (every
+  frame; catches the OS-follow reconcile, the scheme browser and settings revert alike) and sends
+  `997;1n` (dark) / `997;2n` (light) to every pane that enabled the mode. The app then re-queries
+  OSC 11, which already answers from the live theme.
+- The flag rides the handoff (`PaneMeta.theme_reports`, defaulted, no `PROTOCOL` bump): the app
+  enables it once, so an adopted pane that forgot would never hear about a theme change again.
+  Panes adopted from 1.7.0 or older don't carry it; restart Claude Code there once.
+- Tests: scanner table + split cases, a real-pty round trip (app enables 2031, reads the 9-byte
+  report, disables), adopted-pane flag carry, handoff metadata round trip.
+- Not verified live: that Claude Code's panel actually repaints on the report (needs a human theme
+  switch with Claude running).
+- Also: `macos.rs` `ok().is_some_and` -> `is_ok_and` (clippy 1.98 `manual_is_variant_and`, the
+  cause of the red `native (rust)` CI on 1.6.9 and 1.7.0).
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
