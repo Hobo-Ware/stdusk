@@ -104,8 +104,8 @@ struct Stdusk {
     theme_name: String,           // currently-applied theme (to detect OS light/dark changes)
     reported_theme: colors::Theme, // theme last announced to mode-2031 apps (see modes.rs)
     next_theme_check: f64,        // egui time of the next throttled OS-appearance read
-    sys: sysinfo::System,         // process table for CLI-awareness scans
-    next_cli_scan: f64,           // egui time of the next throttled procwatch scan
+    sys: sysinfo::System,         // process table for the on-demand close/quit running checks
+    procs: procwatch::ProcScanner, // background ~1 Hz table for the CLI badges
     next_session_save: f64,       // egui time of the next throttled session persist
     last_session: session::SavedSession, // last persisted session (skip identical writes)
     tray: Option<tray::Tray>,     // menu-bar status item (kept alive; Some when enabled)
@@ -381,6 +381,7 @@ impl Stdusk {
         // Initial Dock presence must mirror the launch activation policy (see main()). Visible at
         // launch, so `dock_when_visible` counts; window mode is always Regular.
         let dock_shown = config::activation_is_regular(&cfg, true);
+        let detect_clis = cfg.terminal.detect_clis && screenshot.is_none();
         Self {
             tabs,
             active,
@@ -423,7 +424,7 @@ impl Stdusk {
             reported_theme: colors::theme(),
             next_theme_check: 0.0,
             sys: sysinfo::System::new(),
-            next_cli_scan: 0.0,
+            procs: procwatch::ProcScanner::spawn(cc.egui_ctx.clone(), detect_clis),
             next_session_save: 0.0,
             last_session: session::SavedSession::default(),
             tray,
@@ -1000,30 +1001,18 @@ impl eframe::App for Stdusk {
         // respawn) to any pane whose shell exited - a dead pty must never leave a frozen tab.
         self.handle_shell_exits(&ctx);
 
-        // CLI awareness: ~1 Hz, refresh the process table once and badge each tab with any known
-        // AI CLI running in it (scanned across all of the tab's panes), caching the running
-        // child's name alongside (the tab menu's "Running:" row - never a synchronous scan on
-        // menu open). Skipped in the screenshot harness (it sets demo badges directly).
-        if self.cfg.terminal.detect_clis && self.screenshot.is_none() {
-            let now = ctx.input(|i| i.time);
-            if now >= self.next_cli_scan {
-                self.next_cli_scan = now + 1.0;
-                self.sys.refresh_processes_specifics(
-                    sysinfo::ProcessesToUpdate::All,
-                    true,
-                    sysinfo::ProcessRefreshKind::nothing()
-                        .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
-                );
-                // ONE table snapshot serves every tab (detect/busy_child are pure walks on it).
-                let procs = procwatch::snapshot(&self.sys);
-                for tab in &mut self.tabs {
-                    let pids: Vec<u32> =
-                        tab.root().leaves().iter().filter_map(|t| t.shell_pid()).collect();
-                    tab.cli = pids.iter().find_map(|&pid| procwatch::detect(&procs, pid));
-                    tab.proc = pids.iter().find_map(|&pid| procwatch::busy_child(&procs, pid));
-                }
-                // Keep the cadence ticking even when the window is otherwise idle.
-                ctx.request_repaint_after(std::time::Duration::from_millis(1100));
+        // CLI awareness: badge each tab with any known AI CLI running in it (scanned across all of
+        // the tab's panes), caching the running child's name alongside (the tab menu's "Running:"
+        // row - never a synchronous scan on menu open). Skipped in the screenshot harness (it sets
+        // demo badges directly).
+        let detect_clis = self.cfg.terminal.detect_clis && self.screenshot.is_none();
+        self.procs.set_enabled(detect_clis);
+        if detect_clis && let Some(procs) = self.procs.take() {
+            for tab in &mut self.tabs {
+                let pids: Vec<u32> =
+                    tab.root().leaves().iter().filter_map(|t| t.shell_pid()).collect();
+                tab.cli = pids.iter().find_map(|&pid| procwatch::detect(&procs, pid));
+                tab.proc = pids.iter().find_map(|&pid| procwatch::busy_child(&procs, pid));
             }
         }
 
