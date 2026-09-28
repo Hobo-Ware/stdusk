@@ -1288,6 +1288,21 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
         row(ui, "Clickable links", "Open URLs and file paths on click", |ui| {
             crate::widgets::toggle_switch(ui, &mut t.clickable_links);
         });
+        row(
+            ui,
+            "Link key in apps",
+            "Hold to open links in apps that take the mouse, like Claude Code (Shift works too)",
+            |ui| {
+                ui.horizontal(|ui| {
+                    for (label, value) in [("Cmd", "cmd"), ("Option", "alt"), ("Ctrl", "ctrl")] {
+                        let selected = t.app_link_modifier.eq_ignore_ascii_case(value);
+                        if crate::widgets::chip(ui, label, selected).clicked() {
+                            t.app_link_modifier = value.into();
+                        }
+                    }
+                });
+            },
+        );
         row(ui, "Copy on select", "Clipboard updates when a selection finishes", |ui| {
             crate::widgets::toggle_switch(ui, &mut t.copy_on_select);
         });

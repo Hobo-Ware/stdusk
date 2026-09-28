@@ -281,7 +281,7 @@ impl Stdusk {
                 let mut focus_click: Option<Vec<pane::Side>> = None;
                 let mut mouse_paste: Option<(Vec<pane::Side>, ClipboardPaste)> = None; // middle/right click
                 let mut restart_pane: Option<Vec<pane::Side>> = None;
-                let (pointer_events, shift) = ui.input(|i| (i.events.clone(), i.modifiers.shift));
+                let (pointer_events, mods) = ui.input(|i| (i.events.clone(), i.modifiers));
                 for (path, rect) in &layout {
                     let app_mouse;
                     {
@@ -290,7 +290,8 @@ impl Stdusk {
                         let rows = (rect.height() / ch).floor().max(1.0) as usize;
                         term.resize(cols, rows);
                         let mr = term.mouse_reporting();
-                        app_mouse = mr.reports_buttons() && mr.sgr && !shift && !input_captured;
+                        app_mouse =
+                            mr.app_owns_pointer(mods, &tcfg.app_link_modifier, input_captured);
                         if app_mouse {
                             let grid = crate::mouse::GridGeom { rect: *rect, cw, ch, cols, rows };
                             let id = egui::Id::new(("pointer_tracker", path));

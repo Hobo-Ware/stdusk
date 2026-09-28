@@ -24,6 +24,31 @@ impl MouseReporting {
     pub(crate) fn reports_buttons(self) -> bool {
         self.report_click || self.drag || self.motion
     }
+
+    /// Pointer events go to the app this frame. Shift (select) and the `app_link_modifier` key
+    /// (open a link, Cmd by default) take the pointer back locally, as in iTerm2.
+    pub(crate) fn app_owns_pointer(
+        self,
+        mods: egui::Modifiers,
+        link_key: &str,
+        input_captured: bool,
+    ) -> bool {
+        self.reports_buttons()
+            && self.sgr
+            && !mods.shift
+            && !app_link_key_held(mods, link_key)
+            && !input_captured
+    }
+}
+
+/// `terminal.app_link_modifier`: unknown values mean Cmd (the default), never "no key", so a
+/// typo can't hand every click back from the app.
+fn app_link_key_held(mods: egui::Modifiers, setting: &str) -> bool {
+    match setting.to_ascii_lowercase().as_str() {
+        "alt" | "option" | "opt" => mods.alt,
+        "ctrl" | "control" => mods.ctrl,
+        _ => mods.mac_cmd,
+    }
 }
 
 /// SGR mouse button code for a wheel tick: 64 = up, 65 = down; `None` for a zero delta.
@@ -199,6 +224,38 @@ mod tests {
         sgr: true,
         alternate_scroll: false,
     };
+
+    #[test]
+    fn shift_and_the_link_key_take_the_pointer_back_from_the_app() {
+        let none = egui::Modifiers::default();
+        let shift = egui::Modifiers { shift: true, ..none };
+        let cmd = egui::Modifiers { mac_cmd: true, command: true, ..none };
+        let ctrl = egui::Modifiers { ctrl: true, ..none };
+        let alt = egui::Modifiers { alt: true, ..none };
+        let legacy = MouseReporting { sgr: false, ..CLICKS };
+        let cases = [
+            (CLICKS, none, "cmd", false, true),
+            (CLICKS, ctrl, "cmd", false, true),
+            (CLICKS, shift, "cmd", false, false),
+            (CLICKS, cmd, "cmd", false, false),
+            (CLICKS, cmd, "alt", false, true),
+            (CLICKS, alt, "alt", false, false),
+            (CLICKS, ctrl, "Ctrl", false, false),
+            (CLICKS, shift, "ctrl", false, false),
+            (CLICKS, none, "none", false, true),
+            (CLICKS, cmd, "typo", false, false),
+            (CLICKS, none, "cmd", true, false),
+            (legacy, none, "cmd", false, false),
+            (MouseReporting::default(), none, "cmd", false, false),
+        ];
+        for (mr, mods, key, captured, want) in cases {
+            assert_eq!(
+                mr.app_owns_pointer(mods, key, captured),
+                want,
+                "{mr:?} {mods:?} {key} {captured}"
+            );
+        }
+    }
 
     #[test]
     fn a_click_reports_press_then_release_at_its_cell() {

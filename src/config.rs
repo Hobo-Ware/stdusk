@@ -176,13 +176,14 @@ pub(crate) struct Quake {
 #[serde(default)]
 pub(crate) struct Terminal {
     pub(crate) detect_progress: bool,
-    pub(crate) cursor: String,          // "block" | "underline" | "beam"
-    pub(crate) shell_integration: bool, // inject OSC 133 hooks into the spawned shell
+    pub(crate) cursor: String,            // "block" | "underline" | "beam"
+    pub(crate) shell_integration: bool,   // inject OSC 133 hooks into the spawned shell
     pub(crate) autosuggestions: bool, // fish-style inline history suggestions (zsh; needs shell_integration)
     pub(crate) bell: String,          // "visual" | "off"
     pub(crate) detect_clis: bool,     // badge tabs running a known AI CLI (claude/gemini/...)
     pub(crate) clickable_links: bool, // open URLs / file paths on click
     pub(crate) link_modifier: String, // "none" (hover) | "cmd" | "ctrl" | "alt" | "shift"
+    pub(crate) app_link_modifier: String, // "cmd" | "alt" | "ctrl": links in apps that take the mouse
     pub(crate) notify_on_done: bool, // desktop notification when a long (>10s) command finishes while hidden
     pub(crate) scrollback_lines: usize, // history size (Tabby default 25000)
     pub(crate) cursor_blink: bool,   // blink the focused pane's cursor
@@ -247,6 +248,7 @@ impl Default for Terminal {
             detect_clis: true,
             clickable_links: true,
             link_modifier: "none".into(),
+            app_link_modifier: "cmd".into(),
             notify_on_done: true,
             scrollback_lines: 25000,
             cursor_blink: true,

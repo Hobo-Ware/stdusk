@@ -46,7 +46,7 @@ Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk`
 - **A real settings GUI** - Cmd+, opens a full settings view: browse 204 color schemes with live preview, pick a light and a dark one to follow the OS, tweak everything, watch it apply before you save. Fully keyboard-operable.
 - **Profiles** - named launchers with their own shell, args, cwd, env, and tab color. One right-click away.
 - **Settings sync** - push your config to your own private git repo and pull it anywhere. Your credentials, your repo, no OAuth middleman.
-- **Clickable links** - URLs, file paths and IPs, even when they wrap over two lines.
+- **Clickable links** - URLs, file paths and IPs, even when they wrap over two lines. Cmd+click (or Shift+click) inside apps that take the mouse, like Claude Code. The key is configurable.
 - **Drop files in** - drag files onto a pane and their paths land at the prompt, safely quoted.
 - **Autosuggestions** - optional fish-style ghost text from your zsh history (`[terminal] autosuggestions`). Right arrow accepts.
 - **Image paste** - `Ctrl+V` forwards `^V` so a tool that reads the clipboard on it (e.g. Claude Code) ingests a copied screenshot; right/middle-click paste do too when the clipboard holds an image.
