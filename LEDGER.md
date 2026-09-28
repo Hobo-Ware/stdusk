@@ -2231,6 +2231,11 @@ forwarded the WHEEL to apps with mouse reporting on; presses, releases and motio
 - Tests: click press/release cell mapping, outside-press ignore + clamped held release, modifier
   bits, motion per tracking mode with per-cell dedupe.
 - Verified live by the user on 1.7.3: Claude Code's file panel X closes the panel.
+- Follow-up: links went dead in those panes (no hover, no click) since the app owned the pointer.
+  Cmd now takes the pointer back like Shift does (`MouseReporting::app_owns_pointer`), so Cmd+hover
+  underlines a link and Cmd+click opens it, as in iTerm2. Plain clicks still go to the app. The key
+  is `terminal.app_link_modifier` ("cmd" default, "alt", "ctrl"; unknown values mean Cmd), set in
+  Settings > Terminal > Mouse. Shift always works too.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
