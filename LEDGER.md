@@ -2272,6 +2272,26 @@ phase; kitty's at 2 (3 only late in the frame).
 - Not verified live by a human: the numbers come from the synthetic-key meter, not a hand on a
   keyboard.
 
+## UI-thread stalls: CLI scan off the frame, contrast memo (post-1.7.4; 390 tests)
+Report: input lag. A perf run (parser, real-pty floods, echo, live frame timing at 120Hz) found the
+terminal core fast (~100 MB/s through a real pty, UI lock waits <0.25 ms, echo <1.5 ms) and two
+costs on the UI thread.
+
+- CLI-badge scan: the ~1 Hz `refresh_processes_specifics(All)` ran inside `ui()` and took 7-19 ms
+  with ~850 processes, dropping 1-2 frames every second, idle included. `procwatch::ProcScanner`
+  now refreshes on its own thread (own `sysinfo::System`, exits when dropped) and asks for a
+  repaint per table; the UI only runs `detect`/`busy_child` on the latest one. The close-confirm
+  and quit checks keep their synchronous refresh (they need a current answer, once per click).
+  Live, same flood script: worst frame 8-24 ms -> 5.5 ms; idle stays ~9 frames/s.
+- Minimum contrast (default 4.0) ran the WCAG search per cell per frame, doubling render cost.
+  `colors::ContrastMemo` reuses the answer across a run of one color pair: `render_grid` +
+  tessellate 2.1 -> 1.0 ms at 200x50 and 3.8 -> 1.8 ms at 320x90 (contrast off: 0.8 / 1.4), on a
+  payload where every word changes color.
+- Tests: `the_background_scanner_publishes_the_live_table_only_while_enabled`,
+  `contrast_memo_matches_ensure_contrast_across_color_changes`.
+- Not changed: a Cmd+A selection over a full 25k scrollback still rebuilds its text twice per frame
+  (~18 ms) until the next key clears it.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
