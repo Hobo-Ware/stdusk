@@ -194,16 +194,8 @@ impl Stdusk {
                     let input =
                         collect_input(ui, tcfg.alt_is_meta, ctrl_c && has_selection, app_cursor);
                     if !input.is_empty() {
-                        let targets = if tab.broadcast {
-                            tab.root_mut().leaves_mut()
-                        } else {
-                            vec![tab.focused_term_mut()]
-                        };
-                        for t in targets {
-                            t.send(&input);
-                            t.clear_selection();
-                            t.scroll_to_bottom();
-                        }
+                        // The grid renders later in this frame, so it carries the echo.
+                        tab.send_typed(&input);
                     }
                 }
                 // Paste events: processed even while the paste-confirm modal is open (they queue
