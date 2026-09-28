@@ -1091,13 +1091,10 @@ pub(crate) fn render_grid(
     // an unfocused pane keeps the same relative treatment; free when off (<= 1).
     // SGR 2 (faint) fades toward the effective bg AFTER the floor, so hint/ghost text stays
     // visibly dimmer than normal text instead of being pulled back to full contrast.
-    let ink = |cell: &crate::terminal::CellSnap| {
+    let mut contrast = colors::ContrastMemo::new(min_contrast);
+    let mut ink = |cell: &crate::terminal::CellSnap| {
         let eff_bg = cell.bg.unwrap_or_else(colors::bg);
-        let fg = if min_contrast > 1.0 {
-            colors::ensure_contrast(cell.fg, eff_bg, min_contrast)
-        } else {
-            cell.fg
-        };
+        let fg = if min_contrast > 1.0 { contrast.ensure(cell.fg, eff_bg) } else { cell.fg };
         if cell.dim { colors::faint(fg, eff_bg) } else { fg }
     };
     for r in 0..snap.rows {
