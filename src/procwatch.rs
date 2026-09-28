@@ -1,10 +1,12 @@
 //! Ambient CLI awareness: figure out whether a known AI coding CLI (Claude, Codex, Gemini,
 //! Copilot, ...) is running inside a tab, so the tab bar can show a small brand badge - "I've got
 //! a claude going in tab 3". We look for a matching process among the *descendants* of the tab's
-//! shell. The tree-walk + name matching is pure and unit-tested; `scan` is a thin sysinfo adapter
-//! that runs on a ~1 Hz throttle from the UI thread.
+//! shell. The tree-walk + name matching is pure and unit-tested; `ProcScanner` refreshes the
+//! process table ~1 Hz on its own thread and the UI runs the walks on the latest table.
 
 use egui::Color32;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// A recognized AI CLI. The enum order is the badge priority when a tab somehow hosts several.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -201,6 +203,53 @@ pub(crate) fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
             cmd: p.cmd().iter().map(|s| s.to_string_lossy().into_owned()).collect(),
         })
         .collect()
+}
+
+const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The ~1 Hz process-table refresh, on its own thread: a full refresh takes 7-19 ms with ~850
+/// processes, long enough to drop a frame or two when the UI thread paid for it.
+pub(crate) struct ProcScanner {
+    latest: Arc<Mutex<Option<Vec<Proc>>>>,
+    enabled: Arc<AtomicBool>,
+}
+
+impl ProcScanner {
+    pub(crate) fn spawn(ctx: egui::Context, enabled: bool) -> Self {
+        let latest = Arc::new(Mutex::new(None));
+        let enabled = Arc::new(AtomicBool::new(enabled));
+        let slot = Arc::downgrade(&latest);
+        let on = enabled.clone();
+        std::thread::spawn(move || {
+            let mut sys = sysinfo::System::new();
+            loop {
+                if on.load(Ordering::Relaxed) {
+                    sys.refresh_processes_specifics(
+                        sysinfo::ProcessesToUpdate::All,
+                        true,
+                        sysinfo::ProcessRefreshKind::nothing()
+                            .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
+                    );
+                    let procs = snapshot(&sys);
+                    let Some(slot) = slot.upgrade() else { return };
+                    *slot.lock().unwrap() = Some(procs);
+                    ctx.request_repaint();
+                } else if slot.strong_count() == 0 {
+                    return;
+                }
+                std::thread::sleep(SCAN_INTERVAL);
+            }
+        });
+        Self { latest, enabled }
+    }
+
+    pub(crate) fn set_enabled(&self, on: bool) {
+        self.enabled.store(on, Ordering::Relaxed);
+    }
+
+    pub(crate) fn take(&self) -> Option<Vec<Proc>> {
+        self.latest.lock().unwrap().take()
+    }
 }
 
 /// Where a process is actually sitting, asked of the OS. `None` when the pid is gone, the OS won't
@@ -479,5 +528,27 @@ mod tests {
         );
         // A pid that cannot exist has no cwd - never a bogus path.
         assert_eq!(process_cwd(u32::MAX), None);
+    }
+
+    #[test]
+    fn the_background_scanner_publishes_the_live_table_only_while_enabled() {
+        let poll = |sc: &ProcScanner| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if let Some(t) = sc.take() {
+                    return Some(t);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            None
+        };
+        let off = ProcScanner::spawn(egui::Context::default(), false);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(off.take().is_none(), "a disabled scanner must not refresh the table");
+
+        let on = ProcScanner::spawn(egui::Context::default(), true);
+        let table = poll(&on).expect("an enabled scanner publishes a table");
+        assert!(table.iter().any(|p| p.pid == std::process::id()), "the live table holds us");
+        assert!(on.take().is_none(), "take drains the slot until the next scan");
     }
 }

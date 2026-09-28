@@ -268,6 +268,29 @@ pub(crate) fn ensure_contrast(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
     }
     target
 }
+/// `ensure_contrast` over cells in paint order: a row is mostly runs of one color pair, so the
+/// WCAG search runs once per run instead of once per cell.
+pub(crate) struct ContrastMemo {
+    ratio: f32,
+    last: Option<(Color32, Color32, Color32)>,
+}
+
+impl ContrastMemo {
+    pub(crate) fn new(ratio: f32) -> Self {
+        Self { ratio, last: None }
+    }
+
+    pub(crate) fn ensure(&mut self, fg: Color32, bg: Color32) -> Color32 {
+        if let Some((f, b, out)) = self.last
+            && (f, b) == (fg, bg)
+        {
+            return out;
+        }
+        let out = ensure_contrast(fg, bg, self.ratio);
+        self.last = Some((fg, bg, out));
+        out
+    }
+}
 /// SGR 2 (faint): blend `fg` 45% toward `bg`. Blend-toward-background rather than alacritty's
 /// `fg * 0.66` multiply because a multiply darkens - on a LIGHT theme that INCREASES contrast
 /// and dim text would read bolder than normal text. Applied after the contrast floor so the
@@ -665,5 +688,16 @@ mod tests {
         // Unreachable ratio caps at the pure target (mid-grey bg: black has the headroom).
         let mid = rgb(0x80, 0x80, 0x80);
         assert_eq!(ensure_contrast(mid, mid, 21.0), Color32::BLACK);
+    }
+
+    #[test]
+    fn contrast_memo_matches_ensure_contrast_across_color_changes() {
+        let (grey, red) = (rgb(0x88, 0x88, 0x88), rgb(0xe0, 0x6c, 0x75));
+        let (white, dark) = (Color32::WHITE, rgb(0x28, 0x2c, 0x34));
+        let cells = [(grey, white), (grey, white), (red, white), (grey, dark), (grey, white)];
+        let mut memo = ContrastMemo::new(4.5);
+        for (fg, bg) in cells {
+            assert_eq!(memo.ensure(fg, bg), ensure_contrast(fg, bg, 4.5), "{fg:?} on {bg:?}");
+        }
     }
 }
