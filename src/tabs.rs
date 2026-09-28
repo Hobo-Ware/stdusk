@@ -56,6 +56,23 @@ impl Tab {
         let path = self.focused.clone();
         self.root_mut().leaf_at_mut(&path).expect("focused leaf")
     }
+    /// Typed input -> the focused pane (every pane in broadcast mode). Returns once the focused
+    /// pane's echo is on its grid, bounded by `ECHO_WAIT`, so the frame that sent the key paints it
+    /// instead of presenting an unchanged frame that the echo frame must queue behind.
+    pub(crate) fn send_typed(&mut self, input: &[u8]) {
+        let since = self.focused_term().output_gen();
+        let targets = if self.broadcast {
+            self.root_mut().leaves_mut()
+        } else {
+            vec![self.focused_term_mut()]
+        };
+        for t in targets {
+            t.send(input);
+            t.clear_selection();
+            t.scroll_to_bottom();
+        }
+        let _ = self.focused_term().wait_for_output_after(since, terminal::ECHO_WAIT);
+    }
     pub(crate) fn follow_cwd_repo(&mut self) -> bool {
         let cwd = self.focused_term().cwd();
         let Some(group) = repo::regroup(cwd.as_deref(), self.repo_probed_cwd.as_deref()) else {
@@ -1343,6 +1360,53 @@ impl Stdusk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn real_pty_typed_input_returns_with_the_echo_on_the_grid() {
+        // The regression: the frame that sent a key painted the grid from BEFORE the echo, and the
+        // echo frame queued behind it for 1-3 vsyncs. `send_typed` must not return until the echo is
+        // on the grid. Checked at once, no polling: without the wait the echo (~50us away) is almost
+        // never there yet, and with it the grid always has it.
+        let opts = terminal::SpawnOpts {
+            detect_progress: false,
+            shell_integration: false,
+            autosuggestions: false,
+            scrollback_lines: 500,
+            word_separators: " ".into(),
+            bold_bright: false,
+            cwd: None,
+            profile: Some(Profile {
+                name: "e2e".into(),
+                shell: Some("/bin/sh".into()),
+                args: vec!["-c".into(), "printf READY; exec cat >/dev/null".into()],
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                color: None,
+            }),
+        };
+        let term = PtyTerm::spawn(20, 5, egui::Context::default(), &opts);
+        let mut tab = tab_with_root(pane::Pane::leaf(term));
+        let text = |tab: &Tab| -> String {
+            tab.focused_term()
+                .grid_snapshot()
+                .cells
+                .iter()
+                .map(|c| c.c)
+                .filter(|c| *c != '\0')
+                .collect()
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !text(&tab).contains("READY") && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(text(&tab).contains("READY"), "the probe never started");
+        tab.send_typed(b"Q");
+        assert!(
+            text(&tab).contains("READYQ"),
+            "send_typed returned before the echo: {:?}",
+            text(&tab)
+        );
+    }
 
     #[test]
     fn a_new_tab_lands_right_of_the_one_it_was_opened_from() {

@@ -2237,6 +2237,33 @@ forwarded the WHEEL to apps with mouse reporting on; presses, releases and motio
   is `terminal.app_link_modifier` ("cmd" default, "alt", "ctrl"; unknown values mean Cmd), set in
   Settings > Terminal > Mouse. Shift always works too.
 
+## Typed keys paint their echo in the same frame (post-1.7.4; 388 tests)
+Report: typing felt slower than kitty. Measured key-to-screen (synthetic key via CGEvent, frame
+seen via ScreenCaptureKit, 200 keys, real zsh, 1728x916 window, 120Hz): stdusk 23.2 ms median /
+31.0 ms p95, kitty 14.5 / 20.0. stdusk's echo landed 1-4 vsyncs after the key's vsync at any key
+phase; kitty's at 2 (3 only late in the frame).
+
+- Cause (traced with timestamps in a patched build): the frame that reads the key writes it to the
+  pty and paints in ~0.5 ms, before the echo arrives (~0.05 ms later for the tty, ~1 ms for zle).
+  That frame shows nothing new but still takes the next swap slot. egui then runs the echo frame at
+  once, and its `swap_buffers` blocks 0-16 ms behind the first one. stdusk's own work is ~1.5 ms;
+  the rest was queueing. `REPAINT_COALESCE_WINDOW` plays no part (the echo frame runs anyway).
+- Fix: typed input goes through `Tab::send_typed`, which reads `PtyTerm::output_gen`, sends, and
+  then calls `wait_for_output_after(since, ECHO_WAIT)` (2 ms). `workspace.rs` calls it before the
+  grid renders later in the same frame.
+  The reader bumps `TabState.output_gen` after the chunk is on the grid, so the frame paints the
+  echo. It waits on the focused pane only, also in broadcast mode. Result on the same setup:
+  12.0 ms median / 15.6 ms p95, echo at vsync +1 or +2 for 190 of 200 keys.
+- Cost: idle is unchanged (the wait only runs in a frame that sent input; measured 0 idle wakeups,
+  same CPU time per 100 keys as before). A key with no output at all (echo off, a TUI that ignores
+  it) holds the UI thread for the full 2 ms; the bound is guarded to stay under a 120Hz frame.
+- Tests: `real_pty_typed_input_returns_with_the_echo_on_the_grid` (tabs.rs; checks the grid at once
+  after `send_typed`, so it fails with the wait removed), `echo_wait_is_nonzero_and_under_a_120hz_frame`,
+  `real_pty_the_echo_is_on_the_grid_when_the_wait_returns` (fails with the reader bump removed),
+  `real_pty_the_echo_wait_gives_up_at_its_bound_without_output`.
+- Not verified live by a human: the numbers come from the synthetic-key meter, not a hand on a
+  keyboard.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:

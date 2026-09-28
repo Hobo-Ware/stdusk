@@ -78,6 +78,11 @@ pub(crate) const RAPID_EXIT_SECS: f32 = 2.0;
 /// settled grid; a long stream still paints every window (progressive, not stalled).
 const REPAINT_COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(4);
 
+/// How long the frame that sent a keystroke waits for its echo before painting. Without it that
+/// frame presents the pre-echo grid and the echo frame queues 1-3 vsyncs behind it (see LEDGER).
+/// Shells echo in ~0.1-1.5 ms; only keys with no output at all pay the full bound.
+pub(crate) const ECHO_WAIT: std::time::Duration = std::time::Duration::from_millis(2);
+
 /// What the UI applies to an exited pane.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ExitAction {
@@ -154,6 +159,8 @@ pub(crate) struct TabState {
     /// The adopt redraw nudger's stop condition: an adopted pane starts with an empty grid, and
     /// this is what says the shell has actually painted something into it.
     pub(crate) saw_output: bool,
+    /// Output chunks applied to the grid so far (never reset). Typed input waits on it for the echo.
+    pub(crate) output_gen: u64,
     pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
     pub(crate) exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
     pub(crate) title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
@@ -561,6 +568,7 @@ fn spawn_reader(c: ReaderCtx) {
                         s.progress = progress;
                         s.activity = true; // any output chunk counts (notify-on-activity)
                         s.saw_output = true;
+                        s.output_gen = s.output_gen.wrapping_add(1);
                         if prompt_started {
                             s.theme_reports = false;
                         }
@@ -915,6 +923,27 @@ impl PtyTerm {
     pub(crate) fn report_theme(&mut self, dark: bool) {
         if self.theme_reports() {
             self.send(crate::modes::theme_report(dark));
+        }
+    }
+
+    /// Pairs with [`Self::wait_for_output_after`]: read it before sending input.
+    pub(crate) fn output_gen(&self) -> u64 {
+        self.state.lock().unwrap().output_gen
+    }
+
+    /// Block (at most `max`) until the reader has applied output newer than `since`, so the frame
+    /// that sent a keystroke paints its echo. The grid is advanced before `output_gen` moves, so on
+    /// `true` the echo is already in the next `grid_snapshot`. `false` = no output within `max`.
+    pub(crate) fn wait_for_output_after(&self, since: u64, max: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+        loop {
+            if self.output_gen() != since {
+                return true;
+            }
+            if start.elapsed() >= max {
+                return false;
+            }
+            thread::sleep(std::time::Duration::from_micros(50));
         }
     }
 
@@ -1374,8 +1403,9 @@ pub(crate) fn reap_orphaned_session(leader: u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CmdState, ExitAction, Flags, OnExit, PtyTerm, REPAINT_COALESCE_WINDOW, SpawnOpts,
-        cmd_from_exit, exit_action, on_exit_mode, resolve_cwd, resolve_shell, snap_glyph,
+        CmdState, ECHO_WAIT, ExitAction, Flags, OnExit, PtyTerm, REPAINT_COALESCE_WINDOW,
+        SpawnOpts, cmd_from_exit, exit_action, on_exit_mode, resolve_cwd, resolve_shell,
+        snap_glyph,
     };
     use crate::config::Profile;
     use crate::mouse::wheel_sgr;
@@ -2674,6 +2704,60 @@ mod tests {
         assert!(
             REPAINT_COALESCE_WINDOW <= std::time::Duration::from_millis(16),
             "window must stay under a 60Hz frame to be imperceptible"
+        );
+    }
+
+    #[test]
+    fn echo_wait_is_nonzero_and_under_a_120hz_frame() {
+        // Zero brings back the pre-echo frame the echo queues behind; a bound past one 120Hz frame
+        // would itself cost a vsync on every key that produces no output.
+        assert!(!ECHO_WAIT.is_zero(), "zero disables the echo wait");
+        assert!(
+            ECHO_WAIT < std::time::Duration::from_micros(8333),
+            "the bound must stay under a 120Hz frame"
+        );
+    }
+
+    #[test]
+    fn real_pty_the_echo_is_on_the_grid_when_the_wait_returns() {
+        // The regression: the frame that sent a key painted the grid from BEFORE the echo, and the
+        // echo frame then queued behind it for 1-3 vsyncs. The wait only helps if the grid already
+        // holds the echo the moment it reports output - proven here with the tty's own echo.
+        let mut term = e2e_term("printf READY; exec cat >/dev/null");
+        assert!(
+            poll_term(&term, |t| grid_text(t).contains("READY").then_some(())).is_some(),
+            "the probe never started"
+        );
+        let since = term.output_gen();
+        term.send(b"Q");
+        assert!(
+            term.wait_for_output_after(since, std::time::Duration::from_secs(5)),
+            "no echo within 5s"
+        );
+        assert!(
+            grid_text(&term).contains("READYQ"),
+            "the echo was not on the grid when the wait returned: {:?}",
+            grid_text(&term)
+        );
+    }
+
+    #[test]
+    fn real_pty_the_echo_wait_gives_up_at_its_bound_without_output() {
+        // Keys that produce nothing (echo off, a TUI that ignores them) must cost at most the bound.
+        let mut term = e2e_term("stty -echo; printf READY; exec cat >/dev/null");
+        assert!(
+            poll_term(&term, |t| grid_text(t).contains("READY").then_some(())).is_some(),
+            "the probe never started"
+        );
+        let since = term.output_gen();
+        term.send(b"Q");
+        let bound = std::time::Duration::from_millis(50);
+        let start = std::time::Instant::now();
+        assert!(!term.wait_for_output_after(since, bound), "an unechoed key reported output");
+        let took = start.elapsed();
+        assert!(
+            took >= bound && took < std::time::Duration::from_secs(1),
+            "the wait must end at its bound, took {took:?}"
         );
     }
 }
