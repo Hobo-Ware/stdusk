@@ -529,6 +529,14 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   GUI-impossible env. A window IS launchable locally.
 - **The wins were grounded; the losses were assumed** - verify external tool/lib/OS behavior
   (vendored source, `--help`, live argv, real crash logs) before coding to it. See `implementation.md`.
+- **Handover tests: observe the probe through a FILE, not the heir's grid.** In a test the donor
+  `PtyTerm` stays alive (`mark_handed_off` only disarms its kill), so its reader keeps draining the
+  same master as the heir, and any reply printed to the pty lands in whichever grid wins the read.
+  `real_pty_an_adopted_prompt_is_asked_to_repaint_without_a_keystroke` failed ~1 run in 50 that way
+  (CI on PR #2): the donor's grid held all four `GOT-0c` replies, the heir's was blank. The `^L`
+  itself always arrived. `raw_byte_reporter` now logs to a temp file, which also stops the
+  never-sent-`^L` test from passing by accident. Production has the same race only until the
+  predecessor exits after the ACK (see `request_redraw`).
 
 ## Decisions log
 - Splits (M8) + scrollback search (M7) are v1 must-haves (user).
