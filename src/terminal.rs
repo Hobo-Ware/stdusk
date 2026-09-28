@@ -1930,20 +1930,25 @@ mod tests {
         let _ = std::fs::remove_file(&log);
     }
 
-    /// A donor pane running a "shell" that reports every byte it is sent as `GOT-<hex>`, in RAW mode
-    /// with echo off so only real input shows up (never the line discipline's echo). `ARMED` in the
-    /// grid means the raw mode is in effect and it is safe to hand the pty over.
-    fn raw_byte_reporter() -> PtyTerm {
-        let term = e2e_term(
+    /// A donor pane running a "shell" that logs every byte it is sent as `GOT-<hex>` to the returned
+    /// file, in RAW mode with echo off so only real input shows up (never the line discipline's echo).
+    /// `ARMED` in the grid means the raw mode is in effect and it is safe to hand the pty over.
+    /// A file, not pty output: the donor's reader drains the same master and can eat the replies.
+    fn raw_byte_reporter(tag: &str) -> (PtyTerm, std::path::PathBuf) {
+        let log =
+            std::env::temp_dir().join(format!("stdusk-bytes-{tag}-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&log);
+        let term = e2e_term(&format!(
             "stty raw -echo; printf ARMED; \
              while :; do b=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); \
-             printf 'GOT-%s ' \"$b\"; done",
-        );
+             printf 'GOT-%s ' \"$b\" >> '{}'; done",
+            log.display()
+        ));
         assert!(
             poll_term(&term, |t| grid_text(t).contains("ARMED").then_some(())).is_some(),
             "the probe shell never armed raw mode"
         );
-        term
+        (term, log)
     }
 
     /// Tear down a probe pane after a handover test. `donor.kill()` is DISARMED by the
@@ -2013,16 +2018,14 @@ mod tests {
         // i.e. the case this must serve. (The probe reads with `dd`, a foreground CHILD, so the tty
         // would report "a command is running" - a real zsh prompt reads with zle, in the shell's own
         // process group, which `real_pty_the_tty_reports_whether_a_command_is_running` covers.)
-        let mut donor = raw_byte_reporter();
+        let (mut donor, log) = raw_byte_reporter("prompt");
         let heir = adopt_from(&mut donor, false, Some(false), false);
-        let asked = poll_term(&heir, |t| grid_text(t).contains("GOT-0c").then_some(()));
-        assert!(
-            asked.is_some(),
-            "an adopted prompt must be asked to repaint, got {:?}",
-            grid_text(&heir)
-        );
+        let got = || std::fs::read_to_string(&log).unwrap_or_default();
+        let asked = poll_term(&heir, |_| got().contains("GOT-0c").then_some(()));
+        assert!(asked.is_some(), "an adopted prompt must be asked to repaint, got {:?}", got());
         drop(heir);
         reap_probe(&donor);
+        let _ = std::fs::remove_file(&log);
     }
 
     #[test]
@@ -2030,14 +2033,15 @@ mod tests {
         // The other half: inside a TUI, `^L` is the APP's byte to interpret (a literal insert in
         // vim's insert mode), so a pane on the alt screen is asked to repaint with SIGWINCH only.
         // Long enough to cover every retry the nudger makes.
-        let mut donor = raw_byte_reporter();
+        let (mut donor, log) = raw_byte_reporter("tui");
         let heir = adopt_from(&mut donor, true, Some(false), false);
         std::thread::sleep(std::time::Duration::from_millis(2600));
-        let seen = grid_text(&heir);
+        let seen = std::fs::read_to_string(&log).unwrap_or_default();
         assert!(!seen.contains("GOT-"), "nothing may be typed into a TUI, got {seen:?}");
         assert!(heir.is_alt_screen(), "the handed-over alt screen must be entered here too");
         drop(heir);
         reap_probe(&donor);
+        let _ = std::fs::remove_file(&log);
     }
 
     #[test]
