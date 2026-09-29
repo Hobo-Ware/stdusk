@@ -1,7 +1,8 @@
 //! Shell launch config: spawn a **login + interactive** shell (like Terminal.app / Tabby) so the
 //! profile files that set PATH - `/etc/zprofile` (macOS `path_helper`), `~/.zprofile`
 //! (`brew shellenv`, etc) - actually run; and, when shell integration is on, inject OSC 133
-//! prompt/command marks so a failed command marks its tab.
+//! prompt/command marks so a failed command marks its tab, plus an OSC 7 cwd report so repo tabs
+//! can follow the shell (zsh and bash only).
 //!
 //! Integration works by pointing the shell at our own startup files that first source the user's
 //! real ones, then add hooks:
@@ -47,29 +48,68 @@ const ZPROFILE: &str = r#"[ -f "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zprofile" ] && so
 const ZLOGIN: &str = r#"[ -f "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zlogin" ] && source "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zlogin"
 "#;
 
-const ZSHRC: &str = r#"# stdusk shell integration (OSC 133) - regenerated on launch, do not edit.
+// macOS zsh emits OSC 7 only for Apple's own Terminal (`TERM_PROGRAM == Apple_Terminal`), so a
+// stdusk shell needs this hook to report its cwd.
+const ZSHRC: &str = r#"# stdusk shell integration (OSC 133 marks + OSC 7 cwd) - regenerated on launch, do not edit.
 [ -f "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zshrc" ] && source "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zshrc"
 # `D` (exit) is only emitted after a real command ran, so the first/empty prompt stays idle.
 _stdusk_preexec() { typeset -g _stdusk_ran=1; print -n '\e]133;C\a' }
-_stdusk_precmd()  { local ec=$?; [[ -n ${_stdusk_ran-} ]] && print -n "\e]133;D;${ec}\a"; unset _stdusk_ran; print -n '\e]133;A\a' }
+# Report the cwd, percent-encoded byte by byte (LC_CTYPE=C), keeping only [/._~A-Za-z0-9-].
+_stdusk_osc7() {
+  local i ch hex out= LC_CTYPE=C LC_COLLATE=C LC_ALL= LANG=
+  for (( i = 1; i <= ${#PWD}; ++i )); do
+    ch=$PWD[i]
+    case $ch in
+      [/._~A-Za-z0-9-]) out+=$ch ;;
+      *) printf -v hex '%02X' "'$ch"; out+=%${hex: -2} ;;
+    esac
+  done
+  print -n "\e]7;file://localhost$out\a"
+}
+_stdusk_precmd()  { local ec=$?; [[ -n ${_stdusk_ran-} ]] && print -n "\e]133;D;${ec}\a"; unset _stdusk_ran; print -n '\e]133;A\a'; _stdusk_osc7 }
 autoload -Uz add-zsh-hook 2>/dev/null
 add-zsh-hook preexec _stdusk_preexec 2>/dev/null
 add-zsh-hook precmd  _stdusk_precmd  2>/dev/null
 "#;
 
-const BASHRC: &str = r#"# stdusk shell integration (OSC 133) - regenerated on launch, do not edit.
+/// The bash hook text alone, so `BASHRC` and the tests use the very same script.
+macro_rules! bash_hook {
+    () => {
+        r#"# Report the cwd over OSC 7, percent-encoded byte by byte (LC_ALL=C), keeping only [/._~A-Za-z0-9-].
+__stdusk_osc7() {
+  local i ch hex out= LC_ALL=C
+  for (( i = 0; i < ${#PWD}; i++ )); do
+    ch=${PWD:i:1}
+    case $ch in
+      [/._~A-Za-z0-9-]) out+=$ch ;;
+      *) printf -v hex '%02X' "'$ch"; out+=%${hex: -2} ;;
+    esac
+  done
+  printf '\033]7;file://localhost%s\007' "$out"
+}
+# Skip the exit mark on the very first prompt so a freshly-opened tab stays idle.
+__stdusk_prompt() { local ec=$?; [ -n "${__stdusk_started-}" ] && printf '\033]133;D;%d\007' "$ec"; __stdusk_started=1; printf '\033]133;A\007'; __stdusk_osc7; }
+case "$PROMPT_COMMAND" in
+  *__stdusk_prompt*) ;;
+  *) PROMPT_COMMAND="__stdusk_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
+esac
+"#
+    };
+}
+
+#[cfg(test)]
+const BASH_HOOK: &str = bash_hook!();
+
+const BASHRC: &str = concat!(
+    r#"# stdusk shell integration (OSC 133 marks + OSC 7 cwd) - regenerated on launch, do not edit.
 # We run bash interactive-but-not-login (--rcfile), which skips the profile files that set PATH
 # (Homebrew, etc). Source the login profile chain first so tools like starship are found.
 if [ -f "$HOME/.bash_profile" ]; then source "$HOME/.bash_profile"
 elif [ -f "$HOME/.profile" ]; then source "$HOME/.profile"; fi
 [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
-# Skip the exit mark on the very first prompt so a freshly-opened tab stays idle.
-__stdusk_prompt() { local ec=$?; [ -n "${__stdusk_started-}" ] && printf '\033]133;D;%d\007' "$ec"; __stdusk_started=1; printf '\033]133;A\007'; }
-case "$PROMPT_COMMAND" in
-  *__stdusk_prompt*) ;;
-  *) PROMPT_COMMAND="__stdusk_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
-esac
-"#;
+"#,
+    bash_hook!()
+);
 
 // Vendored fish-style history autosuggestions (zsh-users/zsh-autosuggestions v0.7.1, MIT - the
 // license header is kept inside the file). Opt-in; sourced from our .zshrc only when the config
@@ -188,6 +228,190 @@ mod tests {
         // Every generated rc must actually emit the 133 marks the tab indicator depends on.
         assert!(ZSHRC.contains("133;C") && ZSHRC.contains("133;D") && ZSHRC.contains("133;A"));
         assert!(BASHRC.contains("133;D") && BASHRC.contains("133;A"));
+    }
+
+    #[test]
+    fn hook_scripts_report_the_cwd_over_osc_7() {
+        // Repo grouping follows the cwd, and macOS zsh only reports it for Apple's own Terminal.
+        for rc in [ZSHRC, BASHRC] {
+            assert!(rc.contains("]7;file://localhost"), "the hook must emit OSC 7");
+            assert!(rc.contains("%02X"), "the path must be percent-encoded, never printed raw");
+        }
+    }
+
+    /// Awkward but legal: a space, UTF-8, `;`, `%41`, `\`. It must come back from a shell intact.
+    const FUSSY_DIR: &str = "a b \u{e9};x%41\\ z";
+
+    /// Named like an attack: a BEL, an ESC, and a whole OSC 52 clipboard write. Printed raw, the
+    /// BEL would end the OSC 7 early and the rest would run as a sequence of its own.
+    const INJECTION_DIR: &str = "x\u{7}\u{1b}]52;c;Zm9v\u{7}y";
+
+    /// Spawn a REAL login+interactive `shell` in `start`, with `HOME` and the bridge in scratch dirs
+    /// (no user rc, and the real `~/.config/stdusk/shell` is never written), and wait for its first
+    /// prompt to report a cwd over OSC 7. `None` if none arrives in 10 s.
+    fn first_prompt_cwd(
+        shell: &str,
+        env: std::collections::BTreeMap<String, String>,
+        start: &Path,
+    ) -> Option<String> {
+        use crate::config::Profile;
+        use crate::terminal::{PtyTerm, SpawnOpts};
+        let opts = SpawnOpts {
+            detect_progress: false,
+            shell_integration: false, // the test wires the bridge itself; see `env`
+            autosuggestions: false,
+            scrollback_lines: 100,
+            word_separators: " ".into(),
+            bold_bright: false,
+            cwd: Some(start.to_string_lossy().into_owned()),
+            profile: Some(Profile {
+                name: "osc7".into(),
+                shell: Some(shell.into()),
+                args: vec![],
+                cwd: None,
+                env,
+                color: None,
+            }),
+        };
+        let term = PtyTerm::spawn(80, 24, eframe::egui::Context::default(), &opts);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut cwd = None;
+        while cwd.is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            cwd = term.cwd();
+        }
+        cwd
+    }
+
+    /// Run `script` in a plain (no pty) `shell` with a clean env and return its stdout. `$1` and
+    /// `$2` are `hook` and `dir`. Byte-exact output is what proves nothing was injected.
+    fn run_hook(shell: &str, script: &str, hook: &Path, home: &Path, dir: &Path) -> Vec<u8> {
+        let out = std::process::Command::new(shell)
+            .args(["-c", script, "hook-test"])
+            .args([hook, dir])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", home)
+            .env("STDUSK_REAL_ZDOTDIR", home)
+            .output()
+            .expect("the shell under test must launch");
+        out.stdout
+    }
+
+    fn count_byte(bytes: &[u8], byte: u8) -> usize {
+        bytes.split(|&b| b == byte).count() - 1
+    }
+
+    /// What the hook must print for `dir`: one OSC 7, the whole path percent-encoded.
+    fn expected_osc7(dir: &Path) -> Vec<u8> {
+        let path = std::fs::canonicalize(dir).unwrap();
+        format!("\u{1b}]7;file://localhost{}\u{7}", crate::osc::hook_encode(path.to_str().unwrap()))
+            .into_bytes()
+    }
+
+    fn scratch(kind: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("stdusk-osc7-{}-{kind}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    #[test]
+    fn real_zsh_reports_a_fussy_directory_name_intact() {
+        let base = scratch("zsh");
+        let (bridge, home, start) = (base.join("bridge"), base.join("home"), base.join(FUSSY_DIR));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&start).unwrap();
+        write_files(&bridge, false).unwrap();
+        let env = [
+            ("ZDOTDIR", bridge.to_string_lossy().into_owned()),
+            ("STDUSK_REAL_ZDOTDIR", home.to_string_lossy().into_owned()),
+            ("HOME", home.to_string_lossy().into_owned()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+
+        let cwd = first_prompt_cwd("/bin/zsh", env, &start);
+
+        let want = std::fs::canonicalize(&start).unwrap();
+        assert_eq!(cwd.as_deref(), want.to_str(), "zsh must report the exact directory");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn real_bash_reports_a_fussy_directory_name_intact() {
+        let base = scratch("bash");
+        let (home, start) = (base.join("home"), base.join(FUSSY_DIR));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&start).unwrap();
+        // The bridge's bashrc also sources ~/.bash_profile, so a login shell here gets the hook
+        // text alone, via a profile that sources it.
+        let hook = base.join("hook.bash");
+        std::fs::write(&hook, BASH_HOOK).unwrap();
+        std::fs::write(home.join(".bash_profile"), format!("source {hook:?}\n")).unwrap();
+        let env = [("HOME".to_string(), home.to_string_lossy().into_owned())].into_iter().collect();
+
+        let cwd = first_prompt_cwd("/bin/bash", env, &start);
+
+        let want = std::fs::canonicalize(&start).unwrap();
+        assert_eq!(cwd.as_deref(), want.to_str(), "bash must report the exact directory");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_directory_name_cannot_inject_a_sequence_through_the_zsh_hook() {
+        let base = scratch("zsh-inject");
+        let (bridge, home, dir) =
+            (base.join("bridge"), base.join("home"), base.join(INJECTION_DIR));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        write_files(&bridge, false).unwrap();
+
+        let out = run_hook(
+            "/bin/zsh",
+            r#"source "$1"; cd -- "$2"; _stdusk_osc7"#,
+            &bridge.join(".zshrc"),
+            &home,
+            &std::fs::canonicalize(&dir).unwrap(),
+        );
+
+        assert_eq!(out, expected_osc7(&dir), "one OSC 7, the whole path encoded");
+        assert_eq!(count_byte(&out, 0x1b), 1, "exactly one ESC");
+        assert_eq!(count_byte(&out, 0x07), 1, "exactly one BEL");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_directory_name_cannot_inject_a_sequence_through_the_bash_hook() {
+        let base = scratch("bash-inject");
+        let (home, dir) = (base.join("home"), base.join(INJECTION_DIR));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let hook = base.join("hook.bash");
+        std::fs::write(&hook, BASH_HOOK).unwrap();
+
+        let out = run_hook(
+            "/bin/bash",
+            r#"source "$1"; cd -- "$2"; __stdusk_osc7"#,
+            &hook,
+            &home,
+            &std::fs::canonicalize(&dir).unwrap(),
+        );
+
+        assert_eq!(out, expected_osc7(&dir), "one OSC 7, the whole path encoded");
+        assert_eq!(count_byte(&out, 0x1b), 1, "exactly one ESC");
+        assert_eq!(count_byte(&out, 0x07), 1, "exactly one BEL");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_control_character_path_is_never_taken_as_the_cwd() {
+        // Hook output for the injection directory is well-formed OSC 7, but the parser must still
+        // refuse the decoded path: it holds a BEL and an ESC, so it is not somewhere a shell is.
+        let path = format!("/tmp/{INJECTION_DIR}");
+        let osc = format!("\u{1b}]7;file://localhost{}\u{7}", crate::osc::hook_encode(&path));
+        assert_eq!(crate::osc::OscScanner::new().feed(osc.as_bytes()), vec![]);
     }
 
     #[test]

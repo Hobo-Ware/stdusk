@@ -2345,7 +2345,7 @@ costs on the UI thread.
   clean. Build with cargo 1.95 and clippy 1.98, because the default stable 1.90 is too old for
   egui 0.35.
 
-## Cmd+Shift+[ / ] cycle tabs; repo switch moves to Cmd+Ctrl+[ / ] (post-1.7.5; 400 tests)
+## Cmd+Shift+[ / ] cycle tabs; repo switch moves to Cmd+Ctrl+[ / ] (post-1.7.5)
 - `Cmd+Shift+]` / `[` now step to the next / previous tab, like kitty, WezTerm, Ghostty and Chrome.
   `Ctrl+Tab` / `Ctrl+Shift+Tab` still work (fixed binds). The step wraps inside the visible tabs
   (the active repo's tabs, or all tabs with grouping off), through the same `cycle_visible` as
@@ -2378,16 +2378,51 @@ costs on the UI thread.
 - Live check via `--state-dir` with a seeded legacy config (window mode, group_by_repo on):
   CONFIRMED by the user on a real window - tab cycle, repo switch, and grouping all work.
   Not tried: `Cmd+Shift+[` on a non-US layout (Ghostty 1.2.0 broke here with physical codes).
-- Found while testing (NOT fixed here, both in `shell.rs`):
-  - Repo grouping only follows OSC 7 / 1337, and stdusk's own zsh/bash hooks emit only OSC 133.
-    macOS zsh and oh-my-zsh emit OSC 7 only when `TERM_PROGRAM == Apple_Terminal`, so a shell
-    with no OSC 7 of its own never groups (every tab stays in `Other`). The live run needed a
-    test-only `chpwd`/`precmd` hook in the scratch `$HOME/.zshrc`. Fix idea: emit OSC 7 from
-    the bridge hooks.
-  - `real_zdotdir` only skips an inherited `ZDOTDIR` equal to OUR dir. A `--state-dir` run moves
-    our dir, so launching one from inside a stdusk shell bridges to the parent's bridge dir and
-    zsh dies with "recursion limit exceeded". Workaround: launch with
-    `env -u ZDOTDIR -u STDUSK_REAL_ZDOTDIR`. Fix idea: prefer an inherited `STDUSK_REAL_ZDOTDIR`.
+- Found while testing, both in `shell.rs`:
+  - Repo grouping only follows OSC 7 / 1337, and stdusk's own zsh/bash hooks emitted only OSC
+    133. macOS zsh and oh-my-zsh emit OSC 7 only when `TERM_PROGRAM == Apple_Terminal`, so a
+    shell with no OSC 7 of its own never grouped (every tab stayed in `Other`). The live run
+    needed a test-only `chpwd`/`precmd` hook in the scratch `$HOME/.zshrc`. FIXED in the next
+    entry.
+  - The `--state-dir` `ZDOTDIR` recursion is the "Gotcha found while testing" in the quake entry
+    above (same bug, found twice). NOT fixed. Fix idea: prefer an inherited
+    `STDUSK_REAL_ZDOTDIR` over `ZDOTDIR`.
+
+## Shell hooks report the cwd over OSC 7 (post-1.7.5, on top of the quake entry; 413 tests)
+- Why: repo grouping, cwd-aware titles, new-tab-in-cwd and session save all read `PtyTerm::cwd()`,
+  which only OSC 7 / 1337 fill. stdusk's hooks emitted only OSC 133, and macOS zsh (and
+  oh-my-zsh, `termsupport.zsh:117`) emit OSC 7 only for `TERM_PROGRAM == Apple_Terminal`. So a
+  shell with no OSC 7 of its own never had a cwd and never grouped.
+- Hooks (`shell.rs`): zsh `_stdusk_osc7` runs from `_stdusk_precmd`, bash `__stdusk_osc7` from
+  `__stdusk_prompt`, on every prompt. The host is always `localhost`. The path is percent-encoded
+  BYTEWISE (`LC_CTYPE=C` / `LC_ALL=C`), keeping only `[/._~A-Za-z0-9-]` - the encoding of Apple's
+  `update_terminal_cwd` (read from `/etc/zshrc_Apple_Terminal`). Encoding is a security
+  requirement: printed raw, a directory name holding a BEL or ESC would end the OSC early and run
+  the rest as its own sequence (an OSC 52 clipboard write, say). The bash text lives in a
+  `bash_hook!` macro so `BASHRC` and the tests use the same script.
+- Parser (`osc.rs`): `osc7_path` works on the raw bytes, before the `;` field split, so a `;` in a
+  path survives. It decodes `%XX` bytewise (encoded UTF-8 comes back whole, a bad escape stays
+  literal). It refuses: a foreign host (empty, exactly `localhost`, or our own short hostname pass;
+  an ssh session's remote path would group the tab under a repo that is not on this Mac), control
+  characters, invalid UTF-8, and paths over 4096 bytes. The hostname is `sysinfo`'s, read once.
+  Behavior change: any host used to be accepted and nothing was decoded, so Apple's `My%20Dir`
+  never resolved. A shell that reports a host other than `gethostname` is now ignored.
+- Reviewed by two subagents (Fable, Opus). Agreed: hook every prompt, decode + host check,
+  emitting twice is harmless. Took Opus's full bytewise encoding over Fable's `%`-only escape (raw
+  control bytes would inject). Took Fable's test approach: real shells with `HOME` / `ZDOTDIR`
+  in scratch dirs, so the real `~/.config/stdusk/shell` is never written.
+- NOT built (follow-up): shells with no hook (fish, nu, sh, integration off) still have no cwd
+  unless their own rc emits OSC 7. Both reviewers proposed the same fallback: refresh the OS cwd
+  for shell pids only (never `with_cwd` on the full ~850-process refresh), and latch a
+  `cwd_from_osc` flag so a stale OS sample cannot override a fresh OSC 7 after a `cd`.
+- Tests: `osc_7_path_table`, `hook_encoding_round_trips` and `osc_7_decoding_never_panics`
+  (proptests), `a_semicolon_in_an_osc_7_path_survives_the_field_split`,
+  `osc_7_from_another_machine_is_dropped`; in `shell.rs` `real_zsh_reports_a_fussy_directory_name_intact`
+  and the bash twin (real pty, first prompt), `a_directory_name_cannot_inject_a_sequence_through_the_zsh_hook`
+  and the bash twin (byte-exact output for a directory holding BEL, ESC and an OSC 52),
+  `a_control_character_path_is_never_taken_as_the_cwd`, `hook_scripts_report_the_cwd_over_osc_7`.
+- Live check in the app (repo chip follows a real `cd` with the user's own dotfiles): PENDING.
+  Covered so far by unit and real-shell tests only.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk

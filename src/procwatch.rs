@@ -257,8 +257,9 @@ impl ProcScanner {
 ///
 /// This is the fallback for a pane whose cwd we never learned: `TabState.cwd` is only ever filled by
 /// OSC 7, and macOS zsh emits that from `/etc/zshrc_Apple_Terminal` - sourced ONLY when
-/// `TERM_PROGRAM == Apple_Terminal`, which ours never is. So a shell whose own rc files don't emit
-/// it stays cwd-less forever, and its tab keeps the bare "zsh" placeholder. Asking the OS costs one
+/// `TERM_PROGRAM == Apple_Terminal`, which ours never is. Our own zsh and bash hooks (`shell.rs`)
+/// emit it, but a shell with no hook (fish, sh, integration off) whose own rc files don't emit it
+/// stays cwd-less forever, and its tab keeps the bare "zsh" placeholder. Asking the OS costs one
 /// targeted refresh (`PROC_PIDVNODEPATHINFO` on macOS), so keep it off per-frame paths - it exists
 /// for the handoff, which runs it once per pane during a restart.
 pub(crate) fn process_cwd(pid: u32) -> Option<String> {

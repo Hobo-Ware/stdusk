@@ -81,6 +81,11 @@ fn find_suffix(hay: &[u8], from: usize) -> Option<(usize, usize)> {
 }
 
 fn parse_osc(payload: &[u8]) -> Option<OscEvent> {
+    // OSC 7 is read from the raw bytes, before the `;` field split: a path may hold a `;`, and
+    // percent-escaped UTF-8 only decodes bytewise.
+    if let Some(url) = payload.strip_prefix(b"7;") {
+        return osc7_path(url, local_host()).map(OscEvent::Cwd);
+    }
     let text = String::from_utf8_lossy(payload);
     let fields: Vec<&str> = text.split(';').collect();
     match *fields.first()? {
@@ -94,12 +99,6 @@ fn parse_osc(payload: &[u8]) -> Option<OscEvent> {
             let rest = fields[1..].join(";");
             let dir = rest.strip_prefix("CurrentDir=")?;
             Some(OscEvent::Cwd(expand_home(dir)))
-        }
-        "7" => {
-            // file://host/path
-            let url = fields.get(1)?;
-            let path = url.strip_prefix("file://").and_then(|r| r.find('/').map(|k| &r[k..]));
-            Some(OscEvent::Cwd(expand_home(path.unwrap_or(url))))
         }
         "52" => {
             // 52 ; (c|p|"") ; base64
@@ -144,6 +143,84 @@ fn expand_home(path: &str) -> String {
     path.to_string()
 }
 
+/// A cwd longer than this is refused. Real paths stay far below it (PATH_MAX is 1024 on macOS).
+const MAX_CWD_BYTES: usize = 4096;
+
+/// This machine's hostname, read once: the OSC 7 host check runs for every event.
+fn local_host() -> &'static str {
+    static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOST.get_or_init(|| sysinfo::System::host_name().unwrap_or_default())
+}
+
+/// `box` and `box.local` name the same machine, so only the label before the first dot counts.
+fn short_name(host: &str) -> &str {
+    host.split('.').next().unwrap_or(host)
+}
+
+/// Whether an OSC 7 host is this machine: empty, exactly `localhost`, or our own hostname.
+fn is_local_host(host: &str, local: &str) -> bool {
+    host.is_empty()
+        || host.eq_ignore_ascii_case("localhost")
+        || (!local.is_empty() && short_name(host).eq_ignore_ascii_case(short_name(local)))
+}
+
+fn hex_pair(hi: u8, lo: u8) -> Option<u8> {
+    let (hi, lo) = (char::from(hi).to_digit(16)?, char::from(lo).to_digit(16)?);
+    u8::try_from(hi * 16 + lo).ok()
+}
+
+/// Decode `%XX` escapes bytewise. A `%` not followed by two hex digits stays as written.
+fn percent_decode(s: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut i = 0;
+    while let Some(&b) = s.get(i) {
+        let escaped = (b == b'%').then(|| hex_pair(*s.get(i + 1)?, *s.get(i + 2)?)).flatten();
+        if let Some(byte) = escaped {
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The local path an OSC 7 `file://host/path` URL names. `None` for another machine's host, a
+/// malformed URL, or a path that is not plain text (control characters, invalid UTF-8, too long):
+/// the path becomes a filesystem lookup, and a control character in it would be a lie about where
+/// the shell is. Shells percent-encode the path (Apple's `update_terminal_cwd`, fish, our own
+/// hooks), so decode it. A bare path with no `file://` is taken as it is.
+fn osc7_path(url: &[u8], local_host: &str) -> Option<String> {
+    let path = match url.strip_prefix(b"file://") {
+        Some(rest) => {
+            let slash = rest.iter().position(|&b| b == b'/')?;
+            if !is_local_host(std::str::from_utf8(&rest[..slash]).ok()?, local_host) {
+                return None;
+            }
+            String::from_utf8(percent_decode(&rest[slash..])).ok()?
+        }
+        None => expand_home(std::str::from_utf8(url).ok()?),
+    };
+    let plain =
+        !path.is_empty() && path.len() <= MAX_CWD_BYTES && !path.chars().any(char::is_control);
+    plain.then_some(path)
+}
+
+/// The encoding the shell hooks apply (see `shell.rs`): keep `[/._~A-Za-z0-9-]`, `%XX` every
+/// other byte. The tests here and in `shell.rs` share it as the oracle for the hook scripts.
+#[cfg(test)]
+pub(crate) fn hook_encode(path: &str) -> String {
+    path.bytes()
+        .map(|b| match b {
+            b'/' | b'.' | b'_' | b'~' | b'-' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' => {
+                char::from(b).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -177,9 +254,79 @@ mod tests {
     fn cwd_via_osc_7_file_url() {
         let mut sc = OscScanner::new();
         assert_eq!(
-            sc.feed(b"\x1b]7;file://host/Users/x\x1b\\"),
+            sc.feed(b"\x1b]7;file://localhost/Users/x\x1b\\"),
             vec![OscEvent::Cwd("/Users/x".into())]
         );
+        // No host at all is this machine too.
+        assert_eq!(
+            OscScanner::new().feed(b"\x1b]7;file:///Users/x\x07"),
+            vec![OscEvent::Cwd("/Users/x".into())]
+        );
+    }
+
+    #[test]
+    fn a_semicolon_in_an_osc_7_path_survives_the_field_split() {
+        assert_eq!(
+            OscScanner::new().feed(b"\x1b]7;file:///a;b\x07"),
+            vec![OscEvent::Cwd("/a;b".into())]
+        );
+    }
+
+    #[test]
+    fn osc_7_from_another_machine_is_dropped() {
+        // An ssh session's remote path would group the tab under a repo that is not on this Mac.
+        assert_eq!(
+            OscScanner::new().feed(b"\x1b]7;file://some-remote-box.invalid/srv/app\x07"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn osc_7_path_table() {
+        let local = "Alexs-Mac.local";
+        let cases: [(&[u8], Option<&str>); 20] = [
+            (b"file:///a", Some("/a")),
+            (b"file://localhost/a", Some("/a")),
+            (b"file://LocalHost/a", Some("/a")),
+            (b"file://Alexs-Mac.local/a", Some("/a")), // the hostname zsh's $HOST reports
+            (b"file://alexs-mac/a", Some("/a")),       // short name, any case
+            (b"file://other/a", None),
+            (b"file://localhost.example.com/a", None), // only the exact name `localhost`
+            (b"file://localhost/a%20b", Some("/a b")),
+            (b"file://localhost/%E2%82%AC", Some("/\u{20ac}")), // percent-encoded UTF-8 rebuilt
+            (b"file://localhost/a%3Bb", Some("/a;b")),
+            (b"file://localhost/a%25b", Some("/a%b")),
+            (b"file://localhost/a%zzb", Some("/a%zzb")), // a bad escape stays literal
+            (b"file://localhost/100%", Some("/100%")),
+            (b"file://localhost/a%4", Some("/a%4")),
+            (b"file://localhost/a%00b", None), // NUL, BEL, ESC would make the path a lie
+            (b"file://localhost/a%07b", None),
+            (b"file://localhost/a%1Bb", None),
+            (b"file://localhost/a%FF", None),    // not UTF-8
+            (b"/tmp/plain", Some("/tmp/plain")), // a bare path, as some emitters send
+            (b"file://localhost", None),         // a host and no path
+        ];
+        for (url, want) in cases {
+            assert_eq!(osc7_path(url, local).as_deref(), want, "{}", String::from_utf8_lossy(url));
+        }
+        let long = format!("file://localhost/{}", "a".repeat(MAX_CWD_BYTES));
+        assert_eq!(osc7_path(long.as_bytes(), local), None, "an absurdly long path is refused");
+    }
+
+    proptest! {
+        // Whatever a directory is called, what the hooks encode is what the decoder returns.
+        #[test]
+        fn hook_encoding_round_trips(name in "[^\\x00-\\x1f\\x7f-\\x9f/]{1,64}") {
+            let path = format!("/{name}");
+            let url = format!("file://localhost{}", hook_encode(&path));
+            prop_assert_eq!(osc7_path(url.as_bytes(), ""), Some(path));
+        }
+
+        // Shell output is adversarial: no byte string may panic the decoder.
+        #[test]
+        fn osc_7_decoding_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..256)) {
+            let _ = osc7_path(&bytes, "box.local");
+        }
     }
 
     #[test]

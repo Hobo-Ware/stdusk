@@ -51,7 +51,7 @@ Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk`
 - **Autosuggestions** - optional fish-style ghost text from your zsh history (`[terminal] autosuggestions`). Right arrow accepts.
 - **Image paste** - `Ctrl+V` forwards `^V` so a tool that reads the clipboard on it (e.g. Claude Code) ingests a copied screenshot; right/middle-click paste do too when the clipboard holds an image.
 - **Theme reports** - apps that cache colors (Claude Code among them) hear about light/dark switches via DEC mode 2031.
-- **Supreme defaults** - truecolor, real bold faces, dim text, wide chars, ligatures, Nerd Fonts, mouse selection and copy, SGR mouse reporting, cwd-aware new tabs, bracketed paste, OSC 52 clipboard, shell-integration exit signals, cursor styles, session restore.
+- **Supreme defaults** - truecolor, real bold faces, dim text, wide chars, ligatures, Nerd Fonts, mouse selection and copy, SGR mouse reporting, cwd-aware new tabs, bracketed paste, OSC 52 clipboard, shell-integration exit signals and directory reports, cursor styles, session restore.
 
 ## The name
 

@@ -1188,7 +1188,7 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
         row_new_tabs(
             ui,
             "Shell integration",
-            "OSC 133 command marks for done/failed state",
+            "OSC 133 command marks and OSC 7 directory reports",
             |ui| {
                 crate::widgets::toggle_switch(ui, &mut t.shell_integration);
             },

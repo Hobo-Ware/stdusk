@@ -33,7 +33,7 @@ dock_when_visible = false # (macOS, dropdown mode only) show a Dock icon + real 
 [terminal]
 detect_progress = true    # scrape N% from output into the tab progress bar (Tabby-style)
 cursor = "block"          # cursor shape: "block" | "underline" | "beam"
-shell_integration = true  # inject OSC 133 hooks so a failed command marks its tab
+shell_integration = true  # inject OSC 133 + OSC 7 hooks (zsh, bash): a failed command marks its tab, and repo tabs follow the shell's directory
 autosuggestions = false   # fish-style inline history suggestions (zsh; Right-arrow accepts). needs shell_integration
 bell = "visual"           # BEL handling: "visual" (screen flash) | "off"
 detect_clis = true        # badge tabs that are running a known AI CLI (claude/codex/gemini/...)
