@@ -2434,6 +2434,22 @@ costs on the UI thread.
   `__VERSION__` replaced), `codesign --force --deep --sign -`, back up the old app, then swap
   the bundle with two renames. Revert `Cargo.toml` and `Cargo.lock` afterwards.
 
+## F1-F12 reach the shell (post-1.7.5, on top of the OSC 7 entry; 414 tests)
+- Symptom: F10 did nothing in htop. No F-key worked in any TUI.
+- Cause: `key_to_bytes` had no arm for F1-F12, so they fell into `_ => None`. The old test even
+  used F5 as its "unmapped key" example. `collect_input` is the only path from key events to pty
+  bytes, so nothing sent them.
+- Fix (`keys.rs`): `fkey_code` and `fkey_bytes` encode F1-F12 as in the `xterm-256color`
+  terminfo, which is the `TERM` stdusk sets. F1-F4 send `ESC O P..S`. F5-F12 send `ESC [ n ~`
+  (15, 17, 18, 19, 20, 21, 23, 24). Shift, Alt and Ctrl add the xterm parameter
+  `1 + shift + 2*alt + 4*ctrl`. The check runs before the Ctrl early return, so Ctrl+F5 works.
+  Cmd+F-key sends nothing, so app binds stay free.
+- Test: `function_keys_match_xterm_terminfo`. The old unmapped-key assertion now uses F13.
+- macOS note: the top-row keys send media functions (F10 is mute) unless the user holds Fn or
+  turns on "Use F1, F2, etc. keys as standard function keys". This is an OS setting, not a
+  stdusk bug.
+- Showcase check: `site/index.html` and the README never mention F-keys. No change needed.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
