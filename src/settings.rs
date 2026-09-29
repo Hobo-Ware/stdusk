@@ -1650,7 +1650,9 @@ fn hotkeys_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> HotkeysFx {
         egui::RichText::new(
             "Chords are modifiers (Cmd / Ctrl / Alt / Shift) + a key, e.g. Cmd+Shift+K. \
              Applies as you type; empty = unbound. A bind that collides with a terminal key \
-             (e.g. Ctrl+letter) also reaches the shell. The global summon hotkey lives in Quake.",
+             (for example Ctrl+letter) takes the key from the shell. Clear the bind (empty \
+             string) to give the key back. A bind on Ctrl+C replaces both copy and SIGINT. \
+             The global summon hotkey lives in Quake.",
         )
         .size(11.5)
         .color(colors::dim()),

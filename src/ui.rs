@@ -1906,6 +1906,8 @@ mod tests {
         closed: Option<usize>,
         dragged: Option<usize>,
         keys: Vec<u8>,
+        /// App actions the `[hotkeys]` step fired this frame (empty when no binds are given).
+        actions: Vec<crate::keys::HotkeyAction>,
     }
 
     /// One frame of a minimal real tab bar (two `draw_tab`s + reorder drag sense) above a
@@ -1920,6 +1922,25 @@ mod tests {
         events: Vec<egui::Event>,
         clis: [Option<crate::procwatch::Cli>; 2],
     ) -> TabFrameOut {
+        tab_frame_hk(ctx, events, clis, None)
+    }
+
+    /// `tab_frame` with the render loop's `[hotkeys]` step in front: match the chords against
+    /// `hotkeys`, then consume them before the grid's `collect_input` runs (main.rs order).
+    fn hotkey_frame(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        hotkeys: &crate::config::Hotkeys,
+    ) -> TabFrameOut {
+        tab_frame_hk(ctx, events, [None, None], Some(hotkeys))
+    }
+
+    fn tab_frame_hk(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        clis: [Option<crate::procwatch::Cli>; 2],
+        hotkeys: Option<&crate::config::Hotkeys>,
+    ) -> TabFrameOut {
         let mut out = TabFrameOut {
             rects: Vec::new(),
             clicked: None,
@@ -1927,6 +1948,7 @@ mod tests {
             closed: None,
             dragged: None,
             keys: Vec::new(),
+            actions: Vec::new(),
         };
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -1938,6 +1960,17 @@ mod tests {
             ..Default::default()
         };
         let _ = ctx.run_ui(raw, |ui| {
+            if let Some(hk) = hotkeys {
+                let guards = crate::keys::HotkeyGuards {
+                    text_modal: false,
+                    hard_modal: false,
+                    can_switch_tabs: true,
+                    repo_grouping: true,
+                };
+                let matched = ui.input(|i| crate::keys::matched_hotkeys(&i.events, hk, guards));
+                ui.ctx().input_mut(|i| crate::keys::consume_hotkey_events(&mut i.events, &matched));
+                out.actions = matched.into_iter().map(|(a, _)| a).collect();
+            }
             egui::Panel::top("tabbar").show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for (i, cli) in clis.into_iter().enumerate() {
@@ -2122,6 +2155,98 @@ mod tests {
             }],
         );
         assert_eq!(out.keys, vec![0x7f]);
+    }
+
+    fn fkey_press(key: Key, modifiers: Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    #[test]
+    fn a_bound_function_key_runs_the_action_and_stays_out_of_the_pty() {
+        // The reported bug: `[hotkeys] find = "F3"` opened the find bar AND htop got F3.
+        // Real frame structure: hotkey step, tab bar, focused grid, collect_input.
+        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        let none = Modifiers::default();
+        let bare_f5 = crate::config::Hotkeys { find: "F5".into(), ..Default::default() };
+        let unbound = crate::config::Hotkeys { find: String::new(), ..Default::default() };
+        let default_hk = crate::config::Hotkeys::default();
+        // (label, hotkeys, key press, expected actions, expected pty bytes)
+        let cases: [(&str, &crate::config::Hotkeys, Modifiers, Vec<_>, &[u8]); 4] = [
+            ("bound F5", &bare_f5, none, vec![crate::keys::HotkeyAction::Find], b""),
+            ("unbound F5", &unbound, none, vec![], b"\x1b[15~"),
+            ("Shift+F5, only bare F5 bound", &bare_f5, shift, vec![], b"\x1b[15;2~"),
+            ("default binds leave F5 alone", &default_hk, none, vec![], b"\x1b[15~"),
+        ];
+        for (label, hk, m, actions, bytes) in cases {
+            let ctx = egui::Context::default();
+            hotkey_frame(&ctx, vec![], hk); // warm-up: layout exists
+            let out = hotkey_frame(&ctx, vec![fkey_press(Key::F5, m)], hk);
+            assert_eq!(out.actions, actions, "{label}");
+            assert_eq!(out.keys, bytes, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_consumed_hotkey_does_not_swallow_the_typing_around_it() {
+        // Only the matched press leaves the frame: keys typed in the same frame still arrive.
+        let hk = crate::config::Hotkeys { find: "F3".into(), ..Default::default() };
+        let ctx = egui::Context::default();
+        hotkey_frame(&ctx, vec![], &hk);
+        let out = hotkey_frame(
+            &ctx,
+            vec![
+                egui::Event::Text("l".into()),
+                fkey_press(Key::F3, Modifiers::default()),
+                fkey_press(Key::Backspace, Modifiers::default()),
+            ],
+            &hk,
+        );
+        assert_eq!(out.actions, vec![crate::keys::HotkeyAction::Find]);
+        assert_eq!(out.keys, b"l\x7f");
+    }
+
+    #[test]
+    fn a_bound_alt_chord_sends_neither_its_key_nor_its_composed_text() {
+        // macOS Option+K: the key event, then Text("\u{2da}"). altIsMeta is off (collect_input
+        // gets false in the frame helper), so the Text would reach the shell as UTF-8.
+        let alt = Modifiers { alt: true, ..Modifiers::default() };
+        let press = || vec![fkey_press(Key::K, alt), egui::Event::Text("\u{2da}".into())];
+        let bound = crate::config::Hotkeys { clear: "Alt+K".into(), ..Default::default() };
+        let unbound = crate::config::Hotkeys::default();
+        let ctx = egui::Context::default();
+        hotkey_frame(&ctx, vec![], &bound);
+        let out = hotkey_frame(&ctx, press(), &bound);
+        assert_eq!(out.actions, vec![crate::keys::HotkeyAction::Clear]);
+        assert!(out.keys.is_empty(), "bound Alt+K must send nothing: {:?}", out.keys);
+        let ctx = egui::Context::default();
+        hotkey_frame(&ctx, vec![], &unbound);
+        let out = hotkey_frame(&ctx, press(), &unbound);
+        assert!(out.actions.is_empty());
+        assert_eq!(out.keys, "\u{2da}".as_bytes(), "unbound Alt+K keeps its composed text");
+    }
+
+    #[test]
+    fn two_bound_chords_in_one_frame_both_leave_the_pty_alone() {
+        let hk = crate::config::Hotkeys {
+            find: "F3".into(),
+            zoom_in: "F4".into(),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        hotkey_frame(&ctx, vec![], &hk);
+        let out = hotkey_frame(
+            &ctx,
+            vec![
+                fkey_press(Key::F3, Modifiers::default()),
+                fkey_press(Key::F4, Modifiers::default()),
+            ],
+            &hk,
+        );
+        assert_eq!(
+            out.actions,
+            vec![crate::keys::HotkeyAction::Find, crate::keys::HotkeyAction::Zoom(1)]
+        );
+        assert!(out.keys.is_empty(), "{:?}", out.keys);
     }
 
     // ---- the right-pinned Settings tab (settings-as-a-tab, 1.0.4) ----
