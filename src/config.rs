@@ -49,6 +49,8 @@ pub(crate) struct Hotkeys {
     pub(crate) zoom_in: String,
     pub(crate) zoom_out: String,
     pub(crate) zoom_reset: String,
+    pub(crate) next_tab: String,
+    pub(crate) prev_tab: String,
     pub(crate) next_repo: String,
     pub(crate) prev_repo: String,
 }
@@ -71,9 +73,38 @@ impl Default for Hotkeys {
             zoom_in: "Cmd+=".into(),
             zoom_out: "Cmd+-".into(),
             zoom_reset: "Cmd+0".into(),
-            next_repo: "Cmd+Shift+]".into(),
-            prev_repo: "Cmd+Shift+[".into(),
+            next_tab: "Cmd+Shift+]".into(),
+            prev_tab: "Cmd+Shift+[".into(),
+            next_repo: "Cmd+Ctrl+]".into(),
+            prev_repo: "Cmd+Ctrl+[".into(),
         }
+    }
+}
+
+/// The repo chords before the tab-cycle binds took `Cmd+Shift+[` / `]`.
+const LEGACY_NEXT_REPO: &str = "Cmd+Shift+]";
+const LEGACY_PREV_REPO: &str = "Cmd+Shift+[";
+
+impl Hotkeys {
+    /// Settings Save writes every default, so an old config file pins the legacy repo chords,
+    /// and those chords now belong to the tab binds. Move a repo chord to its new default only
+    /// when it is the legacy chord AND still collides with its tab chord - a repo chord the user
+    /// remapped, or a tab chord they moved away, is a deliberate choice and stays.
+    fn migrate_legacy(&mut self) {
+        let new = Self::default();
+        migrate_repo_chord(&mut self.next_repo, &self.next_tab, LEGACY_NEXT_REPO, &new.next_repo);
+        migrate_repo_chord(&mut self.prev_repo, &self.prev_tab, LEGACY_PREV_REPO, &new.prev_repo);
+    }
+}
+
+/// Compares parsed chords, not strings, so "command+SHIFT+]" counts as the legacy chord too.
+fn migrate_repo_chord(repo: &mut String, tab: &str, legacy: &str, new: &str) {
+    let chord = crate::keys::parse_hotkey_spec(repo);
+    if chord.is_some()
+        && chord == crate::keys::parse_hotkey_spec(legacy)
+        && chord == crate::keys::parse_hotkey_spec(tab)
+    {
+        *repo = new.into();
     }
 }
 
@@ -282,12 +313,19 @@ impl Config {
             return Self::default();
         };
         match std::fs::read_to_string(&path) {
-            Ok(s) => toml::from_str(&s).unwrap_or_else(|e| {
-                eprintln!("stdusk: config parse error ({e}); using defaults");
-                Self::default()
-            }),
+            Ok(s) => Self::parse(&s),
             Err(_) => Self::default(), // no file - defaults
         }
+    }
+
+    /// Parse config text, swallowing errors to defaults, then migrate legacy hotkey chords.
+    fn parse(s: &str) -> Self {
+        let mut cfg: Self = toml::from_str(s).unwrap_or_else(|e| {
+            eprintln!("stdusk: config parse error ({e}); using defaults");
+            Self::default()
+        });
+        cfg.hotkeys.migrate_legacy();
+        cfg
     }
 }
 
@@ -738,8 +776,56 @@ name = "ops"
         assert_eq!(h.zoom_in, "Cmd+=");
         assert_eq!(h.zoom_out, "Cmd+-");
         assert_eq!(h.zoom_reset, "Cmd+0");
-        assert_eq!(h.next_repo, "Cmd+Shift+]");
-        assert_eq!(h.prev_repo, "Cmd+Shift+[");
+        assert_eq!(h.next_tab, "Cmd+Shift+]");
+        assert_eq!(h.prev_tab, "Cmd+Shift+[");
+        assert_eq!(h.next_repo, "Cmd+Ctrl+]");
+        assert_eq!(h.prev_repo, "Cmd+Ctrl+[");
+    }
+
+    #[test]
+    fn no_two_default_hotkeys_share_a_chord() {
+        let h = Hotkeys::default();
+        let table: toml::Table = toml::from_str(&toml::to_string(&h).unwrap()).unwrap();
+        let chords: Vec<_> = table
+            .values()
+            .filter_map(|v| v.as_str().and_then(crate::keys::parse_hotkey_spec))
+            .collect();
+        for (i, a) in chords.iter().enumerate() {
+            assert!(!chords[i + 1..].contains(a), "duplicate default chord {a:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_repo_chords_move_off_the_tab_chords() {
+        let c =
+            Config::parse("[hotkeys]\nnext_repo = \"Cmd+Shift+]\"\nprev_repo = \"Cmd+Shift+[\"\n");
+        assert_eq!(c.hotkeys.next_repo, "Cmd+Ctrl+]");
+        assert_eq!(c.hotkeys.prev_repo, "Cmd+Ctrl+[");
+        assert_eq!(c.hotkeys.next_tab, "Cmd+Shift+]"); // the tab binds take the old chords
+        assert_eq!(c.hotkeys.prev_tab, "Cmd+Shift+[");
+    }
+
+    #[test]
+    fn migration_matches_a_legacy_chord_however_it_is_spelled() {
+        let c = Config::parse("[hotkeys]\nnext_repo = \"command+SHIFT+]\"\n");
+        assert_eq!(c.hotkeys.next_repo, "Cmd+Ctrl+]");
+    }
+
+    #[test]
+    fn a_deliberate_repo_remap_survives_migration() {
+        let c = Config::parse("[hotkeys]\nnext_repo = \"Cmd+Alt+J\"\nprev_repo = \"\"\n");
+        assert_eq!(c.hotkeys.next_repo, "Cmd+Alt+J"); // custom chord
+        assert_eq!(c.hotkeys.prev_repo, ""); // explicitly unbound
+        // The user moved the tab binds away and kept the old repo chords on purpose.
+        let c = Config::parse("[hotkeys]\nnext_tab = \"Cmd+Alt+]\"\nnext_repo = \"Cmd+Shift+]\"\n");
+        assert_eq!(c.hotkeys.next_repo, "Cmd+Shift+]");
+    }
+
+    #[test]
+    fn migrated_hotkeys_are_stable_across_save_and_load() {
+        let once = Config::parse("[hotkeys]\nnext_repo = \"Cmd+Shift+]\"\n");
+        let twice = Config::parse(&config_to_toml(&once));
+        assert_eq!(config_to_toml(&once), config_to_toml(&twice));
     }
 
     #[test]

@@ -1665,6 +1665,8 @@ fn hotkeys_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> HotkeysFx {
         hotkey_row(ui, "Close pane / tab", &d.close, &mut h.close, &mut fx);
         hotkey_row(ui, "Reopen closed tab", &d.reopen, &mut h.reopen, &mut fx);
         hotkey_row(ui, "Toggle last tab", &d.toggle_last_tab, &mut h.toggle_last_tab, &mut fx);
+        hotkey_row(ui, "Next tab", &d.next_tab, &mut h.next_tab, &mut fx);
+        hotkey_row(ui, "Previous tab", &d.prev_tab, &mut h.prev_tab, &mut fx);
         hotkey_row(ui, "Next repo", &d.next_repo, &mut h.next_repo, &mut fx);
         hotkey_row(ui, "Previous repo", &d.prev_repo, &mut h.prev_repo, &mut fx);
     });
