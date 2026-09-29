@@ -2421,8 +2421,18 @@ costs on the UI thread.
   and the bash twin (real pty, first prompt), `a_directory_name_cannot_inject_a_sequence_through_the_zsh_hook`
   and the bash twin (byte-exact output for a directory holding BEL, ESC and an OSC 52),
   `a_control_character_path_is_never_taken_as_the_cwd`, `hook_scripts_report_the_cwd_over_osc_7`.
-- Live check in the app (repo chip follows a real `cd` with the user's own dotfiles): PENDING.
-  Covered so far by unit and real-shell tests only.
+- Live check in the app: CONFIRMED by the user in the installed `1.7.6-dev` build (a release
+  bundle of this branch stacked on the quake PR, swapped into `/Applications`). With their own
+  shell setup, a `cd` into a repo that already has a group moves the tab into it, and a `cd`
+  into a repo with no group yet starts a new one. Not tried: `Cmd+Shift+[` on a non-US layout,
+  and a repo whose reported host is not this machine's hostname.
+- Dev-build note: the running app offers its shell-keeping restart only when the bundle's
+  `Info.plist` version differs from the compiled-in `CARGO_PKG_VERSION`. A local build that keeps
+  the release version shows no restart dot. To swap in a dev build without losing shells, bump
+  `Cargo.toml` (e.g. `1.7.6-dev`) for the build only, assemble the bundle as
+  `native-release.yml` does (binary, `assets/stdusk.icns`, `packaging/Info.plist` with
+  `__VERSION__` replaced), `codesign --force --deep --sign -`, back up the old app, then swap
+  the bundle with two renames. Revert `Cargo.toml` and `Cargo.lock` afterwards.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
