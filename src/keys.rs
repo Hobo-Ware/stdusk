@@ -296,12 +296,31 @@ pub(crate) fn hotkey_matches(spec: &str, key: egui::Key, mods: egui::Modifiers) 
         && mods.shift == want_mods.shift
 }
 
+/// Step direction of a pressed key against a next/prev chord pair: `+1` next, `-1` prev, `None`
+/// for neither. When both specs are the same chord, next wins - one press never fires both.
+pub(crate) fn cycle_dir(
+    next_spec: &str,
+    prev_spec: &str,
+    key: egui::Key,
+    mods: egui::Modifiers,
+) -> Option<i32> {
+    if hotkey_matches(next_spec, key, mods) {
+        Some(1)
+    } else if hotkey_matches(prev_spec, key, mods) {
+        Some(-1)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use eframe::egui;
     use egui::{Key, Modifiers};
 
-    use super::{alt_scroll_bytes, ctrl_letter, hotkey_matches, key_to_bytes, parse_hotkey_spec};
+    use super::{
+        alt_scroll_bytes, ctrl_letter, cycle_dir, hotkey_matches, key_to_bytes, parse_hotkey_spec,
+    };
 
     fn mods(ctrl: bool, alt: bool, command: bool) -> Modifiers {
         Modifiers { alt, ctrl, shift: false, mac_cmd: command, command }
@@ -489,6 +508,49 @@ mod tests {
             assert_eq!(hotkey_matches(spec, key, cmd_shift), want, "{spec} vs {key:?}");
         }
         assert!(!hotkey_matches("Cmd+Shift+]", Key::CloseBracket, mods(false, false, true)));
+    }
+
+    #[test]
+    fn cycle_dir_reads_the_direction_from_the_next_and_prev_chords() {
+        let cmd_shift = Modifiers { shift: true, ..mods(false, false, true) };
+        let cases = [
+            (Key::CloseBracket, Some(1)),
+            (Key::CloseCurlyBracket, Some(1)), // egui-winit reports Shift+] as the logical `}`
+            (Key::OpenBracket, Some(-1)),
+            (Key::OpenCurlyBracket, Some(-1)),
+            (Key::T, None),
+        ];
+        for (key, want) in cases {
+            assert_eq!(cycle_dir("Cmd+Shift+]", "Cmd+Shift+[", key, cmd_shift), want, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn cycle_dir_ignores_unbound_and_inexact_chords() {
+        let cmd_shift = Modifiers { shift: true, ..mods(false, false, true) };
+        assert_eq!(cycle_dir("", "", Key::CloseBracket, cmd_shift), None); // unbound
+        assert_eq!(cycle_dir("Cmd+]", "Cmd+[", Key::CloseBracket, cmd_shift), None); // extra Shift
+        // Two actions on one chord: next wins, never both.
+        assert_eq!(cycle_dir("Cmd+Shift+]", "Cmd+Shift+]", Key::CloseBracket, cmd_shift), Some(1));
+    }
+
+    #[test]
+    fn default_tab_and_repo_cycle_chords_never_fire_together() {
+        let h = crate::config::Hotkeys::default();
+        let cmd_shift = Modifiers { shift: true, ..mods(false, false, true) };
+        let cmd_ctrl = mods(true, false, true);
+        for (key, tab, repo) in
+            [(Key::CloseBracket, Some(1), None), (Key::OpenBracket, Some(-1), None)]
+        {
+            assert_eq!(cycle_dir(&h.next_tab, &h.prev_tab, key, cmd_shift), tab, "{key:?}");
+            assert_eq!(cycle_dir(&h.next_repo, &h.prev_repo, key, cmd_shift), repo, "{key:?}");
+        }
+        for (key, tab, repo) in
+            [(Key::CloseBracket, None, Some(1)), (Key::OpenBracket, None, Some(-1))]
+        {
+            assert_eq!(cycle_dir(&h.next_tab, &h.prev_tab, key, cmd_ctrl), tab, "{key:?}");
+            assert_eq!(cycle_dir(&h.next_repo, &h.prev_repo, key, cmd_ctrl), repo, "{key:?}");
+        }
     }
 
     #[test]

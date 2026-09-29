@@ -1073,9 +1073,10 @@ impl eframe::App for Stdusk {
         let mut kb_zoom: Option<i8> = None; // (Cmd+= 1, Cmd+- -1, Cmd+0 reset)
         let mut kb_scroll_pages: Option<i32> = None; // Shift+PageUp/Down: -1 up, +1 down
         let mut kb_scroll_lines: Option<i32> = None; // Ctrl+Shift+Up/Down: one line (Tabby bind)
-        let mut kb_tab_cycle: Option<i32> = None; // Ctrl+Tab next (+1) / Ctrl+Shift+Tab prev (-1)
+        // Cmd+Shift+] / [ (remappable) and Ctrl+Tab / Ctrl+Shift+Tab: next (+1) / prev (-1) tab
+        let mut kb_tab_cycle: Option<i32> = None;
         let mut kb_toggle_last = false; // (Cmd+O) jump to the previously active tab
-        let mut kb_repo_cycle: Option<i32> = None;
+        let mut kb_repo_cycle: Option<i32> = None; // Cmd+Ctrl+] / [ (remappable): next / prev repo
         let mut kb_reopen = false; // (Cmd+Shift+T) reopen last closed tab
         let mut kb_resize: Option<(pane::SplitDir, f32)> = None; // Cmd+Ctrl+arrow: resize focused pane
         let mut kb_move_tab: Option<i32> = None; // Cmd+Shift+←/→: move the active tab
@@ -1093,6 +1094,12 @@ impl eframe::App for Stdusk {
             || self.pending_close.is_some()
             || self.pending_quit.is_some();
         let hard_modal = text_modal || self.palette.is_some() || self.settings_open;
+        // Tab SWITCHING stays live while only the settings view is up: settings behaves like a
+        // tab, so Cmd+1..9 / Ctrl+Tab / the tab-cycle chords must reach the terminal tabs (the
+        // switch hides the view; the settings session + staged edits stay). Every other bind
+        // still obeys hard_modal - it would mutate a hidden workspace.
+        let settings_only = self.settings_open && !text_modal && self.palette.is_none();
+        let can_switch_tabs = !hard_modal || settings_only;
         ctx.input(|i| {
             // Remappable app hotkeys (`[hotkeys]`, defaults = the shipped binds): every key
             // event is matched against the configured chords (EXACT modifiers - see
@@ -1112,6 +1119,12 @@ impl eframe::App for Stdusk {
                 }
                 if !text_modal && keys::hotkey_matches(&hk.settings, key, mods) {
                     kb_settings = true;
+                    continue;
+                }
+                if can_switch_tabs
+                    && let Some(d) = keys::cycle_dir(&hk.next_tab, &hk.prev_tab, key, mods)
+                {
+                    kb_tab_cycle = Some(d);
                     continue;
                 }
                 if hard_modal {
@@ -1143,18 +1156,11 @@ impl eframe::App for Stdusk {
                     kb_zoom = Some(-1);
                 } else if keys::hotkey_matches(&hk.zoom_reset, key, mods) {
                     kb_zoom = Some(0);
-                } else if keys::hotkey_matches(&hk.next_repo, key, mods) {
-                    kb_repo_cycle = Some(1);
-                } else if keys::hotkey_matches(&hk.prev_repo, key, mods) {
-                    kb_repo_cycle = Some(-1);
+                } else if let Some(d) = keys::cycle_dir(&hk.next_repo, &hk.prev_repo, key, mods) {
+                    kb_repo_cycle = Some(d);
                 }
             }
-            // Tab SWITCHING stays live while only the settings view is up: settings behaves
-            // like a tab, so Cmd+1..9 / Ctrl+Tab must reach the terminal tabs (the switch
-            // hides the view; the settings session + staged edits stay). Every other bind
-            // below still obeys hard_modal - it would mutate a hidden workspace.
-            let settings_only = self.settings_open && !text_modal && self.palette.is_none();
-            if !hard_modal || settings_only {
+            if can_switch_tabs {
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
                     kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
                 }
