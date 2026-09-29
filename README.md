@@ -38,7 +38,7 @@ Lands in `/Applications` (Spotlight and Launchpad find it) and puts the `stdusk`
 - **Repo tabs** - flip `appearance.group_by_repo` and the tab bar shows only the repo you're in, behind a repo chip. `cd` into another repo and the tab moves with you; git worktrees fold into their main repo. Switch with Cmd+Shift+] / [ or the palette.
 - **Restart keeps your shells** - when `brew upgrade` lands a new version, a dot on the gear offers a restart. The old window hands its live shells to the new one, with the screen and recent scrollback replayed. If anything goes wrong, the old window just stays up. Quit still ends everything.
 - **Real GUI tabs** - colored, renameable, pinnable, reorderable, split-aware. Reopen closed tabs, pick where new tabs land. Pixels, not ASCII art.
-- **Quake or window** - borderless, top-edge, global hotkey, hide-on-blur, follows the active Space. Or set `[quake] mode = "window"` for a regular resizable macOS window (in the Dock, no global hotkey).
+- **Quake or window** - borderless, top-edge, global hotkey, hide-on-blur, drops onto the active Space and the screen with the mouse. Or set `[quake] mode = "window"` for a regular resizable macOS window (in the Dock, no global hotkey).
 - **One instance** - launch it again and you get a fresh tab in the running window, not a second app.
 - **Splits** - panes, drag to resize, zoom a pane, broadcast input to every pane, and a tiny live map of the layout drawn right on the tab.
 - **Scrollback search** - Cmd+F, with regex, case, and whole-word toggles, every match highlighted.

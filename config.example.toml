@@ -24,8 +24,8 @@ hotkey = "Ctrl+Grave"     # e.g. "F13", "Cmd+Grave", "F12", "Ctrl+Shift+T" (drop
                           # this physical key as an OS hotkey yet - it won't fire. Tracked.)
 height_pct = 0.5          # fraction of screen height when dropped down (dropdown mode only)
 hide_on_focus_loss = true # (dropdown mode only)
-follow_active_space = true # (macOS, dropdown mode only) drop onto whichever Space/desktop is active
-                          # when summoned instead of jumping back to its origin Space; false pins it
+follow_active_space = true # (macOS, dropdown mode only) drop onto the active Space/desktop, on the screen
+                          # with the mouse, when summoned. false pins it to its origin Space and screen
 hide_from_dock = true     # accessory app: no Dock icon / app-switcher entry, just drops from the top (dropdown mode only)
 menu_bar_icon = true      # show a menu-bar (status) icon with a Show/Hide + Quit menu
 dock_when_visible = false # (macOS, dropdown mode only) show a Dock icon + real menu bar while visible, hide when parked
