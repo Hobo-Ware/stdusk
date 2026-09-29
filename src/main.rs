@@ -1100,66 +1100,41 @@ impl eframe::App for Stdusk {
         // still obeys hard_modal - it would mutate a hidden workspace.
         let settings_only = self.settings_open && !text_modal && self.palette.is_none();
         let can_switch_tabs = !hard_modal || settings_only;
-        ctx.input(|i| {
-            // Remappable app hotkeys (`[hotkeys]`, defaults = the shipped binds): every key
-            // event is matched against the configured chords (EXACT modifiers - see
-            // keys::hotkey_matches; first match wins, so a user binding two actions to one
-            // chord fires only the earlier action, never both). The palette / settings
-            // toggles stay live over their own overlays (each is its own dismissal) and are
-            // suppressed only under the text modals; every other action obeys hard_modal.
-            let hk = &self.cfg.hotkeys;
-            for ev in &i.events {
-                let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else {
-                    continue;
-                };
-                let (key, mods) = (*key, *modifiers);
-                if !text_modal && keys::hotkey_matches(&hk.palette, key, mods) {
-                    kb_palette = true;
-                    continue;
-                }
-                if !text_modal && keys::hotkey_matches(&hk.settings, key, mods) {
-                    kb_settings = true;
-                    continue;
-                }
-                if can_switch_tabs
-                    && let Some(d) = keys::cycle_dir(&hk.next_tab, &hk.prev_tab, key, mods)
-                {
-                    kb_tab_cycle = Some(d);
-                    continue;
-                }
-                if hard_modal {
-                    continue;
-                }
-                if keys::hotkey_matches(&hk.new_tab, key, mods) {
-                    kb_new = true;
-                } else if keys::hotkey_matches(&hk.close, key, mods) {
-                    kb_close = true;
-                } else if keys::hotkey_matches(&hk.reopen, key, mods) {
-                    kb_reopen = true;
-                } else if keys::hotkey_matches(&hk.toggle_last_tab, key, mods) {
-                    kb_toggle_last = true;
-                } else if keys::hotkey_matches(&hk.find, key, mods) {
-                    kb_find = true;
-                } else if keys::hotkey_matches(&hk.split_right, key, mods) {
-                    kb_split = Some(pane::SplitDir::Row);
-                } else if keys::hotkey_matches(&hk.split_down, key, mods) {
-                    kb_split = Some(pane::SplitDir::Column);
-                } else if keys::hotkey_matches(&hk.broadcast, key, mods) {
-                    kb_broadcast = true;
-                } else if keys::hotkey_matches(&hk.select_all, key, mods) {
-                    kb_select_all = true;
-                } else if keys::hotkey_matches(&hk.clear, key, mods) {
-                    kb_clear = true;
-                } else if keys::hotkey_matches(&hk.zoom_in, key, mods) {
-                    kb_zoom = Some(1);
-                } else if keys::hotkey_matches(&hk.zoom_out, key, mods) {
-                    kb_zoom = Some(-1);
-                } else if keys::hotkey_matches(&hk.zoom_reset, key, mods) {
-                    kb_zoom = Some(0);
-                } else if let Some(d) = keys::cycle_dir(&hk.next_repo, &hk.prev_repo, key, mods) {
-                    kb_repo_cycle = Some(d);
-                }
+        // Remappable app hotkeys (`[hotkeys]`, defaults = the shipped binds): every key
+        // event is matched against the configured chords (EXACT modifiers - see
+        // keys::hotkey_matches; first match wins, so a user binding two actions to one
+        // chord fires only the earlier action, never both). The palette / settings
+        // toggles stay live over their own overlays (each is its own dismissal) and are
+        // suppressed only under the text modals; every other action obeys hard_modal.
+        // A chord whose action dispatches is CONSUMED below, so the shell never sees it
+        // (Ghostty, kitty and Alacritty do the same). A guarded chord is left alone.
+        let guards = keys::HotkeyGuards {
+            text_modal,
+            hard_modal,
+            can_switch_tabs,
+            repo_grouping: self.grouping(),
+        };
+        let matched = ctx.input(|i| keys::matched_hotkeys(&i.events, &self.cfg.hotkeys, guards));
+        for &(action, _) in &matched {
+            use keys::HotkeyAction as A;
+            match action {
+                A::Palette => kb_palette = true,
+                A::Settings => kb_settings = true,
+                A::TabCycle(d) => kb_tab_cycle = Some(d),
+                A::NewTab => kb_new = true,
+                A::Close => kb_close = true,
+                A::Reopen => kb_reopen = true,
+                A::ToggleLastTab => kb_toggle_last = true,
+                A::Find => kb_find = true,
+                A::Split(dir) => kb_split = Some(dir),
+                A::Broadcast => kb_broadcast = true,
+                A::SelectAll => kb_select_all = true,
+                A::Clear => kb_clear = true,
+                A::Zoom(z) => kb_zoom = Some(z),
+                A::RepoCycle(d) => kb_repo_cycle = Some(d),
             }
+        }
+        ctx.input(|i| {
             if can_switch_tabs {
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Tab) {
                     kb_tab_cycle = Some(if i.modifiers.shift { -1 } else { 1 });
@@ -1251,6 +1226,11 @@ impl eframe::App for Stdusk {
                 }
             }
         });
+        // After the fixed binds above read this frame's events: drop the matched chords so
+        // `collect_input` (workspace.rs) never encodes them for the pty.
+        if !matched.is_empty() {
+            ctx.input_mut(|i| keys::consume_hotkey_events(&mut i.events, &matched));
+        }
 
         // Rounded window background - the OS window is transparent, so painting a rounded
         // rect leaves the corner triangles clear and the window reads as rounded. Panels

@@ -464,10 +464,10 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
 - **Headless egui end-to-end tests** (`Context::run_ui` driving real frames) are the sanctioned
   harness for interaction/hit-test/focus regressions - see the tab click/drag/close-x + find-bar
   backspace tests in `src/ui.rs` and the pattern in `.agents/rules/testing.md`.
-- **Custom `[hotkeys]` binds can collide with terminal keys.** The app bind wins cleanly only
-  for the combos `key_to_bytes` already reserves (the defaults are chosen that way); a rebind
-  onto a terminal-bound chord (e.g. Ctrl+letter) fires the action AND the pty byte - by
-  design, asserted in `rebound_terminal_chords_double_fire_by_design`. See the 0.5.0 entry.
+- **Custom `[hotkeys]` binds can collide with terminal keys.** A matched chord is consumed: the
+  action runs and the shell never sees the key. Clear the bind to give the key back. Asserted in
+  `matched_hotkeys_are_consumed_not_sent_to_the_pty`. See the "A matched hotkey no longer reaches
+  the shell" entry.
 - **eframe's screenshot capture (cumulative pass 2) always beats the pty readers** - a shot
   that needs real shell output in the grid captures blank. Set `STDUSK_SHOT_SETTLE_MS` (sleeps
   in `Stdusk::new`, BEFORE the first pass, so the demo shells' output lands first).
@@ -1301,6 +1301,8 @@ stays 0.5.0; everything below is on the tree ready for the release commit.
   combinations already handled there, and the collect path does not consult the hotkey map.
   Documented in config.example + the settings intro; asserted in
   `ui::tests::rebound_terminal_chords_double_fire_by_design` so it can't drift silently.
+  Superseded by the "A matched hotkey no longer reaches the shell" entry: a matched chord is
+  consumed now.
 - **Autosync (`[sync] auto`, default false, user addendum)**: with a repo set, ONE background
   pull on launch (spawned in `Stdusk::new` via the existing `sync::spawn`/`SyncSlot`; the
   per-frame sync_done handler applies it like a manual Pull - config reload + theme/hotkey/
@@ -2449,6 +2451,47 @@ costs on the UI thread.
   turns on "Use F1, F2, etc. keys as standard function keys". This is an OS setting, not a
   stdusk bug.
 - Showcase check: `site/index.html` and the README never mention F-keys. No change needed.
+
+## A matched hotkey no longer reaches the shell (post-1.7.5, on top of the F-key entry; 425 tests)
+- Symptom: with `[hotkeys] find = "F3"`, the find bar opened and htop also got F3. A rebound chord
+  ran the app action and also sent its bytes to the pty. F1-F12 made this visible. No default bind
+  was affected, because every default uses Cmd and `key_to_bytes` sends nothing for Cmd chords.
+- Cause: the hotkey loop in `main.rs` only set `kb_*` flags. It never removed the key event, so
+  `collect_input` read the same event and encoded it.
+- Fix: a matched hotkey is now consumed, like Ghostty, kitty and Alacritty do. The match logic moved
+  out of the render loop into `keys.rs`: `hotkey_action` (one chord to one `HotkeyAction`),
+  `matched_hotkeys` (read only) and `consume_hotkey_events`. `main.rs` sets the `kb_*` flags from
+  the result, runs the fixed binds, then removes the matched key events from `i.events`.
+- egui `consume_key` was not used. It matches with `matches_logically`, so a bare `F5` bind would
+  also take Shift+F5. `consume_hotkey_events` compares the exact key and modifiers.
+- A chord is consumed only when its action dispatches. If a modal guard (`text_modal`, `hard_modal`,
+  `can_switch_tabs`) stops the action, the key stays in the frame. The `input_captured` gate still
+  stops pty input while a modal owns the keyboard.
+- An empty string in `[hotkeys]` still unbinds a chord. An unbound chord never matches, so the key
+  goes to the shell again.
+- An Alt chord also removes the `Event::Text` that egui-winit pushes right after it. Without this,
+  Option+K would still send its composed symbol to the shell.
+- Not changed: the fixed binds (Ctrl+Tab, Cmd+1..9, Cmd+Alt+arrows, scroll keys) are not consumed.
+  They do not go through `[hotkeys]`, and `key_to_bytes` already sends nothing for them.
+- Tests: `matched_hotkeys_are_consumed_not_sent_to_the_pty` (replaces
+  `rebound_terminal_chords_double_fire_by_design`), `consumption_takes_the_exact_chord_only`,
+  `unbound_and_unmatched_keys_stay_in_the_frame`, `a_guarded_hotkey_is_neither_dispatched_nor_consumed`,
+  `every_remappable_action_is_matched_and_consumed`, `an_alt_chord_takes_its_composed_text_with_it`
+  in `keys.rs`. Headless frames in `ui.rs`: `a_bound_function_key_runs_the_action_and_stays_out_of_the_pty`
+  and `a_consumed_hotkey_does_not_swallow_the_typing_around_it`.
+- A matched chord is consumed even when its action is later ignored. Examples are Toggle-last-tab
+  with no previous tab, and Find while settings is open. Ghostty and kitty do the same.
+- A matched chord that ends in Ctrl+...+C (Ctrl+C, Ctrl+Shift+C, Ctrl+Alt+C) loses intelligent copy
+  and SIGINT. `workspace.rs` reads `key_pressed(C)` after the consumption.
+- The repo chords are matched only when `appearance.group_by_repo` is on (`HotkeyGuards.repo_grouping`).
+  With grouping off they would do nothing, so the key stays with the shell.
+- Alt text drop: only an Alt chord with no Ctrl, no Cmd and no F-key drops the next `Event::Text`.
+  egui-winit sends no Text in the other cases, so an armed flag would eat an unrelated Text.
+- More tests: `a_chord_with_no_composed_text_leaves_the_next_text_alone`,
+  `two_matched_chords_in_one_frame_are_both_consumed`, and in `ui.rs`
+  `a_bound_alt_chord_sends_neither_its_key_nor_its_composed_text` and
+  `two_bound_chords_in_one_frame_both_leave_the_pty_alone`.
+- Showcase check: `site/index.html` and the README do not describe this behavior. No change needed.
 
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk

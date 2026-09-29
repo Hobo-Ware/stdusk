@@ -223,6 +223,30 @@ pub(crate) fn parse_hotkey_spec(spec: &str) -> Option<(egui::Modifiers, egui::Ke
     Some((mods, key))
 }
 
+/// F1-F20, the keys `[hotkeys]` may bind bare. egui-winit sends no `Event::Text` for any of them.
+const FUNCTION_KEYS: [egui::Key; 20] = [
+    egui::Key::F1,
+    egui::Key::F2,
+    egui::Key::F3,
+    egui::Key::F4,
+    egui::Key::F5,
+    egui::Key::F6,
+    egui::Key::F7,
+    egui::Key::F8,
+    egui::Key::F9,
+    egui::Key::F10,
+    egui::Key::F11,
+    egui::Key::F12,
+    egui::Key::F13,
+    egui::Key::F14,
+    egui::Key::F15,
+    egui::Key::F16,
+    egui::Key::F17,
+    egui::Key::F18,
+    egui::Key::F19,
+    egui::Key::F20,
+];
+
 /// Friendly key name -> `egui::Key`. Case-insensitive; accepts punctuation literals.
 #[allow(clippy::too_many_lines)] // a flat name table; splitting it would obscure it
 fn key_from_name(name: &str) -> Option<egui::Key> {
@@ -230,29 +254,7 @@ fn key_from_name(name: &str) -> Option<egui::Key> {
     let n = name.to_ascii_lowercase();
     // F-keys first so "f1" doesn't fall into the single-letter branch.
     if let Some(num) = n.strip_prefix('f').and_then(|d| d.parse::<u8>().ok()) {
-        let fkeys = [
-            Key::F1,
-            Key::F2,
-            Key::F3,
-            Key::F4,
-            Key::F5,
-            Key::F6,
-            Key::F7,
-            Key::F8,
-            Key::F9,
-            Key::F10,
-            Key::F11,
-            Key::F12,
-            Key::F13,
-            Key::F14,
-            Key::F15,
-            Key::F16,
-            Key::F17,
-            Key::F18,
-            Key::F19,
-            Key::F20,
-        ];
-        return (1..=20).contains(&num).then(|| fkeys[usize::from(num) - 1]);
+        return (1..=20).contains(&num).then(|| FUNCTION_KEYS[usize::from(num) - 1]);
     }
     let key = match n.as_str() {
         "a" => Key::A,
@@ -361,14 +363,158 @@ pub(crate) fn cycle_dir(
     }
 }
 
+/// An app action a `[hotkeys]` chord fires. Some variants cover a pair or trio of binds
+/// (`TabCycle`, `Split`, `Zoom`, `RepoCycle`) and carry which one fired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HotkeyAction {
+    Palette,
+    Settings,
+    TabCycle(i32),
+    NewTab,
+    Close,
+    Reopen,
+    ToggleLastTab,
+    Find,
+    Split(crate::pane::SplitDir),
+    Broadcast,
+    SelectAll,
+    Clear,
+    Zoom(i8),
+    RepoCycle(i32),
+}
+
+/// Which modal state lets a chord dispatch. Sampled once per frame by the render loop.
+// Four independent per-frame facts sampled from the app state, not one state machine.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HotkeyGuards {
+    /// A text modal (rename, paste confirm, close/quit confirm) is up: no bind fires.
+    pub(crate) text_modal: bool,
+    /// Any modal or the settings view is up: only palette, settings and tab cycling fire.
+    pub(crate) hard_modal: bool,
+    /// Tab switching is allowed (no modal, or only the settings view is up).
+    pub(crate) can_switch_tabs: bool,
+    /// Repo grouping is on (`appearance.group_by_repo`). Off, the repo chords do nothing, so
+    /// they stay with the shell.
+    pub(crate) repo_grouping: bool,
+}
+
+/// One pressed key with the modifiers held at that moment.
+pub(crate) type Chord = (egui::Key, egui::Modifiers);
+
+/// The action a pressed chord fires under the current guards, or `None` when no bind matches
+/// or a guard stops it. First match wins, so one chord bound twice fires only the earlier action.
+pub(crate) fn hotkey_action(
+    hk: &crate::config::Hotkeys,
+    key: egui::Key,
+    mods: egui::Modifiers,
+    g: HotkeyGuards,
+) -> Option<HotkeyAction> {
+    use HotkeyAction as A;
+    let is = |spec: &str| hotkey_matches(spec, key, mods);
+    if !g.text_modal && is(&hk.palette) {
+        return Some(A::Palette);
+    }
+    if !g.text_modal && is(&hk.settings) {
+        return Some(A::Settings);
+    }
+    if g.can_switch_tabs
+        && let Some(d) = cycle_dir(&hk.next_tab, &hk.prev_tab, key, mods)
+    {
+        return Some(A::TabCycle(d));
+    }
+    if g.hard_modal {
+        return None;
+    }
+    let binds = [
+        (&hk.new_tab, A::NewTab),
+        (&hk.close, A::Close),
+        (&hk.reopen, A::Reopen),
+        (&hk.toggle_last_tab, A::ToggleLastTab),
+        (&hk.find, A::Find),
+        (&hk.split_right, A::Split(crate::pane::SplitDir::Row)),
+        (&hk.split_down, A::Split(crate::pane::SplitDir::Column)),
+        (&hk.broadcast, A::Broadcast),
+        (&hk.select_all, A::SelectAll),
+        (&hk.clear, A::Clear),
+        (&hk.zoom_in, A::Zoom(1)),
+        (&hk.zoom_out, A::Zoom(-1)),
+        (&hk.zoom_reset, A::Zoom(0)),
+    ];
+    binds.into_iter().find_map(|(spec, action)| is(spec).then_some(action)).or_else(|| {
+        // Grouping off: the cycle would do nothing, so leave the key to the shell.
+        cycle_dir(&hk.next_repo, &hk.prev_repo, key, mods)
+            .filter(|_| g.repo_grouping)
+            .map(A::RepoCycle)
+    })
+}
+
+/// Every key press in `events` that fires an app action, in event order, with its chord.
+/// Read-only: the caller applies the actions, then hands the result to
+/// `consume_hotkey_events`.
+pub(crate) fn matched_hotkeys(
+    events: &[egui::Event],
+    hk: &crate::config::Hotkeys,
+    g: HotkeyGuards,
+) -> Vec<(HotkeyAction, Chord)> {
+    events
+        .iter()
+        .filter_map(|ev| {
+            let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else {
+                return None;
+            };
+            hotkey_action(hk, *key, *modifiers, g).map(|a| (a, (*key, *modifiers)))
+        })
+        .collect()
+}
+
+/// Remove the key presses that fired an app action, so `collect_input` never turns them into
+/// pty bytes. Ghostty, kitty and Alacritty also keep a matched bind from the shell. Matches the
+/// exact chord (egui's own `consume_key` ignores extra Shift and Alt, so a bare `F5` bind would
+/// also eat Shift+F5). An Alt chord also loses the `Event::Text` that follows it: egui-winit
+/// pushes the composed character (Option+K gives a symbol) right after the key.
+pub(crate) fn consume_hotkey_events(
+    events: &mut Vec<egui::Event>,
+    matched: &[(HotkeyAction, Chord)],
+) {
+    // True right after a consumed Alt press that has composed text. egui-winit pushes a press's
+    // `Key` event before its `Text` (lib.rs, key handler), so the next Text belongs to it.
+    let mut drop_text = false;
+    events.retain(|ev| match ev {
+        egui::Event::Key { key, pressed: true, modifiers, .. }
+            if matched.iter().any(|(_, chord)| *chord == (*key, *modifiers)) =>
+        {
+            // No Text exists under Ctrl or Cmd (egui-winit skips it), nor for F-keys. Arming the
+            // flag there would eat an unrelated Text.
+            drop_text = modifiers.alt
+                && !modifiers.ctrl
+                && !modifiers.command
+                && !FUNCTION_KEYS.contains(key);
+            false
+        }
+        egui::Event::Text(_) if drop_text => {
+            drop_text = false;
+            false
+        }
+        _ => {
+            drop_text = false;
+            true
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use eframe::egui;
     use egui::{Key, Modifiers};
 
+    use super::HotkeyAction as A;
     use super::{
-        alt_scroll_bytes, ctrl_letter, cycle_dir, hotkey_matches, key_to_bytes, parse_hotkey_spec,
+        HotkeyAction, HotkeyGuards, alt_scroll_bytes, consume_hotkey_events, ctrl_letter,
+        cycle_dir, hotkey_matches, key_to_bytes, matched_hotkeys, parse_hotkey_spec,
     };
+    use crate::config::Hotkeys;
+    use crate::pane::SplitDir;
 
     fn mods(ctrl: bool, alt: bool, command: bool) -> Modifiers {
         Modifiers { alt, ctrl, shift: false, mac_cmd: command, command }
@@ -685,21 +831,44 @@ mod tests {
         for spec in ["Cmd+C", "Cmd+Shift+C", "Cmd+X", "Cmd+V", "Cmd+Alt+V", "Ctrl+Cmd+X"] {
             assert_eq!(parse_hotkey_spec(spec), None, "{spec} must be rejected");
         }
-        // Without Cmd they're ordinary chords (Ctrl+C keeps its copy-or-SIGINT intercept -
-        // a rebind there double-fires by design, same as any terminal-bound chord).
+        // Without Cmd they're ordinary chords. A bind on Ctrl+C is consumed like any other
+        // matched chord, so it no longer copies-or-interrupts.
         assert!(parse_hotkey_spec("Ctrl+C").is_some());
         assert!(parse_hotkey_spec("Ctrl+Shift+V").is_some());
     }
 
+    fn key_ev(key: Key, modifiers: Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    /// The guards of a plain terminal view: no modal, every bind live.
+    fn open_guards() -> HotkeyGuards {
+        HotkeyGuards {
+            text_modal: false,
+            hard_modal: false,
+            can_switch_tabs: true,
+            repo_grouping: true,
+        }
+    }
+
+    /// Run the two steps the render loop runs: match the chords, then consume them.
+    fn match_and_consume(
+        events: Vec<egui::Event>,
+        hk: &Hotkeys,
+        g: HotkeyGuards,
+    ) -> (Vec<HotkeyAction>, Vec<egui::Event>) {
+        let matched = matched_hotkeys(&events, hk, g);
+        let mut left = events;
+        consume_hotkey_events(&mut left, &matched);
+        (matched.into_iter().map(|(a, _)| a).collect(), left)
+    }
+
     #[test]
-    fn rebound_terminal_chords_double_fire_by_design() {
-        // Reserved-combo integrity (LEDGER 0.5.0): the DEFAULT binds are chosen so key_to_bytes
-        // sends nothing for them (no double-fire). A user rebind onto a terminal-bound chord
-        // (e.g. Ctrl+K = Ctrl-L-style kill) matches the app action AND still reaches the pty -
-        // documented behavior, asserted here so it can't silently change.
+    fn matched_hotkeys_are_consumed_not_sent_to_the_pty() {
+        // Ghostty, kitty and Alacritty keep a matched bind from the shell. So does stdusk: the
+        // key event leaves the frame, and `collect_input` finds nothing to encode.
+        // The DEFAULT binds are Cmd-based, so key_to_bytes sends nothing for them anyway.
         let cmd = mods(false, false, true);
-        let ctrl = mods(true, false, false);
-        // Defaults: app-only (no pty bytes). Cmd+letter chords are unmapped in key_to_bytes.
         for (spec, key) in [("Cmd+T", Key::T), ("Cmd+W", Key::W), ("Cmd+O", Key::O)] {
             assert!(hotkey_matches(spec, key, cmd));
             assert_eq!(
@@ -708,9 +877,208 @@ mod tests {
                 "{spec} must not leak to the pty"
             );
         }
-        // A custom Ctrl+letter rebind collides: both the app action and the control byte fire.
-        assert!(hotkey_matches("Ctrl+K", Key::K, ctrl));
-        assert_eq!(key_to_bytes(Key::K, ctrl, false, false), Some(vec![11]));
+        // A rebind onto a chord the terminal encodes (Ctrl+K = 0x0b, F3 = ESC O R) would leak
+        // without consumption. Each row: the bind, the key press, the action it fires.
+        let hk = Hotkeys {
+            clear: "Ctrl+K".into(),
+            find: "F3".into(),
+            zoom_in: "Alt+F3".into(),
+            ..Hotkeys::default()
+        };
+        let ctrl = mods(true, false, false);
+        let alt = mods(false, true, false);
+        let cases = [
+            (Key::K, ctrl, HotkeyAction::Clear, vec![11]),
+            (Key::F3, Modifiers::default(), HotkeyAction::Find, b"\x1bOR".to_vec()),
+            (Key::F3, alt, HotkeyAction::Zoom(1), b"\x1b[1;3R".to_vec()),
+        ];
+        for (key, m, want, raw) in cases {
+            // Without consumption the shell would get these bytes.
+            assert_eq!(key_to_bytes(key, m, false, false), Some(raw), "{key:?}");
+            let (actions, left) = match_and_consume(vec![key_ev(key, m)], &hk, open_guards());
+            assert_eq!(actions, vec![want], "{key:?}");
+            assert!(left.is_empty(), "{key:?} must not reach collect_input");
+        }
+    }
+
+    #[test]
+    fn consumption_takes_the_exact_chord_only() {
+        // egui's consume_key would treat a bare F5 bind as also matching Shift+F5.
+        let hk = Hotkeys { find: "F5".into(), ..Hotkeys::default() };
+        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        let (actions, left) = match_and_consume(
+            vec![key_ev(Key::F5, shift), key_ev(Key::F5, Modifiers::default())],
+            &hk,
+            open_guards(),
+        );
+        assert_eq!(actions, vec![HotkeyAction::Find]);
+        assert_eq!(left, vec![key_ev(Key::F5, shift)]);
+    }
+
+    #[test]
+    fn unbound_and_unmatched_keys_stay_in_the_frame() {
+        let none = Modifiers::default();
+        // Empty string = unbound: never matches, so the key belongs to the shell again.
+        let hk = Hotkeys { find: String::new(), ..Hotkeys::default() };
+        let events =
+            vec![key_ev(Key::F3, none), egui::Event::Text("a".into()), key_ev(Key::A, none)];
+        let (actions, left) = match_and_consume(events.clone(), &hk, open_guards());
+        assert!(actions.is_empty());
+        assert_eq!(left, events);
+    }
+
+    #[test]
+    fn a_guarded_hotkey_is_neither_dispatched_nor_consumed() {
+        // (guards, chord bound to, key press, dispatched?). A modal that stops the action
+        // must leave the key alone: input_captured already gates the pty while it is up.
+        let hk = Hotkeys {
+            new_tab: "F6".into(),
+            palette: "F7".into(),
+            next_tab: "F8".into(),
+            next_repo: "F9".into(),
+            ..Hotkeys::default()
+        };
+        let none = Modifiers::default();
+        let text = HotkeyGuards {
+            text_modal: true,
+            hard_modal: true,
+            can_switch_tabs: false,
+            repo_grouping: true,
+        };
+        let hard = HotkeyGuards { text_modal: false, hard_modal: true, ..text };
+        let settings = HotkeyGuards { can_switch_tabs: true, ..hard };
+        let no_repos = HotkeyGuards { repo_grouping: false, ..open_guards() };
+        let cases = [
+            (text, Key::F6, false),
+            (text, Key::F7, false),
+            (text, Key::F8, false),
+            (hard, Key::F6, false), // new_tab is a hard-modal bind
+            (hard, Key::F7, true),  // palette toggles stay live outside text modals
+            (hard, Key::F8, false), // tab cycle needs can_switch_tabs
+            (settings, Key::F6, false),
+            (settings, Key::F8, true), // settings behaves like a tab
+            (open_guards(), Key::F6, true),
+            (open_guards(), Key::F9, true), // repo grouping on: the repo chord cycles
+            (no_repos, Key::F9, false),     // grouping off: it would do nothing, so it stays
+            (no_repos, Key::F6, true),      // other binds are unaffected
+            (hard, Key::F9, false),         // repo cycling obeys hard_modal
+        ];
+        for (g, key, dispatched) in cases {
+            let (actions, left) = match_and_consume(vec![key_ev(key, none)], &hk, g);
+            assert_eq!(!actions.is_empty(), dispatched, "{g:?} {key:?}");
+            assert_eq!(left.is_empty(), dispatched, "{g:?} {key:?}");
+        }
+    }
+
+    #[test]
+    fn every_remappable_action_is_matched_and_consumed() {
+        // One distinct F-key per action; each fires its own action and is consumed.
+        let hk = Hotkeys {
+            new_tab: "F1".into(),
+            close: "F2".into(),
+            reopen: "F3".into(),
+            toggle_last_tab: "F4".into(),
+            find: "F5".into(),
+            palette: "F6".into(),
+            settings: "F7".into(),
+            broadcast: "F8".into(),
+            split_right: "F9".into(),
+            split_down: "F10".into(),
+            select_all: "F11".into(),
+            clear: "F12".into(),
+            zoom_in: "F13".into(),
+            zoom_out: "F14".into(),
+            zoom_reset: "F15".into(),
+            next_tab: "F16".into(),
+            prev_tab: "F17".into(),
+            next_repo: "F18".into(),
+            prev_repo: "F19".into(),
+        };
+        let cases = [
+            (Key::F1, A::NewTab),
+            (Key::F2, A::Close),
+            (Key::F3, A::Reopen),
+            (Key::F4, A::ToggleLastTab),
+            (Key::F5, A::Find),
+            (Key::F6, A::Palette),
+            (Key::F7, A::Settings),
+            (Key::F8, A::Broadcast),
+            (Key::F9, A::Split(SplitDir::Row)),
+            (Key::F10, A::Split(SplitDir::Column)),
+            (Key::F11, A::SelectAll),
+            (Key::F12, A::Clear),
+            (Key::F13, A::Zoom(1)),
+            (Key::F14, A::Zoom(-1)),
+            (Key::F15, A::Zoom(0)),
+            (Key::F16, A::TabCycle(1)),
+            (Key::F17, A::TabCycle(-1)),
+            (Key::F18, A::RepoCycle(1)),
+            (Key::F19, A::RepoCycle(-1)),
+        ];
+        for (key, want) in cases {
+            let (actions, left) =
+                match_and_consume(vec![key_ev(key, Modifiers::default())], &hk, open_guards());
+            assert_eq!(actions, vec![want], "{key:?}");
+            assert!(left.is_empty(), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_chord_with_no_composed_text_leaves_the_next_text_alone() {
+        // egui-winit pushes no Text for F-keys (private-use chars are filtered) and none while
+        // Ctrl or Cmd is held. The Text after such a chord is another key's, so it must stay.
+        let alt = mods(false, true, false);
+        let ctrl_alt = mods(true, true, false);
+        let cmd_alt = mods(false, true, true);
+        let hk = Hotkeys {
+            zoom_in: "Alt+F3".into(),
+            zoom_out: "Alt+F14".into(),
+            clear: "Ctrl+Alt+X".into(),
+            find: "Cmd+Alt+J".into(),
+            ..Hotkeys::default()
+        };
+        let cases = [
+            (Key::F3, alt, HotkeyAction::Zoom(1)),
+            (Key::F14, alt, HotkeyAction::Zoom(-1)),
+            (Key::X, ctrl_alt, HotkeyAction::Clear),
+            (Key::J, cmd_alt, HotkeyAction::Find),
+        ];
+        for (key, m, want) in cases {
+            let events = vec![key_ev(key, m), egui::Event::Text("z".into())];
+            let (actions, left) = match_and_consume(events, &hk, open_guards());
+            assert_eq!(actions, vec![want], "{key:?}");
+            assert_eq!(left, vec![egui::Event::Text("z".into())], "{key:?}");
+        }
+    }
+
+    #[test]
+    fn two_matched_chords_in_one_frame_are_both_consumed() {
+        let hk = Hotkeys { find: "F3".into(), clear: "Ctrl+K".into(), ..Hotkeys::default() };
+        let events = vec![
+            key_ev(Key::F3, Modifiers::default()),
+            key_ev(Key::Backspace, Modifiers::default()),
+            key_ev(Key::K, mods(true, false, false)),
+        ];
+        let (actions, left) = match_and_consume(events, &hk, open_guards());
+        assert_eq!(actions, vec![HotkeyAction::Find, HotkeyAction::Clear]);
+        assert_eq!(left, vec![key_ev(Key::Backspace, Modifiers::default())]);
+    }
+
+    #[test]
+    fn an_alt_chord_takes_its_composed_text_with_it() {
+        // egui-winit pushes Text("˚") right after Key(Alt+K) on macOS. Without dropping it the
+        // shell would still see the symbol. Text from other keys stays.
+        let alt = mods(false, true, false);
+        let hk = Hotkeys { clear: "Alt+K".into(), ..Hotkeys::default() };
+        let events = vec![
+            key_ev(Key::K, alt),
+            egui::Event::Text("\u{2da}".into()),
+            key_ev(Key::A, Modifiers::default()),
+            egui::Event::Text("a".into()),
+        ];
+        let (actions, left) = match_and_consume(events, &hk, open_guards());
+        assert_eq!(actions, vec![HotkeyAction::Clear]);
+        assert_eq!(left, vec![key_ev(Key::A, Modifiers::default()), egui::Event::Text("a".into())]);
     }
 
     #[test]
