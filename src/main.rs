@@ -1265,10 +1265,8 @@ impl eframe::App for Stdusk {
         if let Some(d) = kb_tab_cycle {
             self.cycle_visible(d);
         }
-        if let Some(d) = kb_repo_cycle
-            && self.grouping()
-        {
-            self.cycle_group(d);
+        if let Some(d) = kb_repo_cycle {
+            self.cycle_repo_chord(d);
         }
         if kb_toggle_last {
             self.active = ui::toggle_last_target(self.prev_active, self.tabs.len());

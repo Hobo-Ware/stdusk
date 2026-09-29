@@ -136,6 +136,26 @@ pub(crate) fn step(order: &[Group], cur: &Group, d: i32) -> Option<Group> {
     order.get((at + d).rem_euclid(len) as usize).cloned()
 }
 
+/// The tab the repo chord (`hotkeys.next_repo` / `prev_repo`) makes active. With grouping on it
+/// steps to the next repo's landing tab. With grouping off there are no repos to show, so it
+/// steps to the next tab instead of doing nothing. `active` when there is nowhere to go.
+pub(crate) fn repo_chord_target(
+    tabs: &[(u64, &Group)],
+    history: &[u64],
+    active: usize,
+    grouping: bool,
+    d: i32,
+) -> usize {
+    if !grouping {
+        let all: Vec<usize> = (0..tabs.len()).collect();
+        return step_within(&all, active, d);
+    }
+    let Some((_, cur)) = tabs.get(active) else { return active };
+    step(&order(tabs.iter().map(|t| t.1)), cur, d)
+        .and_then(|g| landing_tab(tabs, history, &g))
+        .unwrap_or(active)
+}
+
 /// The focus history with `g`'s tabs moved to the front (order kept), so closing a tab lands on
 /// another tab of the same repo before falling back to a different repo.
 pub(crate) fn history_preferring(tabs: &[(u64, &Group)], history: &[u64], g: &Group) -> Vec<u64> {
@@ -239,11 +259,15 @@ impl Stdusk {
         }
     }
 
-    pub(crate) fn cycle_group(&mut self, d: i32) {
-        let Some(cur) = self.active_group().cloned() else { return };
-        if let Some(g) = step(&self.group_order(), &cur, d) {
-            self.switch_group(&g);
-        }
+    /// The repo chord: cycle repos with grouping on, cycle tabs with it off.
+    pub(crate) fn cycle_repo_chord(&mut self, d: i32) {
+        self.active = repo_chord_target(
+            &self.tab_groups(),
+            &self.focus_history,
+            self.active,
+            self.grouping(),
+            d,
+        );
     }
 
     pub(crate) fn cycle_visible(&mut self, d: i32) {
@@ -519,6 +543,40 @@ mod tests {
         assert_eq!(step(&order, &Group::Other, 1), Some(repo("/a")));
         assert_eq!(step(&order, &repo("/a"), -1), Some(Group::Other));
         assert_eq!(step(&order, &repo("/zzz"), 1), None);
+    }
+
+    #[test]
+    fn repo_chord_cycles_tabs_when_grouping_is_off_and_repos_when_on() {
+        let (a, b) = (repo("/a"), repo("/b"));
+        let tabs = [(10, &a), (11, &a), (12, &b), (13, &b)];
+        let history = [13, 10];
+        // (grouping, active, d, want)
+        let cases = [
+            (false, 0, 1, 1),
+            (false, 1, 1, 2),
+            (false, 3, 1, 0),
+            (false, 0, -1, 3),
+            (true, 1, 1, 3),
+            (true, 2, 1, 0),
+            (true, 0, -1, 3),
+        ];
+        for (grouping, active, d, want) in cases {
+            let got = repo_chord_target(&tabs, &history, active, grouping, d);
+            assert_eq!(got, want, "grouping {grouping}, active {active}, d {d}");
+        }
+    }
+
+    #[test]
+    fn repo_chord_keeps_the_active_tab_when_there_is_nothing_to_cycle() {
+        let a = repo("/a");
+        assert_eq!(repo_chord_target(&[(10, &a)], &[10], 0, false, 1), 0);
+        assert_eq!(repo_chord_target(&[(10, &a)], &[10], 0, true, 1), 0);
+        assert_eq!(repo_chord_target(&[], &[], 0, false, 1), 0);
+        assert_eq!(repo_chord_target(&[], &[], 0, true, 1), 0);
+        // An active index past the end stays put in both modes.
+        let tabs = [(10, &a), (11, &a)];
+        assert_eq!(repo_chord_target(&tabs, &[10], 9, false, 1), 9);
+        assert_eq!(repo_chord_target(&tabs, &[10], 9, true, 1), 9);
     }
 
     #[test]
