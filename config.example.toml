@@ -95,6 +95,10 @@ clear = "Cmd+K"           # wipe screen + scrollback
 zoom_in = "Cmd+="
 zoom_out = "Cmd+-"
 zoom_reset = "Cmd+0"
+next_tab = "Cmd+Shift+]"  # Ctrl+Tab / Ctrl+Shift+Tab also cycle tabs (fixed)
+prev_tab = "Cmd+Shift+["
+next_repo = "Cmd+Ctrl+]"  # repo tabs only (appearance.group_by_repo)
+prev_repo = "Cmd+Ctrl+["
 
 # Named launch profiles (Tabby-style). Repeat the [[profiles]] block per profile;
 # only `name` is required - omitted fields fall back to the regular tab defaults.
