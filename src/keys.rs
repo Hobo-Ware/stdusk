@@ -5,8 +5,9 @@
 use eframe::egui;
 
 /// Bytes a key press sends to the pty, or `None` when the key is unmapped (plain text is
-/// handled separately via `Event::Text`). `Ctrl+letter` wins over everything; then macOS
-/// natural-editing: `Option+←/→` word, `Cmd+←/→` line ends, `Option/Cmd+Backspace` deletes.
+/// handled separately via `Event::Text`). F-keys are encoded first (terminfo, any modifiers);
+/// then `Ctrl+letter` wins over the rest; then macOS natural-editing: `Option+←/→` word,
+/// `Cmd+←/→` line ends, `Option/Cmd+Backspace` deletes.
 pub(crate) fn key_to_bytes(
     key: egui::Key,
     mods: egui::Modifiers,
@@ -18,6 +19,11 @@ pub(crate) fn key_to_bytes(
     // application-cursor-keys mode. TUIs that set it (vim, less, some pickers) may bind only the
     // SS3 form; zsh binds both. `app_cursor` = the focused term's TermMode::APP_CURSOR.
     let cursor_key = |tail: u8| vec![0x1b, if app_cursor { b'O' } else { b'[' }, tail];
+    // Before the Ctrl early return: Ctrl+F5 is `ESC[15;5~`, not "Ctrl+non-letter => nothing".
+    if let Some(code) = fkey_code(key) {
+        // Cmd+F-key is left for app bindings, not forwarded.
+        return (!mods.command).then(|| fkey_bytes(code, mods));
+    }
     if mods.ctrl {
         return ctrl_letter(key).map(|b| vec![b]);
     }
@@ -76,6 +82,48 @@ pub(crate) fn key_to_bytes(
         _ => return None,
     };
     Some(bytes)
+}
+
+/// How an F-key is spelled on the wire in `xterm-256color` (the pty's `TERM`).
+#[derive(Clone, Copy)]
+enum FKey {
+    /// F1-F4: `ESC O <byte>` bare, `ESC [ 1 ; <mod> <byte>` modified.
+    Letter(u8),
+    /// F5-F12: `ESC [ <n> ~` bare, `ESC [ <n> ; <mod> ~` modified.
+    Tilde(u8),
+}
+
+/// The wire form of F1-F12, or `None` for any other key. F13+ stay unmapped on purpose: F13 is
+/// the usual quake-summon key, which the global hotkey takes before the terminal sees it.
+fn fkey_code(key: egui::Key) -> Option<FKey> {
+    use egui::Key;
+    Some(match key {
+        Key::F1 => FKey::Letter(b'P'),
+        Key::F2 => FKey::Letter(b'Q'),
+        Key::F3 => FKey::Letter(b'R'),
+        Key::F4 => FKey::Letter(b'S'),
+        Key::F5 => FKey::Tilde(15),
+        Key::F6 => FKey::Tilde(17),
+        Key::F7 => FKey::Tilde(18),
+        Key::F8 => FKey::Tilde(19),
+        Key::F9 => FKey::Tilde(20),
+        Key::F10 => FKey::Tilde(21),
+        Key::F11 => FKey::Tilde(23),
+        Key::F12 => FKey::Tilde(24),
+        _ => return None,
+    })
+}
+
+/// Terminfo `kf1..kf12` plus the modified `kf13..` forms. Modifier parameter is
+/// 1 + shift + 2*alt + 4*ctrl; a bare press (parameter 1) omits it.
+fn fkey_bytes(code: FKey, mods: egui::Modifiers) -> Vec<u8> {
+    let param = 1 + u8::from(mods.shift) + 2 * u8::from(mods.alt) + 4 * u8::from(mods.ctrl);
+    match (code, param) {
+        (FKey::Letter(l), 1) => vec![0x1b, b'O', l],
+        (FKey::Letter(l), p) => format!("\x1b[1;{p}{}", l as char).into_bytes(),
+        (FKey::Tilde(n), 1) => format!("\x1b[{n}~").into_bytes(),
+        (FKey::Tilde(n), p) => format!("\x1b[{n};{p}~").into_bytes(),
+    }
 }
 
 /// Digit value for `Key::Num0..Num9`, or `None` (for altIsMeta ESC-digit mapping).
@@ -326,6 +374,57 @@ mod tests {
         Modifiers { alt, ctrl, shift: false, mac_cmd: command, command }
     }
 
+    /// Expected bytes are the `xterm-256color` terminfo `kf1..kf12` (plain) and the shifted /
+    /// ctrl / alt variants (`kf13..`), since that is the TERM the pty advertises.
+    #[test]
+    fn function_keys_match_xterm_terminfo() {
+        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        let alt = Modifiers { alt: true, ..Modifiers::default() };
+        let ctrl = Modifiers { ctrl: true, ..Modifiers::default() };
+        let ctrl_shift = Modifiers { ctrl: true, shift: true, ..Modifiers::default() };
+        let ctrl_alt_shift =
+            Modifiers { ctrl: true, alt: true, shift: true, ..Modifiers::default() };
+        let shift_alt = Modifiers { shift: true, alt: true, ..Modifiers::default() };
+        let ctrl_alt = Modifiers { ctrl: true, alt: true, ..Modifiers::default() };
+        let none = Modifiers::default();
+        let cases: [(Key, Modifiers, &[u8]); 23] = [
+            (Key::F1, none, b"\x1bOP"),
+            (Key::F2, none, b"\x1bOQ"),
+            (Key::F3, none, b"\x1bOR"),
+            (Key::F4, none, b"\x1bOS"),
+            (Key::F5, none, b"\x1b[15~"),
+            (Key::F6, none, b"\x1b[17~"),
+            (Key::F7, none, b"\x1b[18~"),
+            (Key::F8, none, b"\x1b[19~"),
+            (Key::F9, none, b"\x1b[20~"),
+            (Key::F10, none, b"\x1b[21~"), // htop "Quit"
+            (Key::F12, none, b"\x1b[24~"),
+            (Key::F1, shift, b"\x1b[1;2P"),
+            (Key::F5, shift, b"\x1b[15;2~"),
+            (Key::F5, ctrl, b"\x1b[15;5~"),
+            (Key::F10, alt, b"\x1b[21;3~"),
+            (Key::F11, none, b"\x1b[23~"),
+            (Key::F1, ctrl, b"\x1b[1;5P"),        // kf25
+            (Key::F4, ctrl, b"\x1b[1;5S"),        // kf28
+            (Key::F1, ctrl_shift, b"\x1b[1;6P"),  // kf37
+            (Key::F5, ctrl_shift, b"\x1b[15;6~"), // kf41
+            (Key::F5, ctrl_alt_shift, b"\x1b[15;8~"),
+            (Key::F2, shift_alt, b"\x1b[1;4Q"),
+            (Key::F11, ctrl_alt, b"\x1b[23;7~"),
+        ];
+        for (key, m, want) in cases {
+            assert_eq!(key_to_bytes(key, m, false, false), Some(want.to_vec()), "{key:?} {m:?}");
+        }
+        // Cmd+F-key (with or without other modifiers) is left for app bindings, not forwarded.
+        assert_eq!(key_to_bytes(Key::F10, mods(false, false, true), false, false), None);
+        let cmd_shift = Modifiers { shift: true, ..mods(false, false, true) };
+        assert_eq!(key_to_bytes(Key::F10, cmd_shift, false, false), None);
+        assert_eq!(key_to_bytes(Key::F10, mods(true, false, true), false, false), None);
+        // altIsMeta and DECCKM (arrow-only) must not change F-key bytes.
+        assert_eq!(key_to_bytes(Key::F1, none, true, true), Some(b"\x1bOP".to_vec()));
+        assert_eq!(key_to_bytes(Key::F10, alt, true, false), Some(b"\x1b[21;3~".to_vec()));
+    }
+
     #[test]
     fn key_to_bytes_plain_and_ctrl() {
         assert_eq!(
@@ -338,7 +437,7 @@ mod tests {
         );
         assert_eq!(key_to_bytes(Key::C, mods(true, false, false), false, false), Some(vec![3])); // Ctrl-C SIGINT
         assert_eq!(key_to_bytes(Key::Enter, mods(true, false, false), false, false), None); // Ctrl+non-letter
-        assert_eq!(key_to_bytes(Key::F5, mods(false, false, false), false, false), None); // unmapped
+        assert_eq!(key_to_bytes(Key::F13, mods(false, false, false), false, false), None); // unmapped
         // Option+Enter -> meta+Return (ESC+CR): apps read it as "insert newline", not "submit".
         assert_eq!(
             key_to_bytes(Key::Enter, mods(false, true, false), false, false),
