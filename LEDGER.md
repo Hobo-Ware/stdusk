@@ -2345,6 +2345,27 @@ costs on the UI thread.
   clean. Build with cargo 1.95 and clippy 1.98, because the default stable 1.90 is too old for
   egui 0.35.
 
+## Repo chord with repo tabs off (post-1.7.5)
+Report: Cmd+Shift+] / [ did nothing by default and looked like a broken keybind. The chord only
+ran when `appearance.group_by_repo` was on, and that setting is off by default. This was a design
+gap from 1.7.0, not a regression.
+
+- With `group_by_repo` off, the chord now switches to the next or previous tab, the same as Ctrl+Tab.
+  The one difference: Ctrl+Tab also works while the settings view is open. The chord does not.
+  With repo tabs on, it still switches repos. The chord never moves between repos while the bar
+  shows all tabs, so it always has a visible result.
+- `repo::repo_chord_target` is a pure function that picks the tab. `Stdusk::cycle_repo_chord` calls
+  it from the key handler in `main.rs`. It replaced `Stdusk::cycle_group`, which had no other caller.
+- The chord stays under `hard_modal`, so it stays off while settings or a modal is open. The
+  settings-hide condition therefore needs no change for this chord.
+- Tests: `repo_chord_cycles_tabs_when_grouping_is_off_and_repos_when_on`,
+  `repo_chord_keeps_the_active_tab_when_there_is_nothing_to_cycle`.
+- Verified on rustc 1.98.1: the two new tests failed first and then passed. After the removal of
+  `cycle_group`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and the full
+  `cargo test` all pass. The branch sits on top of the quake-follows-screen change, so the total
+  is 396 (394 plus these 2), with 2 ignored. The user pressed the chord with repo tabs off in a
+  live build and it switched tabs.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
