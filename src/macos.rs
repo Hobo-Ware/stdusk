@@ -143,6 +143,67 @@ pub(crate) fn set_window_alpha(alpha: f64) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn set_window_alpha(_alpha: f64) {}
 
+/// Every screen's frame in AppKit space (bottom-left origin, y up); index 0 is the primary.
+#[cfg(target_os = "macos")]
+fn screen_frames(mtm: objc2::MainThreadMarker) -> Vec<egui::Rect> {
+    let screens = objc2_app_kit::NSScreen::screens(mtm);
+    (0..screens.count()).map(|i| ns_rect(screens.objectAtIndex(i).frame())).collect()
+}
+
+#[cfg(target_os = "macos")]
+fn ns_rect(r: objc2_foundation::NSRect) -> egui::Rect {
+    egui::Rect::from_min_size(
+        egui::pos2(r.origin.x as f32, r.origin.y as f32),
+        egui::vec2(r.size.width as f32, r.size.height as f32),
+    )
+}
+
+/// The screen under the mouse cursor, as a top-left-origin rect in `OuterPosition` space. The
+/// quake drop targets this so the terminal appears on the monitor you are working on. `None`
+/// when the cursor is on no screen or off macOS.
+#[cfg(target_os = "macos")]
+pub(crate) fn cursor_screen() -> Option<egui::Rect> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    let frames = screen_frames(mtm);
+    let mouse = objc2_app_kit::NSEvent::mouseLocation();
+    let i = crate::ui::screen_index_at(&frames, egui::pos2(mouse.x as f32, mouse.y as f32))?;
+    Some(crate::ui::cocoa_to_top_left(frames[i], frames.first()?.height()))
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn cursor_screen() -> Option<egui::Rect> {
+    None
+}
+
+/// The primary (menu-bar) screen in `OuterPosition` space: the last resort when neither the cursor
+/// nor the window is on a known screen, so the hidden sliver still lands on a live screen.
+#[cfg(target_os = "macos")]
+pub(crate) fn primary_screen() -> Option<egui::Rect> {
+    let frame = *screen_frames(objc2::MainThreadMarker::new()?).first()?;
+    Some(crate::ui::cocoa_to_top_left(frame, frame.height()))
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn primary_screen() -> Option<egui::Rect> {
+    None
+}
+
+/// The screen the app window is on now, in the same space as `cursor_screen`. Hiding parks the
+/// sliver here, so it stays on a live screen. `None` when unknown or off macOS.
+#[cfg(target_os = "macos")]
+pub(crate) fn window_screen() -> Option<egui::Rect> {
+    use objc2_app_kit::NSApplication;
+    let mtm = objc2::MainThreadMarker::new()?;
+    let windows = NSApplication::sharedApplication(mtm).windows();
+    // The tray's status-item window is also in this list, but it can never become key.
+    let win =
+        (0..windows.count()).map(|i| windows.objectAtIndex(i)).find(|w| w.canBecomeKeyWindow())?;
+    let frame = ns_rect(win.screen()?.frame());
+    Some(crate::ui::cocoa_to_top_left(frame, screen_frames(mtm).first()?.height()))
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn window_screen() -> Option<egui::Rect> {
+    None
+}
+
 /// Is the OS appearance DARK? `None` means "no OS answer here" (non-macOS), so the caller falls
 /// back to what the window system reported.
 ///

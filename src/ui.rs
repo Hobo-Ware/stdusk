@@ -197,6 +197,39 @@ pub(crate) fn quake_shown_size(monitor_w: f32, monitor_h: f32, height_pct: f32) 
     (monitor_w, (monitor_h * height_pct).round())
 }
 
+/// Index of the screen whose frame holds `point`. Frames and point share one coordinate space
+/// (AppKit's: bottom-left origin, y up), so no conversion is needed to find the cursor's screen.
+pub(crate) fn screen_index_at(frames: &[egui::Rect], point: egui::Pos2) -> Option<usize> {
+    // Half-open: `Rect::contains` includes `max`, so a point on a shared edge would match the
+    // screen on the left instead of the one it is the first column of.
+    frames.iter().position(|f| {
+        f.min.x <= point.x && point.x < f.max.x && f.min.y <= point.y && point.y < f.max.y
+    })
+}
+
+/// Convert an AppKit screen frame (bottom-left origin, y up, anchored to the primary screen) to the
+/// top-left-origin global space that `ViewportCommand::OuterPosition` uses. `primary_h` is the
+/// primary screen's height: the primary screen's top-left is then (0, 0) and screens above or
+/// below it get negative or larger y.
+pub(crate) fn cocoa_to_top_left(frame: egui::Rect, primary_h: f32) -> egui::Rect {
+    let top = primary_h - frame.max.y;
+    egui::Rect::from_min_size(egui::pos2(frame.min.x, top), frame.size())
+}
+
+/// Divide an AppKit-point value by egui's zoom factor before it goes into a `ViewportCommand`.
+/// egui-winit scales those commands by `zoom_factor * scale_factor` but winit divides by
+/// `scale_factor` alone, so without this a Cmd+= zoom would scale the window geometry - and push
+/// the hidden sliver fully off-screen, which parks the run loop. A non-positive zoom is ignored.
+pub(crate) fn unzoom(v: egui::Vec2, zoom: f32) -> egui::Vec2 {
+    if zoom > 0.0 { v / zoom } else { v }
+}
+
+/// Top-left of the parked (hidden) quake window on `screen`: the window's left edge, with only
+/// `QUAKE_HIDE_SLIVER` points of it left on that screen. Per-screen twin of `quake_hidden_y`.
+pub(crate) fn quake_hidden_pos(screen: egui::Rect) -> egui::Pos2 {
+    egui::pos2(screen.min.x, screen.min.y + quake_hidden_y(screen.height()))
+}
+
 /// Window alpha for the quake show/hide: fully opaque when shown, fully transparent (NOT ordered
 /// out) when hidden - alpha-0 hides the load-bearing sliver visually while the window keeps drawing
 /// so the run loop stays warm. Pure seam for the invariant "hidden means alpha 0, never removed".
@@ -1735,6 +1768,66 @@ mod tests {
         assert_eq!(quake_shown_size(1440.0, 900.0, 0.5), (1440.0, 450.0));
         assert_eq!(quake_shown_size(1920.0, 1080.0, 0.33), (1920.0, 356.0)); // 356.4 rounds down
         assert_eq!(quake_shown_size(1000.0, 800.0, 1.0), (1000.0, 800.0));
+    }
+
+    #[test]
+    fn screen_index_at_finds_the_screen_under_the_cursor() {
+        // Primary 1440x900 at the origin, a 1920x1080 screen to its right (AppKit space).
+        let frames = [
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0)),
+            egui::Rect::from_min_size(egui::pos2(1440.0, -180.0), egui::vec2(1920.0, 1080.0)),
+        ];
+        assert_eq!(screen_index_at(&frames, egui::pos2(100.0, 100.0)), Some(0));
+        assert_eq!(screen_index_at(&frames, egui::pos2(2000.0, 500.0)), Some(1));
+        assert_eq!(screen_index_at(&frames, egui::pos2(-50.0, 10.0)), None); // outside every screen
+        // The shared edge at x=1440 belongs to the right screen, not the primary.
+        assert_eq!(screen_index_at(&frames, egui::pos2(1440.0, 500.0)), Some(1));
+        assert_eq!(screen_index_at(&frames, egui::pos2(1439.9, 500.0)), Some(0));
+    }
+
+    #[test]
+    fn cocoa_to_top_left_anchors_the_primary_screen_at_the_origin() {
+        let primary = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0));
+        assert_eq!(cocoa_to_top_left(primary, 900.0).min, egui::pos2(0.0, 0.0));
+        // A 1080-tall screen on the right whose bottom sits 180 below the primary's: its top
+        // lines up with the primary's top, so its top-left y is 0.
+        let right =
+            egui::Rect::from_min_size(egui::pos2(1440.0, -180.0), egui::vec2(1920.0, 1080.0));
+        let r = cocoa_to_top_left(right, 900.0);
+        assert_eq!((r.min, r.size()), (egui::pos2(1440.0, 0.0), egui::vec2(1920.0, 1080.0)));
+        // A screen to the left of the primary keeps its negative x.
+        let left = egui::Rect::from_min_size(egui::pos2(-1920.0, 0.0), egui::vec2(1920.0, 1080.0));
+        assert_eq!(cocoa_to_top_left(left, 900.0).min, egui::pos2(-1920.0, -180.0));
+        // A screen stacked above the primary gets a negative y.
+        let above = egui::Rect::from_min_size(egui::pos2(0.0, 900.0), egui::vec2(1440.0, 900.0));
+        assert_eq!(cocoa_to_top_left(above, 900.0).min, egui::pos2(0.0, -900.0));
+    }
+
+    #[test]
+    fn quake_hidden_pos_leaves_only_the_sliver_on_its_own_screen() {
+        // The sliver must stay on THIS screen, not on the primary one, or macOS parks the run loop.
+        let screen =
+            egui::Rect::from_min_size(egui::pos2(1440.0, 100.0), egui::vec2(1920.0, 1080.0));
+        let p = quake_hidden_pos(screen);
+        assert_eq!(p, egui::pos2(1440.0, 100.0 + 1080.0 - QUAKE_HIDE_SLIVER));
+    }
+
+    #[test]
+    fn a_zoomed_ui_still_parks_the_sliver_on_screen() {
+        // egui-winit + winit turn a sent point into `sent * zoom` AppKit points; model that.
+        let screen =
+            egui::Rect::from_min_size(egui::pos2(1728.0, -323.0), egui::vec2(2560.0, 1440.0));
+        for zoom in [0.5_f32, 0.9, 1.0, 1.1, 2.0] {
+            let parked = quake_hidden_pos(screen);
+            let sent = unzoom(parked.to_vec2(), zoom);
+            let landed = egui::pos2(sent.x * zoom, sent.y * zoom);
+            assert!(
+                (landed.x - parked.x).abs() < 0.01 && (landed.y - parked.y).abs() < 0.01,
+                "zoom {zoom}"
+            );
+            assert!((screen.max.y - landed.y - QUAKE_HIDE_SLIVER).abs() < 0.01, "zoom {zoom}");
+        }
+        assert_eq!(unzoom(egui::vec2(10.0, 20.0), 0.0), egui::vec2(10.0, 20.0)); // bad zoom: unchanged
     }
 
     #[test]

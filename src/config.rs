@@ -165,8 +165,9 @@ pub(crate) struct Quake {
     /// `hide_on_focus_loss = false`). 1.0 = off.
     pub(crate) unfocused_opacity: f32,
     /// (Dropdown mode) drop the window onto whatever macOS Space/desktop is active when summoned,
-    /// instead of yanking you back to the Space it was created on. Default true - the expected
-    /// quake behavior. Set false to pin it to its origin Space. Ignored in window mode.
+    /// on the screen under the mouse, instead of yanking you back to the Space and screen it was
+    /// created on. Default true - the expected quake behavior. Set false to pin it to its origin
+    /// Space and the screen it is on. Ignored in window mode.
     pub(crate) follow_active_space: bool,
 }
 

@@ -1765,7 +1765,7 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
         row(
             ui,
             "Follow active desktop",
-            "Drop onto whichever Space is active when summoned",
+            "Drop onto the active Space, on the screen with the mouse",
             |ui| {
                 ui.add_enabled_ui(!window_mode, |ui| {
                     crate::widgets::toggle_switch(ui, &mut q.follow_active_space);
@@ -2311,7 +2311,7 @@ impl Stdusk {
                 self.toast = Some((format!("Hotkey: {}", self.cfg.quake.hotkey), now + 1.4));
             }
             if fx.height_changed && self.screenshot.is_none() && self.visible {
-                crate::apply_visibility(ctx, true, self.cfg.quake.height_pct);
+                crate::apply_visibility(ctx, true, self.cfg.quake.height_pct, false);
             }
         }
 

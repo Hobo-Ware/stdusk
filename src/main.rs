@@ -44,8 +44,8 @@ use config::Config;
 use finder::Search;
 use fonts::{build_fonts, resolve_bold_font, resolve_font};
 use macos::{
-    app_is_active, center_window_buttons, notify, notify_done, set_dock_icon, set_space_behavior,
-    set_unified_titlebar, set_window_alpha,
+    app_is_active, center_window_buttons, cursor_screen, notify, notify_done, primary_screen,
+    set_dock_icon, set_space_behavior, set_unified_titlebar, set_window_alpha, window_screen,
 };
 use tabs::{Tab, TabAction, spawn_opts, spawn_tab};
 use terminal::PtyTerm;
@@ -553,7 +553,12 @@ impl Stdusk {
         if !window_mode {
             // Back to the quake window: pin it to the top edge at the configured height.
             self.sized = true; // geometry is applied now; skip the first-run sizing path
-            apply_visibility(ctx, true, self.cfg.quake.height_pct);
+            apply_visibility(
+                ctx,
+                true,
+                self.cfg.quake.height_pct,
+                self.cfg.quake.follow_active_space,
+            );
             self.was_focused = false;
         }
     }
@@ -588,20 +593,43 @@ impl Stdusk {
 /// back (broke twice: 1.3.0 orderOut, 1.3.2 fully-offscreen-park). The on-screen sliver is
 /// load-bearing for the run loop; alpha=0 (a compositor property, NOT occlusion) hides it visually
 /// while the window keeps drawing. Restore alpha to 1 on show.
-pub(crate) fn apply_visibility(ctx: &egui::Context, visible: bool, height_pct: f32) {
+///
+/// Screen choice: `follow_cursor` drops the window on the screen under the mouse. Otherwise (and
+/// when hiding) it keeps the screen it is on, so the sliver always parks on a live screen. With no
+/// screen info (non-macOS) it falls back to the old primary-screen `(0, 0)` placement.
+pub(crate) fn apply_visibility(
+    ctx: &egui::Context,
+    visible: bool,
+    height_pct: f32,
+    follow_cursor: bool,
+) {
     let mon = ctx.input(|i| i.viewport().monitor_size);
     set_window_alpha(ui::quake_alpha(visible));
+    let screen = if visible && follow_cursor {
+        cursor_screen().or_else(window_screen)
+    } else {
+        window_screen()
+    }
+    .or_else(primary_screen);
+    // Screen rects are raw AppKit points; viewport commands are in zoomed egui points.
+    let zoom = ctx.zoom_factor();
+    let to_cmd = |p: egui::Pos2| ui::unzoom(p.to_vec2(), zoom).to_pos2();
     if visible {
-        if let Some(m) = mon {
+        let size = screen.map(|s| ui::unzoom(s.size(), zoom)).or(mon);
+        if let Some(m) = size {
             let (w, h) = ui::quake_shown_size(m.x, m.y, height_pct);
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
         }
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
+        let origin = screen.map_or(egui::Pos2::ZERO, |s| to_cmd(s.min));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(origin));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
         // Park just off the bottom edge - keeps a sliver on-screen so the run loop stays warm.
-        let y = mon.map_or(2000.0, |m| ui::quake_hidden_y(m.y));
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, y)));
+        let pos = screen.map_or_else(
+            || egui::pos2(0.0, mon.map_or(2000.0, |m| ui::quake_hidden_y(m.y))),
+            |s| to_cmd(ui::quake_hidden_pos(s)),
+        );
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
     }
 }
 
@@ -645,7 +673,7 @@ impl eframe::App for Stdusk {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             } else {
                 self.visible = true;
-                apply_visibility(&ctx, true, height_pct);
+                apply_visibility(&ctx, true, height_pct, self.cfg.quake.follow_active_space);
                 self.was_focused = false;
             }
             for _ in 0..new_tabs {
@@ -741,7 +769,12 @@ impl eframe::App for Stdusk {
                 // First run: apply full quake sizing once the monitor size is known.
                 if !self.sized {
                     if ctx.input(|i| i.viewport().monitor_size).is_some() {
-                        apply_visibility(&ctx, true, height_pct);
+                        apply_visibility(
+                            &ctx,
+                            true,
+                            height_pct,
+                            self.cfg.quake.follow_active_space,
+                        );
                         self.sized = true;
                     } else {
                         ctx.request_repaint();
@@ -751,7 +784,12 @@ impl eframe::App for Stdusk {
                 // Quake toggle (from the global-hotkey thread).
                 if self.toggle.swap(false, Ordering::SeqCst) {
                     self.visible = !self.visible;
-                    apply_visibility(&ctx, self.visible, height_pct);
+                    apply_visibility(
+                        &ctx,
+                        self.visible,
+                        height_pct,
+                        self.cfg.quake.follow_active_space,
+                    );
                     if self.visible {
                         self.was_focused = false;
                     }
@@ -768,7 +806,12 @@ impl eframe::App for Stdusk {
                     }
                     if clicks.show_hide {
                         self.visible = !self.visible;
-                        apply_visibility(&ctx, self.visible, height_pct);
+                        apply_visibility(
+                            &ctx,
+                            self.visible,
+                            height_pct,
+                            self.cfg.quake.follow_active_space,
+                        );
                         if self.visible {
                             self.was_focused = false;
                         }
@@ -790,7 +833,7 @@ impl eframe::App for Stdusk {
                         // viewer, Ctrl+Cmd+Space) steals winit's window focus but keeps the app
                         // active, so gating on `app_is_active()` stops it from dismissing quake.
                         self.visible = false;
-                        apply_visibility(&ctx, false, height_pct);
+                        apply_visibility(&ctx, false, height_pct, false);
                     }
                 } else {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));

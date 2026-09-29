@@ -2292,6 +2292,59 @@ costs on the UI thread.
 - Not changed: a Cmd+A selection over a full 25k scrollback still rebuilds its text twice per frame
   (~18 ms) until the next key clears it.
 
+## Quake follows the screen under the mouse (post-1.7.5; 394 tests)
+- **The reported bug**: with `follow_active_space` on, the hotkey still dropped the terminal on the
+  primary monitor after the user moved to a second monitor. The setting only set
+  `CanJoinAllSpaces` (Spaces, not screens). Also, `apply_visibility` always sent
+  `OuterPosition(0, 0)`. That is the top-left of the primary screen in global coordinates.
+- **Fix**: `apply_visibility(ctx, visible, height_pct, follow_cursor)`. On show with
+  `follow_active_space`, it picks the screen that holds the mouse (`macos::cursor_screen`:
+  `NSEvent.mouseLocation` against `NSScreen.frame`), then sizes to that screen and places at its
+  top-left. On hide it parks the 2px sliver on the screen the window is on now
+  (`macos::window_screen`), so the sliver never lands on a different screen than the window.
+  Without screen info (non-macOS) it keeps the old `(0, 0)` placement.
+- **Pure helpers in `ui.rs`** (tested): `screen_index_at`, `cocoa_to_top_left` (AppKit bottom-left
+  frames to the top-left space of `OuterPosition`, anchored on the primary screen height), and
+  `quake_hidden_pos`. Deps: `NSScreen` (objc2-app-kit) and `NSGeometry` (objc2-foundation).
+- **Chosen**: the mouse decides the screen, as in most hotkey terminals. The key window of the
+  frontmost app would need Accessibility rights. A settings change of the height keeps the current
+  screen (`follow_cursor = false`).
+- **Verified live** (`--state-dir`, 1728x1117 primary + 2560x1440 external at (1728, -323)):
+  cursor on the external screen puts the window at x=1728, 2560 wide, 720 high (50%). Hide parks
+  it at x=1728, y=1115 (sliver on the external screen). Cursor on the primary screen gives x=0,
+  1728 wide. macOS keeps the window about 30px below the menu bar on both screens, as before.
+  Not checked: a real hotkey press (a synthetic key needs extra OS grants), a mirrored or
+  vertically stacked layout.
+- **Zoom (found in review)**: egui-winit scales `OuterPosition`/`InnerSize` by
+  `zoom_factor * scale_factor` and winit divides by `scale_factor` only. AppKit points must go
+  through `ui::unzoom(.., ctx.zoom_factor())` first, or Cmd+= (egui's default keyboard zoom, on
+  here) scales the geometry and can park the hidden sliver fully off-screen. The old code used
+  `monitor_size`, which is already in zoomed points. Test: `a_zoomed_ui_still_parks_the_sliver_on_screen`.
+  When no screen is known, the fallback is now the primary screen (`macos::primary_screen`).
+- **Known limits (from review, not fixed)**: (1) Nothing re-parks a hidden window after a display
+  change. Unplugging the screen it is parked on makes macOS move it onto a remaining screen. It
+  stays alpha 0 and on-screen, and the next show repositions it. (2) With `follow_active_space`
+  off and a screen stacked directly below, `NSWindow.screen` can return the lower screen for the
+  parked window, so the pinned screen can change. Fixing both needs the last show-screen kept in
+  app state. (3) `window_screen` picks the first window that can become key. That is the only
+  window today.
+- **Menu bar (follow-up)**: `NSScreen.frame` includes the menu bar. macOS keeps the window top
+  about 30pt below the screen top, so the bottom edge overshoots `height_pct` by that amount. The
+  old `monitor_size` code had the same flaw. Use `visibleFrame` for the show origin and size. Keep
+  `frame` for the hide park, so the sliver stays at the physical bottom edge.
+- **Gotcha found while testing**: a `--state-dir` instance launched from inside a stdusk shell
+  inherits that shell's `ZDOTDIR`. The nested-launch guard in `shell.rs` compares it with the
+  instance's own dir, and `--state-dir` moves that dir. So the guard treats the outer dir as a
+  user dir. The bridge files then source themselves and zsh prints
+  `job table full or recursion limit exceeded`. This is unfixed. For now, launch dev instances
+  with `env -u ZDOTDIR -u STDUSK_REAL_ZDOTDIR`.
+- Tests: +4 (`screen_index_at_finds_the_screen_under_the_cursor` incl. the shared edge,
+  `cocoa_to_top_left_anchors_the_primary_screen_at_the_origin` incl. a screen to the left,
+  `quake_hidden_pos_leaves_only_the_sliver_on_its_own_screen`,
+  `a_zoomed_ui_still_parks_the_sliver_on_screen`). 394 pass. Clippy `-D warnings` and fmt are
+  clean. Build with cargo 1.95 and clippy 1.98, because the default stable 1.90 is too old for
+  egui 0.35.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
