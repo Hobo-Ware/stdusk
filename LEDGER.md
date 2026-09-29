@@ -2345,6 +2345,50 @@ costs on the UI thread.
   clean. Build with cargo 1.95 and clippy 1.98, because the default stable 1.90 is too old for
   egui 0.35.
 
+## Cmd+Shift+[ / ] cycle tabs; repo switch moves to Cmd+Ctrl+[ / ] (post-1.7.5; 400 tests)
+- `Cmd+Shift+]` / `[` now step to the next / previous tab, like kitty, WezTerm, Ghostty and Chrome.
+  `Ctrl+Tab` / `Ctrl+Shift+Tab` still work (fixed binds). The step wraps inside the visible tabs
+  (the active repo's tabs, or all tabs with grouping off), through the same `cycle_visible` as
+  `Ctrl+Tab`. New `[hotkeys]` fields: `next_tab`, `prev_tab`.
+- Those two chords used to be the repo-cycle defaults. Repo switching is now `Cmd+Ctrl+]` / `[`
+  (`next_repo`, `prev_repo`). Chosen over `Cmd+Alt+[`: Cmd+Alt already means panes.
+  No mainstream terminal I checked has a default chord for a group level, so the pair is free.
+- Migration: Settings Save writes every default, so saved configs pin the old repo chords.
+  `Config::parse` -> `Hotkeys::migrate_legacy` moves a repo chord to its new default only when
+  it is the legacy chord AND still equals its tab chord. Chords compare parsed (any spelling).
+  A custom repo chord, an unbound one, or a repo chord kept after moving the tab chord stays.
+  The next Settings Save writes the migrated values.
+- The tab chords match before the `hard_modal` gate (`can_switch_tabs`), so they work with only
+  the settings view open, like `Ctrl+Tab`. Repo cycling stays behind `hard_modal`.
+  `keys::cycle_dir(next, prev, key, mods)` is the shared pure matcher for both pairs.
+- Grounded, not assumed: winit 0.30 (macOS) takes the logical key from
+  `charactersIgnoringModifiers` when Cmd or Ctrl is down, and egui-winit falls back to the
+  physical key when the logical one is unknown - so `Cmd+Ctrl+[` reaches the matcher as
+  `OpenBracket` even if macOS reports ESC. `key_to_bytes` returns `None` for Ctrl + non-letter,
+  so nothing leaks to the pty.
+- Toolchain note: the worktree's default `stable` resolved to rustc 1.90, but eframe 0.35 needs
+  1.92. Build with `cargo +1.98.1 ...` (installed alongside).
+- Tests: `no_two_default_hotkeys_share_a_chord`, `legacy_repo_chords_move_off_the_tab_chords`,
+  `migration_matches_a_legacy_chord_however_it_is_spelled`,
+  `a_deliberate_repo_remap_survives_migration`,
+  `migrated_hotkeys_are_stable_across_save_and_load`, and in `keys.rs`
+  `cycle_dir_reads_the_direction_from_the_next_and_prev_chords`,
+  `cycle_dir_ignores_unbound_and_inexact_chords`,
+  `default_tab_and_repo_cycle_chords_never_fire_together`.
+- Live check via `--state-dir` with a seeded legacy config (window mode, group_by_repo on):
+  CONFIRMED by the user on a real window - tab cycle, repo switch, and grouping all work.
+  Not tried: `Cmd+Shift+[` on a non-US layout (Ghostty 1.2.0 broke here with physical codes).
+- Found while testing (NOT fixed here, both in `shell.rs`):
+  - Repo grouping only follows OSC 7 / 1337, and stdusk's own zsh/bash hooks emit only OSC 133.
+    macOS zsh and oh-my-zsh emit OSC 7 only when `TERM_PROGRAM == Apple_Terminal`, so a shell
+    with no OSC 7 of its own never groups (every tab stays in `Other`). The live run needed a
+    test-only `chpwd`/`precmd` hook in the scratch `$HOME/.zshrc`. Fix idea: emit OSC 7 from
+    the bridge hooks.
+  - `real_zdotdir` only skips an inherited `ZDOTDIR` equal to OUR dir. A `--state-dir` run moves
+    our dir, so launching one from inside a stdusk shell bridges to the parent's bridge dir and
+    zsh dies with "recursion limit exceeded". Workaround: launch with
+    `env -u ZDOTDIR -u STDUSK_REAL_ZDOTDIR`. Fix idea: prefer an inherited `STDUSK_REAL_ZDOTDIR`.
+
 ## Next up
 - **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
   audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
