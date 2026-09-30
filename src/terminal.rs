@@ -18,6 +18,10 @@ use base64::Engine;
 use eframe::egui::Color32;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+use crate::agent_pane::{AgentPane, AgentSetup, Fallback, PendingInput};
+use crate::agent_restore::{PaneNotice, SkipReason};
+use crate::agent_track::Status;
+use crate::agents::{AgentSession, Seen};
 use crate::colors;
 use crate::mouse::MouseReporting;
 use crate::osc::{OscEvent, OscScanner, ShellEvent};
@@ -161,6 +165,10 @@ pub(crate) struct TabState {
     pub(crate) saw_output: bool,
     /// Output chunks applied to the grid so far (never reset). Typed input waits on it for the echo.
     pub(crate) output_gen: u64,
+    /// The first status stdusk's own shell hook reported (OSC 133 `D` with the own mark) since the
+    /// UI last took one. Only the first after the agent decides its record, so later ones are not
+    /// kept.
+    pub(crate) first_status: Option<Status>,
     pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
     pub(crate) exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
     pub(crate) title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
@@ -250,6 +258,8 @@ pub(crate) struct SpawnOpts {
     pub(crate) bold_bright: bool,
     pub(crate) cwd: Option<String>,
     pub(crate) profile: Option<crate::config::Profile>, // launch profile overrides (shell/args/cwd/env)
+    /// Agent-resume wiring for this pane. `None` = the pane tracks no agent session.
+    pub(crate) agent_tracking: Option<AgentSetup>,
 }
 
 /// When an adopted pane re-asks for a repaint, counting from adoption. The first ask is immediate;
@@ -304,9 +314,13 @@ fn allow_ctrl_l(alt_screen: bool, running: Option<bool>, attempt: usize, replaye
 /// a pane blocked in a builtin `read` reports the shell's own
 /// (`real_pty_the_tty_reports_whether_a_command_is_running`).
 fn foreground_command(fd: std::os::fd::BorrowedFd<'_>, shell_pgid: Option<u32>) -> Option<bool> {
-    let shell = shell_pgid?;
+    Some(foreground_pgid(fd)? != shell_pgid?)
+}
+
+/// The process group that owns the tty's foreground. `None` when the fd is not a tty.
+fn foreground_pgid(fd: std::os::fd::BorrowedFd<'_>) -> Option<u32> {
     let fg = rustix::termios::tcgetpgrp(fd).ok()?;
-    Some(fg.as_raw_nonzero().get().cast_unsigned() != shell)
+    Some(fg.as_raw_nonzero().get().cast_unsigned())
 }
 
 /// Deliver a SIGWINCH to whatever is running on this pty, so a full-screen app repaints its screen.
@@ -372,6 +386,10 @@ pub(crate) struct PtyTerm {
     /// dropping this pane stops them at once - and releases the pty fd they duplicated - instead of
     /// leaving them poking a pane the user already closed.
     alive_token: Arc<()>,
+    /// The pane's agent state. `None` = agents off for this pane.
+    agent: Option<AgentPane>,
+    /// What restore says about this pane, drawn over it until the user acts in it. Never saved.
+    notice: Option<PaneNotice>,
 }
 
 /// A live pty handed over by a predecessor stdusk, plus everything a freshly built `Term` cannot
@@ -447,6 +465,10 @@ struct ReaderCtx {
     /// How long this shell had already been alive when we adopted it, so `uptime_secs` (and the
     /// crash-loop guard reading it) stays honest across a handoff instead of resetting to zero.
     uptime_base: std::time::Duration,
+    /// Typed at the first OSC 133 prompt mark (`ShellEvent::PromptStart`), if still waiting.
+    pending: PendingInput,
+    /// Only the pane shell may receive queued input after a prompt mark.
+    prompt_owner: Option<(std::os::fd::OwnedFd, u32)>,
 }
 
 /// The pty pump: parse output into the `Term`, answer queries, track progress/OSC state, and on
@@ -463,6 +485,8 @@ fn spawn_reader(c: ReaderCtx) {
         detect_progress,
         mut child,
         uptime_base,
+        pending,
+        prompt_owner,
     } = c;
     thread::spawn(move || {
         let spawned = std::time::Instant::now(); // for ExitInfo.uptime_secs
@@ -528,6 +552,7 @@ fn spawn_reader(c: ReaderCtx) {
                     let mut clip_update = None;
                     let mut cmd_update = None;
                     let mut notify = None; // Some(exit) when a long command just finished
+                    let mut status = None; // the first own status in this chunk
                     for ev in osc_events {
                         match ev {
                             OscEvent::Progress(p) => progress = p, // OSC 9;4 wins over %-scrape
@@ -548,8 +573,16 @@ fn spawn_reader(c: ReaderCtx) {
                                     cmd_update = Some(CmdState::Running);
                                     cmd_started = Some(std::time::Instant::now());
                                 }
-                                ShellEvent::CommandEnd { code, .. } => {
+                                ShellEvent::CommandEnd { code, own } => {
                                     cmd_update = Some(cmd_from_exit(code));
+                                    // Another shell integration (iTerm2's) marks every prompt, so
+                                    // only our own mark can say a command ran and how it ended.
+                                    if own && let Some(code) = code {
+                                        status.get_or_insert(Status {
+                                            code,
+                                            at: std::time::Instant::now(),
+                                        });
+                                    }
                                     // Flag a "done" notification only for long-running commands.
                                     // Notify only for commands that ran a while (a "long" job).
                                     if cmd_started.take().is_some_and(|t| {
@@ -587,6 +620,9 @@ fn spawn_reader(c: ReaderCtx) {
                         if let Some(code) = notify {
                             s.done_notify = Some(code);
                         }
+                        if let Some(status) = status {
+                            s.first_status.get_or_insert(status);
+                        }
                     }
                     // Query answers go straight back to the pty; after an alt-screen
                     // heal, a Ctrl-L asks the shell to repaint the prompt it may have
@@ -597,6 +633,17 @@ fn spawn_reader(c: ReaderCtx) {
                         if healed_alt {
                             let _ = w.write_all(b"\x0c");
                         }
+                        let _ = w.flush();
+                    }
+                    // A startup child can emit prompt marks too. Keep its input untouched.
+                    if prompt_started
+                        && prompt_owner
+                            .as_ref()
+                            .is_some_and(|(fd, pid)| foreground_pgid(fd.as_fd()) == Some(*pid))
+                        && let Some(bytes) = pending.take()
+                    {
+                        let mut w = writer_reader.lock().unwrap();
+                        let _ = w.write_all(&bytes);
                         let _ = w.flush();
                     }
                     // Defer (don't paint per read): coalesce the burst so a clear+redraw
@@ -616,8 +663,16 @@ fn spawn_reader(c: ReaderCtx) {
 
 impl PtyTerm {
     pub(crate) fn spawn(cols: usize, rows: usize, ctx: egui::Context, opts: &SpawnOpts) -> Self {
-        let SpawnOpts { detect_progress, shell_integration, autosuggestions, cwd, profile, .. } =
-            opts.clone();
+        let SpawnOpts {
+            detect_progress,
+            shell_integration,
+            autosuggestions,
+            cwd,
+            profile,
+            agent_tracking,
+            ..
+        } = opts.clone();
+        let agent = agent_tracking.map(AgentPane::new);
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -646,7 +701,11 @@ impl PtyTerm {
             cmd.cwd(dir);
         }
         // Spawn login+interactive (so PATH-setting profile files run) + optional OSC 133 hooks.
-        crate::shell::configure(&mut cmd, &shell, shell_integration, autosuggestions);
+        let marks_prompts =
+            crate::shell::configure(&mut cmd, &shell, shell_integration, autosuggestions);
+        // A shell that marks its prompts releases the queued input itself. Only one that cannot
+        // needs the fallback timer.
+        let agent = agent.map(|a| a.shell_marks_prompts(marks_prompts));
         if let Some(p) = &profile {
             for a in &p.args {
                 cmd.arg(a);
@@ -678,6 +737,10 @@ impl PtyTerm {
             EventProxy { state: state.clone(), replies: replies.clone() },
         )));
 
+        let pty = Pty::Spawned(pair.master);
+        let prompt_owner = agent
+            .as_ref()
+            .and_then(|_| pty.as_fd().and_then(|fd| fd.try_clone_to_owned().ok()).zip(shell_pid));
         spawn_reader(ReaderCtx {
             reader,
             term: term.clone(),
@@ -688,12 +751,14 @@ impl PtyTerm {
             detect_progress,
             child: Some(child),
             uptime_base: std::time::Duration::ZERO,
+            pending: agent.as_ref().map(AgentPane::pending).unwrap_or_default(),
+            prompt_owner,
         });
 
         Self {
             term,
             writer,
-            pty: Pty::Spawned(pair.master),
+            pty,
             state,
             cols,
             rows,
@@ -705,6 +770,8 @@ impl PtyTerm {
             started: std::time::Instant::now(),
             uptime_base: std::time::Duration::ZERO,
             alive_token: Arc::new(()),
+            agent,
+            notice: None,
         }
     }
 
@@ -789,6 +856,8 @@ impl PtyTerm {
             detect_progress: opts.detect_progress,
             child: None, // not our child: EOF is the only exit signal, code stays unknown
             uptime_base: alive,
+            pending: PendingInput::default(), // a live handoff resumes nothing
+            prompt_owner: None,
         });
 
         let me = Self {
@@ -806,6 +875,9 @@ impl PtyTerm {
             started: std::time::Instant::now(),
             uptime_base: alive,
             alive_token: Arc::new(()),
+            // The agent runs on in the adopted shell, so the pane tracks it when tracking is on.
+            agent: opts.agent_tracking.as_ref().map(|_| AgentPane::adopted()),
+            notice: None,
         };
         me.request_redraw(alt_screen, cmd_running, !replay.is_empty(), redraw_ctx);
         Ok(me)
@@ -865,6 +937,68 @@ impl PtyTerm {
         });
     }
 
+    /// The record to save for this pane.
+    pub(crate) fn agent_saved(&self) -> Option<crate::session::SavedAgent> {
+        self.agent.as_ref()?.saved()
+    }
+
+    /// Advance this pane's record by one scan result, taken at `taken`, and the status the shell
+    /// reported since the last one.
+    pub(crate) fn step_agent(&mut self, seen: Seen, taken: std::time::Instant) {
+        let status = self.take_status();
+        if let Some(agent) = &mut self.agent {
+            agent.scan(status, seen, taken);
+        }
+    }
+
+    /// Apply the status that no scan has seen yet. The egui frame in main.rs calls this, also
+    /// before a final snapshot, so the saved record knows a crash within a frame of it. `true` if
+    /// one came in.
+    pub(crate) fn apply_pending_status(&mut self) -> bool {
+        let Some(agent) = &mut self.agent else { return false };
+        let status = self.state.lock().unwrap().first_status.take();
+        agent.apply_status(status);
+        status.is_some()
+    }
+
+    fn take_status(&self) -> Option<Status> {
+        self.state.lock().unwrap().first_status.take()
+    }
+
+    /// Hold a session that stdusk reopened until an agent binds to it (see `agent_track`).
+    pub(crate) fn restore_agent(&mut self, session: AgentSession, crash_hint: bool) {
+        if let Some(agent) = &mut self.agent {
+            agent.restore(session, crash_hint);
+        }
+    }
+
+    /// Hold the session of a live handoff, whose agent keeps running (see `agent_track`).
+    pub(crate) fn adopt_agent(&mut self, session: AgentSession, crash_hint: bool) {
+        if let Some(agent) = &mut self.agent {
+            agent.adopt(session, crash_hint);
+        }
+    }
+
+    /// The fallback for a shell that marks no prompt (see [`AgentPane::fallback_input`]).
+    pub(crate) fn release_pending_after_wait(&mut self) {
+        let at_prompt = || {
+            self.pty.as_fd().and_then(|fd| foreground_command(fd, self.shell_pid)) == Some(false)
+        };
+        match self.agent.as_mut().and_then(|a| a.fallback_input(at_prompt)) {
+            Some(Fallback::Type(bytes)) => self.write_input(&bytes),
+            // The pane says what happened, in place of a notice that promised a typed command.
+            Some(Fallback::Drop) => {
+                if let Some(saved) = self.agent_saved() {
+                    self.notice = Some(PaneNotice::NotResumed {
+                        kind: saved.kind,
+                        reason: SkipReason::ShellBusy,
+                    });
+                }
+            }
+            None => {}
+        }
+    }
+
     /// How long this shell has been running, counting time under previous owners - what a further
     /// handoff must carry so the crash-loop guard never reads a long-lived shell as freshly spawned.
     pub(crate) fn alive(&self) -> std::time::Duration {
@@ -898,6 +1032,13 @@ impl PtyTerm {
         self.shell_pid
     }
 
+    /// The tty's foreground process group. A job the shell starts leads its own group, so this is
+    /// the pid of the foreground job's first process. It picks the agent that the user works in
+    /// when two agents of one kind run in the pane (see `procwatch::nearest_agent`).
+    pub(crate) fn foreground_pgid(&self) -> Option<u32> {
+        foreground_pgid(self.pty.as_fd()?)
+    }
+
     /// Terminate the shell's whole pty SESSION - the shell AND every job it started - so nothing
     /// leaks as an orphan. See [`kill_pty_session`] for why the session, not just the process group.
     /// Idempotent (the `killed` guard) and safe on an already-dead session. No-op off unix, when the
@@ -922,7 +1063,9 @@ impl PtyTerm {
 
     pub(crate) fn report_theme(&mut self, dark: bool) {
         if self.theme_reports() {
-            self.send(crate::modes::theme_report(dark));
+            // stdusk's own report, not the user's typing: it must keep the restore notice and the
+            // queued resume command.
+            self.write_input(crate::modes::theme_report(dark));
         }
     }
 
@@ -947,11 +1090,36 @@ impl PtyTerm {
         }
     }
 
+    /// Input from the user. It ends the restore notice, and it drops a queued resume command, which
+    /// would garble a line the user is typing.
     pub(crate) fn send(&mut self, bytes: &[u8]) {
+        if let Some(agent) = &self.agent {
+            agent.discard_pending();
+        }
+        self.notice = None;
+        self.write_input(bytes);
+    }
+
+    /// Write to the pty for stdusk itself (the fallback that types a resume command). Unlike
+    /// [`PtyTerm::send`], it says nothing about the user's own input.
+    fn write_input(&self, bytes: &[u8]) {
         if let Ok(mut w) = self.writer.lock() {
             let _ = w.write_all(bytes);
             let _ = w.flush();
         }
+    }
+
+    pub(crate) fn notice(&self) -> Option<PaneNotice> {
+        self.notice
+    }
+
+    pub(crate) fn set_notice(&mut self, notice: PaneNotice) {
+        self.notice = Some(notice);
+    }
+
+    /// The user clicked in the pane.
+    pub(crate) fn dismiss_notice(&mut self) {
+        self.notice = None;
     }
 
     /// Paste text, wrapped in bracketed-paste markers when the app enabled that mode.
@@ -1068,7 +1236,7 @@ impl PtyTerm {
     }
 
     /// Exit report for a dead shell (pty EOF observed + reaped), if any. Stays set until the
-    /// pane is respawned or closed - the UI reads it every frame to apply `on_exit`.
+    /// pane is respawned or closed - the egui frame in main.rs reads it to apply `on_exit`.
     pub(crate) fn exited(&self) -> Option<ExitInfo> {
         self.state.lock().unwrap().exited
     }
@@ -1407,6 +1575,7 @@ mod tests {
         SpawnOpts, cmd_from_exit, exit_action, on_exit_mode, resolve_cwd, resolve_shell,
         snap_glyph,
     };
+    use crate::agent_track::Status;
     use crate::config::Profile;
     use crate::mouse::wheel_sgr;
 
@@ -1497,24 +1666,7 @@ mod tests {
 
     /// Spawn a REAL pty running `/bin/sh -c <script>` (no integration hooks) on a 20x5 grid.
     fn e2e_term(script: &str) -> PtyTerm {
-        let opts = SpawnOpts {
-            detect_progress: false,
-            shell_integration: false,
-            autosuggestions: false,
-            scrollback_lines: 500,
-            word_separators: " ".into(),
-            bold_bright: false,
-            cwd: None,
-            profile: Some(Profile {
-                name: "e2e".into(),
-                shell: Some("/bin/sh".into()),
-                args: vec!["-c".into(), script.into()],
-                cwd: None,
-                env: std::collections::BTreeMap::new(),
-                color: None,
-            }),
-        };
-        PtyTerm::spawn(20, 5, egui::Context::default(), &opts)
+        e2e_term_sized(20, 5, script)
     }
 
     /// Poll `check` until it returns Some or the timeout hits.
@@ -1593,23 +1745,8 @@ mod tests {
     /// job control (a process group per foreground job) actually happens. `-f` skips the user's rc
     /// files so the probe is the same on any machine.
     fn interactive_zsh() -> PtyTerm {
-        let opts = SpawnOpts {
-            detect_progress: false,
-            shell_integration: false,
-            autosuggestions: false,
-            scrollback_lines: 200,
-            word_separators: " ".into(),
-            bold_bright: false,
-            cwd: None,
-            profile: Some(Profile {
-                name: "leak-probe".into(),
-                shell: Some("/bin/zsh".into()),
-                args: vec!["-f".into()],
-                cwd: None,
-                env: std::collections::BTreeMap::new(),
-                color: None,
-            }),
-        };
+        let mut opts = crate::test_support::spawn_opts("/bin/zsh", &["-f"]);
+        opts.scrollback_lines = 200;
         PtyTerm::spawn(80, 24, egui::Context::default(), &opts)
     }
 
@@ -1978,16 +2115,8 @@ mod tests {
         let (fd, _) = donor.handoff_fd().expect("master fd must be borrowable");
         let owned = fd.try_clone_to_owned().expect("dup the master");
         donor.mark_handed_off();
-        let opts = SpawnOpts {
-            detect_progress: false,
-            shell_integration: false,
-            autosuggestions: false,
-            scrollback_lines: 500,
-            word_separators: " ".into(),
-            bold_bright: false,
-            cwd: None,
-            profile: None,
-        };
+        let mut opts = crate::test_support::spawn_opts("/bin/sh", &[]);
+        opts.profile = None;
         PtyTerm::adopt(
             egui::Context::default(),
             super::Adopted {
@@ -2104,23 +2233,7 @@ mod tests {
     /// A donor on a REAL 80x24 pty (the 20x5 `e2e_term` grid is too small to say anything about row
     /// positions or scrollback).
     fn e2e_term_sized(cols: usize, rows: usize, script: &str) -> PtyTerm {
-        let opts = SpawnOpts {
-            detect_progress: false,
-            shell_integration: false,
-            autosuggestions: false,
-            scrollback_lines: 500,
-            word_separators: " ".into(),
-            bold_bright: false,
-            cwd: None,
-            profile: Some(Profile {
-                name: "e2e".into(),
-                shell: Some("/bin/sh".into()),
-                args: vec!["-c".into(), script.into()],
-                cwd: None,
-                env: std::collections::BTreeMap::new(),
-                color: None,
-            }),
-        };
+        let opts = crate::test_support::spawn_opts("/bin/sh", &["-c", script]);
         PtyTerm::spawn(cols, rows, egui::Context::default(), &opts)
     }
 
@@ -2360,16 +2473,8 @@ mod tests {
         let owned = fd.try_clone_to_owned().expect("dup the master");
         donor.mark_handed_off(); // the donor must not reap what it just gave away
 
-        let opts = SpawnOpts {
-            detect_progress: false,
-            shell_integration: false,
-            autosuggestions: false,
-            scrollback_lines: 500,
-            word_separators: " ".into(),
-            bold_bright: false,
-            cwd: None,
-            profile: None,
-        };
+        let mut opts = crate::test_support::spawn_opts("/bin/sh", &[]);
+        opts.profile = None;
         let heir = PtyTerm::adopt(
             egui::Context::default(),
             super::Adopted {
@@ -2763,5 +2868,588 @@ mod tests {
             took >= bound && took < std::time::Duration::from_secs(1),
             "the wait must end at its bound, took {took:?}"
         );
+    }
+
+    // --- Pending resume input ------------------------------------------------------------------
+
+    /// Spawn options for a `/bin/sh -c script` pane with `input` queued for its first prompt and
+    /// `fallback` as the wait before the fallback may type it (the pane has no integration).
+    fn pending_opts(
+        script: &str,
+        input: Option<&[u8]>,
+        fallback: std::time::Duration,
+    ) -> SpawnOpts {
+        let mut opts = crate::test_support::spawn_opts("/bin/sh", &["-c", script]);
+        opts.agent_tracking = Some(crate::agent_pane::AgentSetup {
+            pending_input: input.map(<[u8]>::to_vec),
+            fallback_delay: fallback,
+        });
+        opts
+    }
+
+    /// Wait until a command, and not the shell, owns the tty foreground. A printed marker does not
+    /// say that: the shell prints it before it forks the command.
+    fn wait_until_a_command_owns_the_tty(term: &PtyTerm) {
+        let busy = |t: &PtyTerm| t.foreground_pgid().is_some_and(|fg| Some(fg) != t.shell_pid());
+        poll_term(term, |t| busy(t).then_some(())).expect("no command took the tty");
+    }
+
+    fn pending_term(script: &str, input: &[u8], fallback: std::time::Duration) -> PtyTerm {
+        let opts = pending_opts(script, Some(input), fallback);
+        PtyTerm::spawn(60, 5, egui::Context::default(), &opts)
+    }
+
+    fn count_in(text: &str, needle: &str) -> usize {
+        text.matches(needle).count()
+    }
+
+    #[test]
+    fn real_pty_pending_input_waits_for_the_first_prompt_mark_and_types_once() {
+        // The shell is "starting up" for 0.8 s, then marks its prompt twice (OSC 133;A). The queued
+        // text must not appear before the first mark, and must appear exactly once after both
+        // (the tty echoes input while a shell builtin keeps ownership).
+        let term = pending_term(
+            "sleep 0.8; printf '\\033]133;A\\007READY'; read -t 0.3 line; printf '\\033]133;A\\007AGAIN'; while :; do read line; done",
+            b"resume-me",
+            std::time::Duration::from_secs(60),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!grid_text(&term).contains("resume-me"), "typed before the first prompt");
+        poll_term(&term, |t| grid_text(t).contains("AGAIN").then_some(()))
+            .expect("the second prompt mark never arrived");
+        assert_eq!(count_in(&grid_text(&term), "resume-me"), 1, "{:?}", grid_text(&term));
+    }
+
+    #[test]
+    fn real_pty_the_fallback_types_at_an_idle_shell_once_the_wait_is_over() {
+        // No integration, so no prompt mark. A builtin `read` keeps the shell itself in the
+        // foreground, which is what a shell at its prompt looks like to the tty.
+        let mut term = pending_term(
+            "printf ARMED; while :; do read line; done",
+            b"via-fallback",
+            std::time::Duration::from_millis(600),
+        );
+        poll_term(&term, |t| grid_text(t).contains("ARMED").then_some(())).unwrap();
+        term.release_pending_after_wait();
+        assert!(!grid_text(&term).contains("via-fallback"), "the fallback fired early");
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        term.release_pending_after_wait();
+        poll_term(&term, |t| grid_text(t).contains("via-fallback").then_some(()))
+            .expect("the fallback never typed the input");
+        term.release_pending_after_wait(); // a second call must not type again
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(count_in(&grid_text(&term), "via-fallback"), 1);
+    }
+
+    #[test]
+    fn real_pty_the_fallback_drops_the_input_when_a_command_owns_the_tty() {
+        // A foreground `sleep` runs in its own process group, like `vim` or `ssh` that the user
+        // started during the wait. Typing there would feed the command to that program.
+        let mut term =
+            pending_term("while :; do sleep 30; done", b"never-typed", std::time::Duration::ZERO);
+        wait_until_a_command_owns_the_tty(&term);
+        term.release_pending_after_wait();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!grid_text(&term).contains("never-typed"), "{:?}", grid_text(&term));
+        let queue = term.agent.as_ref().unwrap().pending();
+        assert!(queue.take().is_none(), "the input is dropped, not kept for later");
+    }
+
+    #[test]
+    fn real_pty_user_input_drops_the_pending_command() {
+        let mut term = pending_term(
+            "printf ARMED; while :; do read line; done",
+            b"resume-me",
+            std::time::Duration::from_millis(200),
+        );
+        poll_term(&term, |t| grid_text(t).contains("ARMED").then_some(())).unwrap();
+        term.send(b"x");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        term.release_pending_after_wait();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let text = grid_text(&term);
+        assert!(text.contains('x') && !text.contains("resume-me"), "{text:?}");
+    }
+
+    #[test]
+    fn real_pty_a_pane_without_pending_input_types_nothing() {
+        let opts = pending_opts(
+            "printf '\\033]133;A\\007QUIET'; cat",
+            None,
+            std::time::Duration::from_millis(100),
+        );
+        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        poll_term(&term, |t| grid_text(t).contains("QUIET").then_some(())).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        term.release_pending_after_wait();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            grid_text(&term).trim_end(),
+            "QUIET",
+            "nothing may be typed into an ordinary pane"
+        );
+    }
+
+    #[test]
+    fn real_pty_a_startup_child_prompt_keeps_resume_queued_for_the_shell() {
+        let fixture = crate::test_support::ShellFixture::new("foreign-prompt");
+        std::fs::write(
+            fixture.home.join("startup.sh"),
+            "printf '\\033]133;A\\007CHILD_READY'; read -t 1 line; printf '%s' \"$line\" > \"$HOME/received\"\n",
+        ).unwrap();
+        std::fs::write(fixture.home.join(".zshrc"), "/bin/sh \"$HOME/startup.sh\"\n").unwrap();
+        let mut opts = fixture.zsh_opts();
+        opts.agent_tracking = Some(crate::agent_pane::AgentSetup {
+            pending_input: Some(b"printf resumed > \"$HOME/resumed\"\r".to_vec()),
+            fallback_delay: std::time::Duration::from_secs(60),
+        });
+        let term = PtyTerm::spawn(120, 5, egui::Context::default(), &opts);
+        poll_term(&term, |_| fixture.home.join("received").exists().then_some(()))
+            .expect("startup child did not finish");
+        assert_eq!(
+            std::fs::read_to_string(fixture.home.join("received")).unwrap(),
+            "",
+            "the startup child received the resume command"
+        );
+        poll_term(&term, |_| fixture.home.join("resumed").exists().then_some(()))
+            .expect("the shell did not receive the queued command");
+        assert_eq!(std::fs::read_to_string(fixture.home.join("resumed")).unwrap(), "resumed");
+    }
+
+    #[test]
+    fn real_pty_zsh_shows_the_pending_command_after_its_first_prompt() {
+        // The whole restore path in a real zsh with our integration bridge: the command is queued
+        // before the shell starts, the first OSC 133;A releases it, and zsh's line editor shows it.
+        // (`prefill`: no Enter, so nothing runs and the text stays on the prompt line.) The
+        // fallback delay is huge, so only the prompt mark can have typed it.
+        let fixture = crate::test_support::ShellFixture::new("zshpending");
+        let mut opts = fixture.zsh_opts();
+        opts.agent_tracking = Some(crate::agent_pane::AgentSetup {
+            pending_input: Some(b"claude --resume 0c2cbc96-1111-4222-8333-444455556666".to_vec()),
+            fallback_delay: std::time::Duration::from_secs(60),
+        });
+        let term = PtyTerm::spawn(120, 5, egui::Context::default(), &opts);
+        let shown = poll_term(&term, |t| {
+            grid_text(t).contains("--resume 0c2cbc96-1111-4222-8333-444455556666").then_some(())
+        });
+        assert!(shown.is_some(), "zsh never showed the pending command: {:?}", grid_text(&term));
+    }
+
+    /// A real integrated zsh following an agent record, with its fixture and repeatable scan.
+    fn zsh_agent_pane(
+        tag: &str,
+    ) -> (PtyTerm, crate::test_support::ShellFixture, crate::agents::Seen) {
+        use crate::agents::{AgentKind, AgentSession, Seen, SessionId};
+        let fixture = crate::test_support::ShellFixture::new(tag);
+        let mut opts = fixture.zsh_opts();
+        opts.agent_tracking = Some(crate::agent_pane::AgentSetup::default());
+        let mut term = PtyTerm::spawn(100, 5, egui::Context::default(), &opts);
+        // The first prompt is up once zsh has printed anything after its rc files ran.
+        poll_term(&term, |t| (!grid_text(t).trim().is_empty()).then_some(())).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        // A restored record, bound by the scan that finds its resume command. Later scans of the
+        // agent are silent, as Codex is before its first turn: only a record that is kept can
+        // survive them.
+        let id = SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap();
+        let session = AgentSession {
+            kind: AgentKind::Claude,
+            id: id.clone(),
+            cwd: "/w".into(),
+            transcript: None,
+        };
+        term.restore_agent(session, false);
+        let bind = Seen::Agent {
+            kind: AgentKind::Claude,
+            pid: 4242,
+            session: None,
+            argv_session: Some(id),
+        };
+        term.step_agent(bind, std::time::Instant::now());
+        let seen =
+            Seen::Agent { kind: AgentKind::Claude, pid: 4242, session: None, argv_session: None };
+        (term, fixture, seen)
+    }
+
+    /// Wait until the shell has reported a status that no scan took yet.
+    fn wait_for_status(term: &PtyTerm) {
+        poll_term(term, |t| t.state.lock().unwrap().first_status.is_some().then_some(()))
+            .expect("the shell never reported its status");
+    }
+
+    /// Run `command` in a real zsh, in a pane whose record follows an agent. Then let the scans
+    /// find the agent gone, and say if the record survived. The command stands in for the agent
+    /// process.
+    fn record_survives_command(command: &str) -> bool {
+        let (mut term, _fixture, _) = zsh_agent_pane(&command.len().to_string());
+        term.send(format!("{command}\r").as_bytes());
+        // The shell reports the status (OSC 133;D) at its next prompt.
+        wait_for_status(&term);
+        for _ in 0..4 {
+            term.step_agent(crate::agents::Seen::NoAgent, std::time::Instant::now());
+        }
+        term.agent_saved().is_some()
+    }
+
+    #[test]
+    fn real_pty_zsh_reports_a_kill_status_and_the_record_survives_only_a_crash() {
+        // The zsh hook prints `133;D;$?`, and zsh turns a signal death into 128 plus the signal.
+        // SIGKILL is 137 (a crash: kept). SIGTERM is 143 and a plain exit is 3 (dropped).
+        assert!(record_survives_command("sh -c 'kill -9 $$'"), "SIGKILL must keep the record");
+        assert!(!record_survives_command("sh -c 'kill -15 $$;'"), "SIGTERM must drop it");
+        assert!(!record_survives_command("sh -c 'exit 3'"), "a plain exit must drop it");
+    }
+
+    #[test]
+    fn real_pty_zsh_ctrl_z_and_later_commands_do_not_end_a_live_agents_record() {
+        // Ctrl+Z stops the foreground job and the shell reports a status for it (146 on macOS).
+        // Every later command reports one too. The agent still lives, so a scan after them shows
+        // it and the record stays. `sleep` stands in for the agent process.
+        let (mut term, _fixture, alive) = zsh_agent_pane("ctrlz");
+        term.send(b"sleep 30\r");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        term.send(b"\x1a");
+        wait_for_status(&term);
+        // The scan after the status still sees the agent, so the status was no exit.
+        term.step_agent(alive.clone(), std::time::Instant::now());
+        assert_eq!(term.agent_saved().map(|a| a.crashed), Some(false), "after Ctrl+Z");
+        term.send(b"true\r");
+        wait_for_status(&term);
+        term.step_agent(alive.clone(), std::time::Instant::now());
+        assert_eq!(term.agent_saved().map(|a| a.crashed), Some(false), "after Ctrl+Z and true");
+        // `fg` reports nothing until the job ends. Ctrl+C then ends it, and the agent is gone.
+        term.send(b"fg\r");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        term.step_agent(alive, std::time::Instant::now());
+        assert_eq!(term.agent_saved().map(|a| a.crashed), Some(false), "after fg");
+        term.send(b"\x03");
+        wait_for_status(&term);
+        for _ in 0..2 {
+            term.step_agent(crate::agents::Seen::NoAgent, std::time::Instant::now());
+        }
+        assert!(term.agent_saved().is_none(), "the agent ended, so its record ends");
+    }
+
+    /// The statuses a real bash with our integration reports for `keys`, typed one at a time.
+    /// Waits `settle` after each key so the prompt (and its status mark) has come back, and takes
+    /// what the shell reported for that key.
+    fn bash_reported_statuses(keys: &[&str]) -> Vec<i32> {
+        bash_with_rc_statuses("", keys)
+    }
+
+    /// The same, with `user_rc` as the user's `~/.bash_profile` that our bashrc sources.
+    fn bash_with_rc_statuses(user_rc: &str, keys: &[&str]) -> Vec<i32> {
+        let fixture = crate::test_support::ShellFixture::new("bashexit");
+        std::fs::write(fixture.home.join(".bash_profile"), user_rc).unwrap();
+        let opts = fixture.bash_opts();
+        let mut term = PtyTerm::spawn(100, 5, egui::Context::default(), &opts);
+        poll_term(&term, |t| grid_text(t).contains('$').then_some(())).expect("no bash prompt");
+        let settle = std::time::Duration::from_millis(400);
+        std::thread::sleep(settle);
+        let mut got = Vec::new();
+        for key in keys {
+            term.send(format!("{key}\r").as_bytes());
+            std::thread::sleep(settle);
+            got.extend(term.take_status().map(|s| s.code));
+        }
+        got
+    }
+
+    #[test]
+    fn real_pty_bash_reports_a_status_only_after_a_command_ran() {
+        // The first prompt and an empty Enter report nothing, as in zsh. A repeated command that
+        // `HISTCONTROL` keeps out of the history still reports when its status differs.
+        assert_eq!(
+            bash_reported_statuses(&["", "", "true", "", "false", "", "true"]),
+            vec![0, 1, 0]
+        );
+        assert_eq!(bash_reported_statuses(&["", ""]), Vec::<i32>::new());
+        assert_eq!(bash_reported_statuses(&["sh -c 'kill -9 $$'", ""]), vec![137]);
+    }
+
+    #[test]
+    fn real_pty_a_crash_status_no_scan_has_seen_is_applied_before_the_final_save() {
+        // An out-of-memory kill (137) a second before Cmd+Q: the snapshot must save the pane's
+        // session as crashed, not as a normal record that would auto-run.
+        use crate::agents::{AgentKind, AgentSession, Seen, SessionId};
+        let opts = pending_opts("cat", None, std::time::Duration::from_secs(60));
+        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        let session = AgentSession {
+            kind: AgentKind::Claude,
+            id: SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap(),
+            cwd: "/w".into(),
+            transcript: None,
+        };
+        let seen = Seen::Agent {
+            kind: AgentKind::Claude,
+            pid: 7,
+            session: Some(session),
+            argv_session: None,
+        };
+        term.step_agent(seen, std::time::Instant::now());
+        assert_eq!(term.agent_saved().map(|a| a.crashed), Some(false));
+        assert!(!term.apply_pending_status(), "nothing reported yet");
+        let status = Status { code: 137, at: std::time::Instant::now() };
+        term.state.lock().unwrap().first_status = Some(status);
+        assert!(term.apply_pending_status(), "a status came in");
+        assert_eq!(term.agent_saved().map(|a| a.crashed), Some(true));
+        assert!(term.state.lock().unwrap().first_status.is_none(), "the status is used once");
+    }
+
+    #[test]
+    fn real_pty_only_stdusks_own_mark_makes_a_status_and_the_first_one_is_kept() {
+        // Two own marks in a burst (5, then 6), a foreign one (9, no `stdusk` word) between and
+        // after them. The pane keeps the first own status. The foreign mark makes none.
+        let script = "printf '\\033]133;D;9\\007\\033]133;D;5;stdusk\\007\\033]133;D;9\\007\\033]133;D;6;stdusk\\007READY'; cat";
+        let term = PtyTerm::spawn(
+            60,
+            5,
+            egui::Context::default(),
+            &pending_opts(script, None, std::time::Duration::from_secs(60)),
+        );
+        poll_term(&term, |t| grid_text(t).contains("READY").then_some(())).unwrap();
+        assert_eq!(term.take_status().map(|s| s.code), Some(5));
+        assert_eq!(term.take_status(), None, "one status per take");
+        // The tab dot still follows the foreign mark: it is the last `D` the reader saw (6).
+        assert_eq!(term.cmd_state(), CmdState::Fail);
+    }
+
+    /// A user rc like iTerm2's integration: a `133;D;$?` mark at every prompt, the first included.
+    /// (The real script does `printf "\033]133;D;%s\007" "$STATUS"` in its precmd.)
+    const FOREIGN_ZSH_D: &str = "iterm2_precmd() { printf '\\033]133;D;%s\\007' \"$?\"; }\n\
+        precmd_functions=($precmd_functions iterm2_precmd)\n";
+    const FOREIGN_BASH_D: &str = "PROMPT_COMMAND='printf \"\\033]133;D;%s\\007\" \"$?\"'\n";
+
+    #[test]
+    fn real_pty_zsh_ignores_a_foreign_prompt_mark_and_keeps_its_own_status() {
+        use crate::agents::{AgentKind, AgentSession, SessionId};
+        let fixture = crate::test_support::ShellFixture::new("zshforeign");
+        std::fs::write(fixture.home.join(".zshrc"), FOREIGN_ZSH_D).unwrap();
+        let mut opts = fixture.zsh_opts();
+        opts.agent_tracking = Some(crate::agent_pane::AgentSetup::default());
+        let mut term = PtyTerm::spawn(100, 5, egui::Context::default(), &opts);
+        let id = SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap();
+        let session =
+            AgentSession { kind: AgentKind::Codex, id, cwd: "/w".into(), transcript: None };
+        term.restore_agent(session, false);
+        // The first prompt carries the foreign mark. Give it time, then take what was reported.
+        poll_term(&term, |t| (t.cmd_state() != CmdState::Idle).then_some(()))
+            .expect("the foreign mark at the first prompt never reached the tab dot");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(term.take_status(), None, "a foreign mark is no status");
+        term.step_agent(crate::agents::Seen::NoAgent, std::time::Instant::now());
+        assert!(term.agent_saved().is_some(), "the restored record survives the first prompt");
+        // An empty Enter makes another foreign mark, and still nothing.
+        term.send(b"\r");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert_eq!(term.take_status(), None);
+        // A command makes our own mark, and only then is a status reported.
+        term.send(b"true\r");
+        wait_for_status(&term);
+        term.step_agent(crate::agents::Seen::NoAgent, std::time::Instant::now());
+        assert!(term.agent_saved().is_none(), "the first command ended the waiting record");
+    }
+
+    #[test]
+    fn real_pty_bash_ignores_a_foreign_prompt_mark_and_keeps_its_own_status() {
+        // A user PROMPT_COMMAND that marks every prompt (the first, and each empty Enter) as
+        // iTerm2's bash integration does. Only a command that ran makes our own status.
+        let got = bash_with_rc_statuses(FOREIGN_BASH_D, &["", "true", "", "false"]);
+        assert_eq!(got, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_pane_notice_ends_on_the_users_input_or_click_and_never_on_stdusks_own_typing() {
+        use crate::agent_restore::PaneNotice;
+        use crate::agents::AgentKind;
+        let notice = PaneNotice::CrashHint { kind: AgentKind::Claude };
+        // A builtin `read` keeps the shell itself in the foreground, so the fallback may type.
+        let new_term = || {
+            let script = "printf ARMED; while :; do read line; done";
+            let opts = pending_opts(script, Some(b"cmd"), std::time::Duration::ZERO);
+            let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+            term.set_notice(notice);
+            poll_term(&term, |t| grid_text(t).contains("ARMED").then_some(())).unwrap();
+            term
+        };
+        assert_eq!(new_term().notice(), Some(notice));
+        let mut term = new_term();
+        term.send(b"x");
+        assert_eq!(term.notice(), None, "a key ends it");
+        let mut term = new_term();
+        term.dismiss_notice();
+        assert_eq!(term.notice(), None, "a click ends it");
+        // The fallback types the resume command for the user. That is no reason to end the notice.
+        let mut term = new_term();
+        term.release_pending_after_wait();
+        poll_term(&term, |t| grid_text(t).contains("cmd").then_some(()))
+            .expect("the fallback never typed the input");
+        assert_eq!(term.notice(), Some(notice));
+    }
+
+    #[test]
+    fn a_pane_notice_draws_each_frame_until_a_key_reaches_the_pane() {
+        // The frames run as the workspace runs them: read the keys, send them to the pane, and
+        // draw the pane's notice over the grid.
+        use crate::agent_restore::PaneNotice;
+        use crate::agents::AgentKind;
+        let opts = pending_opts("cat", None, std::time::Duration::from_secs(60));
+        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        term.set_notice(PaneNotice::CrashHint { kind: AgentKind::Codex });
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 400.0));
+        let frame = |term: &mut PtyTerm, events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                focused: true,
+                ..Default::default()
+            };
+            let (mut drawn, mut keys) = (false, Vec::new());
+            let _ = ctx.run_ui(raw, |ui| {
+                keys = crate::ui::collect_input(ui, false, false, false);
+                if let Some(notice) = term.notice() {
+                    let text = crate::ui::pane_notice_text(notice);
+                    let pill = crate::ui::draw_pane_notice(ui, screen, &text);
+                    drawn = pill.width() > 0.0 && screen.contains_rect(pill);
+                }
+            });
+            if !keys.is_empty() {
+                term.send(&keys);
+            }
+            (drawn, keys)
+        };
+        assert_eq!(frame(&mut term, vec![]), (true, vec![]), "drawn on the first frame");
+        assert_eq!(frame(&mut term, vec![]), (true, vec![]), "and on every frame after");
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let (drawn, keys) = frame(&mut term, vec![enter]);
+        assert_eq!(keys, b"\r", "the key still reaches the pty");
+        assert!(drawn, "the frame that sent the key drew before the pane changed");
+        assert!(!frame(&mut term, vec![]).0, "gone from the next frame on");
+    }
+
+    #[test]
+    fn a_theme_report_is_stdusks_own_typing_and_keeps_the_notice_and_the_queued_command() {
+        // An app that enabled DEC mode 2031 gets a report when the theme flips. That is no input
+        // from the user, so it must not end the restore notice or drop the queued resume command.
+        use crate::agent_restore::PaneNotice;
+        use crate::agents::AgentKind;
+        let notice = PaneNotice::CrashHint { kind: AgentKind::Claude };
+        let opts = pending_opts("cat", Some(b"queued"), std::time::Duration::from_secs(60));
+        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        term.set_notice(notice);
+        term.state.lock().unwrap().theme_reports = true;
+        term.report_theme(true);
+        assert_eq!(term.notice(), Some(notice));
+        assert_eq!(
+            term.agent.as_ref().unwrap().pending().take().as_deref(),
+            Some(&b"queued"[..]),
+            "the queued command is still there"
+        );
+        // A key from the user still does both.
+        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        term.set_notice(notice);
+        term.send(b"x");
+        assert_eq!(term.notice(), None);
+        assert!(term.agent.as_ref().unwrap().pending().take().is_none());
+    }
+
+    #[test]
+    fn real_pty_a_dropped_fallback_replaces_the_crash_hint_with_a_shell_busy_notice() {
+        // The notice promised a typed command. The fallback found a command on the tty and dropped
+        // the input, so the pane must say that and not keep the promise.
+        use crate::agent_restore::{PaneNotice, SkipReason};
+        use crate::agents::{AgentKind, AgentSession, SessionId};
+        // One long `sleep` holds the tty. A short loop of sleeps leaves the shell in the foreground
+        // between two of them, and the fallback then sees a shell at its prompt.
+        let opts = pending_opts(
+            "while :; do sleep 30; done",
+            Some(b"never-typed"),
+            std::time::Duration::ZERO,
+        );
+        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        let id = SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap();
+        let session =
+            AgentSession { kind: AgentKind::Codex, id, cwd: "/w".into(), transcript: None };
+        term.restore_agent(session, true);
+        term.set_notice(PaneNotice::CrashHint { kind: AgentKind::Codex });
+        wait_until_a_command_owns_the_tty(&term);
+        term.release_pending_after_wait();
+        assert_eq!(
+            term.notice(),
+            Some(PaneNotice::NotResumed { kind: AgentKind::Codex, reason: SkipReason::ShellBusy })
+        );
+        assert!(!grid_text(&term).contains("never-typed"));
+    }
+
+    /// Whether `shell` can run here: a path that exists, or a name found on `PATH`.
+    fn shell_path(name: &str) -> Option<String> {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+            .chain(["/bin".into(), "/usr/bin".into(), "/opt/homebrew/bin".into()])
+            .map(|dir| dir.join(name))
+            .find(|p| p.is_file())
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn real_pty_a_claude_is_captured_under_any_shell_because_nothing_is_injected() {
+        // No wrapper, no hook, no environment: the scan finds the agent under the pane's shell and
+        // the registry names the session. So fish and plain sh work like zsh and bash.
+        use crate::agents::Seen;
+        const ID: &str = "0c2cbc96-1111-4222-8333-444455556666";
+        for name in ["sh", "bash", "zsh", "fish"] {
+            let Some(shell) = shell_path(name) else {
+                eprintln!("skipping {name}: not installed");
+                continue;
+            };
+            let fixture = crate::test_support::ShellFixture::new(&format!("anyshell-{name}"));
+            let (bin, claude_home) = (fixture.base.join("bin"), fixture.base.join("claude"));
+            for d in [&bin, &claude_home.join("sessions")] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+            std::os::unix::fs::symlink("/bin/sleep", bin.join("claude")).unwrap();
+            // `; true` keeps the shell from exec-ing into the agent.
+            let mut opts = fixture.opts(&shell, &["-c", "claude 30; true"]);
+            opts.profile
+                .as_mut()
+                .unwrap()
+                .env
+                .insert("PATH".into(), format!("{}:/usr/bin:/bin", bin.display()));
+            opts.agent_tracking = Some(crate::agent_pane::AgentSetup::default());
+            let mut term = PtyTerm::spawn(80, 24, egui::Context::default(), &opts);
+            let root = term.shell_pid().expect("the shell has a pid");
+            let mut sys = sysinfo::System::new();
+            let found = (0..200).find_map(|_| {
+                let scan = crate::procwatch::scan_now(&mut sys, &claude_home, None);
+                let agent = crate::procwatch::nearest_agent(&scan.procs, root, None)
+                    .map(|(_, p)| (p.pid, p.start_time));
+                if agent.is_none() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                agent
+            });
+            let (pid, start) = found.unwrap_or_else(|| panic!("{name}: no agent under the shell"));
+            // What Claude writes for a live interactive session.
+            let registry = format!(
+                r#"{{"pid":{pid},"sessionId":"{ID}","cwd":"{}","startedAt":{},"kind":"interactive"}}"#,
+                fixture.home.display(),
+                start * 1000 + 700
+            );
+            std::fs::write(claude_home.join(format!("sessions/{pid}.json")), registry).unwrap();
+            let scan = crate::procwatch::scan_now(&mut sys, &claude_home, None);
+            let seen = crate::procwatch::pane_seen(&scan, root, None);
+            term.kill();
+            let Seen::Agent { pid: seen_pid, session: Some(session), .. } = seen else {
+                panic!("{name}: the registry named no session");
+            };
+            assert_eq!((seen_pid, session.id.as_str()), (pid, ID), "{name}");
+        }
     }
 }

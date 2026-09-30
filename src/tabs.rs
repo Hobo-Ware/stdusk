@@ -95,6 +95,7 @@ pub(crate) fn spawn_opts(cfg: &Config, cwd: Option<String>) -> terminal::SpawnOp
         scrollback_lines: cfg.terminal.scrollback_lines,
         word_separators: cfg.terminal.word_separators.clone(),
         bold_bright: cfg.terminal.bold_bright,
+        agent_tracking: None,
         cwd,
     }
 }
@@ -1374,6 +1375,7 @@ mod tests {
             scrollback_lines: 500,
             word_separators: " ".into(),
             bold_bright: false,
+            agent_tracking: None,
             cwd: None,
             profile: Some(Profile {
                 name: "e2e".into(),
