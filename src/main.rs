@@ -1008,9 +1008,7 @@ impl eframe::App for Stdusk {
                 }
                 (sync::Op::Pull, Ok(())) => {
                     self.cfg = Config::load();
-                    self.reapply_appearance(&ctx);
-                    self.reregister_hotkey();
-                    self.reapply_font(&ctx);
+                    self.reapply_config(&ctx);
                     if self.settings_tab {
                         self.rebaseline_settings(); // hidden settings sessions rebaseline too
                     }
