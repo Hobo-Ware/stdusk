@@ -10,6 +10,7 @@ use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 mod agent_codex;
+mod agent_codex_scan;
 mod agents;
 mod colors;
 mod config;
