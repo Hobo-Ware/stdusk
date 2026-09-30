@@ -18,12 +18,21 @@ pub(crate) enum OscEvent {
     Shell(ShellEvent),
 }
 
+/// The extra `D` parameter that only stdusk's own shell hooks print (`133;D;<code>;stdusk`).
+/// Other shell integrations (iTerm2's prints `133;D;$?` at every prompt) share the mark, so the
+/// agent record trusts only the ones that carry this word.
+pub(crate) const OWN_MARK: &str = "stdusk";
+
 /// OSC 133 shell-integration marks (FinalTerm / iTerm2 protocol). Feeds the tab exit-state dot.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ShellEvent {
-    PromptStart,             // 133;A
-    CommandStart,            // 133;C (command begins executing)
-    CommandEnd(Option<i32>), // 133;D[;exit_code]
+    PromptStart,  // 133;A
+    CommandStart, // 133;C (command begins executing)
+    /// 133;D[;exit_code[;stdusk]]. `own` is true when stdusk's own hook printed it.
+    CommandEnd {
+        code: Option<i32>,
+        own: bool,
+    },
 }
 
 pub(crate) struct OscScanner {
@@ -125,7 +134,10 @@ fn parse_osc(payload: &[u8]) -> Option<OscEvent> {
             let ev = match *fields.get(1)? {
                 "A" => ShellEvent::PromptStart,
                 "C" => ShellEvent::CommandStart,
-                "D" => ShellEvent::CommandEnd(fields.get(2).and_then(|s| s.parse::<i32>().ok())),
+                "D" => ShellEvent::CommandEnd {
+                    code: fields.get(2).and_then(|s| s.parse::<i32>().ok()),
+                    own: fields.get(3) == Some(&OWN_MARK),
+                },
                 _ => return None, // B (prompt end) and others: ignored
             };
             Some(OscEvent::Shell(ev))
@@ -348,12 +360,17 @@ mod tests {
     #[test]
     fn shell_integration_osc_133() {
         use ShellEvent::{CommandEnd, CommandStart, PromptStart};
-        let cases: [(&[u8], ShellEvent); 5] = [
+        let end = |code, own| CommandEnd { code, own };
+        let cases: [(&[u8], ShellEvent); 8] = [
             (b"\x1b]133;A\x07", PromptStart),
             (b"\x1b]133;C\x07", CommandStart),
-            (b"\x1b]133;D;0\x07", CommandEnd(Some(0))),
-            (b"\x1b]133;D;127\x07", CommandEnd(Some(127))),
-            (b"\x1b]133;D\x07", CommandEnd(None)),
+            (b"\x1b]133;D;0\x07", end(Some(0), false)),
+            (b"\x1b]133;D;127\x07", end(Some(127), false)),
+            (b"\x1b]133;D\x07", end(None, false)),
+            // Only stdusk's own hook adds the word, and only as the fourth field.
+            (b"\x1b]133;D;137;stdusk\x07", end(Some(137), true)),
+            (b"\x1b]133;D;0;other\x07", end(Some(0), false)),
+            (b"\x1b]133;D;0;aid=1;stdusk\x07", end(Some(0), false)),
         ];
         for (input, want) in cases {
             assert_eq!(OscScanner::new().feed(input), vec![OscEvent::Shell(want)], "{input:?}");
