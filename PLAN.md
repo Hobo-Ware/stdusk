@@ -2,7 +2,7 @@
 
 Port Tabby's **daily-driver experience** to a native Rust app at ~99% fidelity for
 the features that matter, drop the long tail (SSH/serial/telnet/plugin-marketplace/
-web-sync), and go **beyond** Tabby with a first-party AI agent built into the terminal.
+web-sync), and go **beyond** Tabby with ambient AI-CLI awareness and per-pane agent resume.
 North-star features, ranked:
 
 1. **Progress reporting on tabs** - the crown jewel, non-negotiable
@@ -17,6 +17,13 @@ Decisions locked with the user: split panes **v1**, scrollback search **v1**. Qu
 to `F13` (or anything) in config.
 
 ---
+
+Current status (2026-09-30): M0-M11 are implemented; `Cargo.toml` is at 1.8.0, with
+agent-session resume and Open at login implemented on this branch. The user confirmed
+registration, de-registration and reboot/login restore. [LEDGER.md](./LEDGER.md#next-up)
+is the current engineering backlog; [PARITY.md](./PARITY.md) tracks remaining feature gaps.
+The subsystem sketches below preserve the original migration design; the explicitly
+labelled chat-agent design and original module sketch are historical, not pending work.
 
 ## 1. Parity matrix - keep / defer / drop
 
@@ -41,7 +48,7 @@ to `F13` (or anything) in config.
 | clipboard write (OSC 52) | **LOW-HANGING (M6)** | scanner handles it; see §10 |
 | shell-integration exit codes (OSC 133) | **KEEP (M9)** | feeds state dot + AI agent |
 | **Ambient AI-CLI awareness** | **NEW (M10)** | not in Tabby; badge tabs running claude/gemini/... - the differentiator, see §4i |
-| Settings GUI | **DEFER** | config file first, egui panel later |
+| Settings GUI | **DONE (M11)** | settings view with live preview and explicit Save |
 | SSH client + profiles | **DROP** | use `ssh` in the shell |
 | Serial / Telnet | **DROP** | |
 | Plugin system + marketplace | **DEFER** | thin Rust hook API post-v1, see §9 |
@@ -55,8 +62,12 @@ to `F13` (or anything) in config.
 
 Single always-running native app. One process, one quake window, N tabs; each tab is a
 **pane tree** of terminals (splits). Each pane = one pty + one alacritty grid. GUI via
-egui; render via wgpu (through eframe). The AI agent is an in-process module that reads
-grid/scrollback/cwd/exit-codes and drives the pty through a permission gate.
+egui/eframe with the glow backend. Process scanning supplies CLI badges and per-pane
+Claude/Codex session capture; restore queues a validated resume command at shell readiness.
+There is no in-process chat agent.
+
+The diagram below is the original architecture sketch, including the removed chat panel;
+see `.agents/rules/project.md` for the current module map.
 
 ```
               ┌──────────────────────────── stdusk (eframe/egui) ────────────────────────────┐
@@ -77,7 +88,7 @@ grid/scrollback/cwd/exit-codes and drives the pty through a permission gate.
                 → ctx.request_repaint()                                                          │
 ```
 
-### Module layout (`src/`)
+### Original module sketch (`src/`; superseded by `.agents/rules/project.md`)
 ```
 main.rs          App, event loop, wiring
 config.rs        TOML config + Theme + Keybinds (M4)
@@ -297,29 +308,29 @@ get for free because we build on well-tested crates + the wider ecosystem:
 - F13 toggle; hide-on-blur; monitor width. Progress bar per state. Context menu ops.
 - Theme/opacity/blur/font from config. Copy/paste, selection, cursor blink.
 - Splits: split/close/navigate/resize. Search: find/highlight/cycle.
-- AI panel: explain-error, nl→command with approval, agentic loop stop/deny.
+- CLI badges and agent resume: exact per-pane conversation, crash prefill, resume modes and notices.
 
 ---
 
-## 6. Migration roadmap (phased, each phase ships + tests green)
+## 6. Completed migration milestones
 
 | Phase | Deliverable | Exit criteria (tested) | Status |
 |------:|-------------|------------------------|--------|
 | **M0** | Chrome: quake window + chunky tab bar | builds, window opens, tabs switch | ✅ done |
 | **M1** | pty + text render + input | shell runs, typing works | ✅ done |
-| **M1.5** | **Progress** (%-regex + OSC 9;4) + OSC scanner (cwd) + tab bar | progress.rs/osc.rs unit tests green; live bar | ⏳ next |
-| **M2** | Colored cell renderer + cursor | truecolor/256 render; cursor visible | |
-| **M2.5** | Low-hanging: clickable links | click opens URL | |
-| **M3** | Quake: configurable global hotkey (default Ctrl+\`), drop anim, hide-on-blur, monitor width | toggle works, hotkey parsed from config, no Accessibility prompt | |
-| **M4** | Theming + config.toml (Tabby-default parity) | config tests green; palette/opacity/blur/font | |
-| **M5** | Tab mgmt: context menu, color coding, rename, reorder, keybinds | menu ops + colors verified | |
-| **M6** | Resize + scrollback + paste + bracketed-paste + OSC 52 | `tput cols` matches; wheel scrolls; paste works | |
-| **M6.5** | Mouse text selection + Cmd+C copy | drag selects, highlight renders, copy works | |
-| **M7** | Scrollback search (Cmd+F) | find/highlight/cycle | |
-| **M8** | Split panes (pane tree, focus, drag-resize, per-pane pty) | split/close/navigate; each pane sizes | |
-| **M9** | Shell integration (OSC 133) → exit-code state dot; bell; cursor styles | dot flips on exit; checklist green | |
-| **M10** | **Ambient AI-CLI awareness** (procwatch: badge tabs running claude/gemini/...) | known CLI in a tab -> brand badge; detection unit-tested | |
-| **M11** | Polish + Settings GUI panel | checklist green | |
+| **M1.5** | **Progress** (%-regex + OSC 9;4) + OSC scanner (cwd) + tab bar | progress.rs/osc.rs unit tests green; live bar | ✅ done |
+| **M2** | Colored cell renderer + cursor | truecolor/256 render; cursor visible | ✅ done |
+| **M2.5** | Low-hanging: clickable links | click opens URL | ✅ done |
+| **M3** | Quake: configurable global hotkey (default Ctrl+\`), hide-on-blur, monitor width | toggle works, hotkey parsed from config, no Accessibility prompt | ✅ done |
+| **M4** | Theming + config.toml (Tabby-default parity) | config tests green; palette/opacity/blur/font | ✅ done |
+| **M5** | Tab mgmt: context menu, color coding, rename, reorder, keybinds | menu ops + colors verified | ✅ done |
+| **M6** | Resize + scrollback + paste + bracketed-paste + OSC 52 | `tput cols` matches; wheel scrolls; paste works | ✅ done |
+| **M6.5** | Mouse text selection + Cmd+C copy | drag selects, highlight renders, copy works | ✅ done |
+| **M7** | Scrollback search (Cmd+F) | find/highlight/cycle | ✅ done |
+| **M8** | Split panes (pane tree, focus, drag-resize, per-pane pty) | split/close/navigate; each pane sizes | ✅ done |
+| **M9** | Shell integration (OSC 133); bell; cursor styles | failure state tracked; running/ok indicators later removed | ✅ done |
+| **M10** | **Ambient AI-CLI awareness** (procwatch: badge tabs running claude/gemini/...) | known CLI in a tab -> brand badge; detection unit-tested | ✅ done |
+| **M11** | Polish + Settings GUI panel | checklist green | ✅ done |
 
 Dependency notes: M1.5 depends only on M1 (prioritized). M8 (splits) **hard-depends on M6**
 (resize). M7 depends on M6 (scrollback). M10 depends on M9 (OSC 133 gives the agent exit
@@ -328,18 +339,14 @@ resize are solid first.
 
 ---
 
-## 7. Risks & open questions
-- egui per-cell render perf at large grids → per-row batching, dirty rects later.
-- Split panes + per-pane pty resize is the biggest v1 lift (layout math + focus + N ptys).
-- No Rust Anthropic SDK → raw HTTP; must track API drift (adaptive thinking, `output_config`,
-  streaming SSE shape) by hand. Pin `anthropic-version: 2023-06-01`.
-- OSC 133 shell integration requires the user's shell to emit prompt marks (zsh/bash hooks);
-  ship an opt-in snippet, degrade gracefully when absent.
-- CJK/wide-glyph + emoji cell-width handling deferred to M2/M6.
-
-## 8. Current status
-- Repo `Hobo-Ware/stdusk`, default branch `main`, crate at the repo ROOT (native/ promoted in 1.0.9; Electron Tabby source removed from the tree). Upstream Eugeny/tabby is the reference.
-- M0 + M1 implemented + compiling (eframe/egui 0.35, alacritty_terminal 0.26, portable-pty 0.9).
+## 7. Remaining risks and limits
+- The renderer still paints per cell; broad run batching remains deferred pending profiling.
+- True OpenType shaping, inline images and the window-polish gaps remain in PARITY.md.
+- Agent capture depends on observed Claude/Codex local formats and timing. Keep the
+  [resume spec](docs/superpowers/specs/2026-09-30-agent-session-resume-meta-plan.md)
+  and its explicit ambiguity/restore limits alongside changes to those contracts.
+- Split panes, injected shell integration and CJK/wide-cell rendering are implemented;
+  they are regression-test areas, not unfinished migration milestones.
 
 ---
 
@@ -347,8 +354,7 @@ resize are solid first.
 
 > **See [PARITY.md](./PARITY.md)** for the comprehensive, source-scanned Tabby-vs-stdusk gap list
 > (every hotkey, config key, context-menu item, and settings option, with keep/defer/drop
-> disposition and a suggested M11-M17 milestone order). The table below is the original high-level
-> disposition; PARITY.md supersedes it as the living to-do.
+> disposition). PARITY.md is the feature inventory; LEDGER.md holds current engineering follow-ups.
 
 Full Tabby surface, with disposition. `DROP` = never; `DEFER` = post-v1; `FUTURE` = nice idea.
 
@@ -362,20 +368,20 @@ Full Tabby surface, with disposition. `DROP` = never; `DEFER` = post-v1; `FUTURE
 | Web/SaaS config sync (`tabby-web`) | DROP | local config.toml + git is enough |
 | Auto-sudo-password, UAC elevation | DROP | security smell |
 | zmodem file transfer | DROP | niche |
-| Settings GUI | **DEFER (M11)** | config.toml first; egui settings panel later |
-| Profiles / multiple shells per launcher | **FUTURE** | config could define named profiles (shell, cwd, env, color) |
+| Settings GUI | **DONE (M11)** | full settings view |
+| Profiles / multiple shells per launcher | **DONE** | named profiles with shell, cwd, env and color |
 | Community color-scheme import (iTerm/base16) | **FUTURE** | parse `.itermcolors` / base16 YAML into a theme |
-| Ligatures | **FUTURE** | needs a shaping pass (harfbuzz/rustybuzz); default off like Tabby |
-| Broadcast input to all panes | **FUTURE** | trivial once splits land |
-| Session restore (reopen tabs/cwd on launch) | **FUTURE** | persist TabState + cwd |
-| Command palette (fuzzy actions) | **FUTURE** | egui + a fuzzy matcher |
-| Notifications on long-command completion | **FUTURE** | OSC 133 exit + `notify-rust` |
+| Ligatures | **PARTIAL** | symbol substitutions shipped; true OpenType shaping deferred |
+| Broadcast input to all panes | **DONE** | toggle broadcasts within the active tab |
+| Session restore (reopen tabs/cwd on launch) | **DONE** | layout/cwd restore; exact agent-session resume on this branch |
+| Command palette (fuzzy actions) | **DONE** | actions and profile launchers |
+| Notifications on long-command completion | **DONE** | configurable native notifications |
 | Image/sixel/kitty-graphics protocol | **FUTURE** | alacritty grid doesn't model images; large effort |
-| AI: MCP client (agent uses external tools) | **FUTURE** | after M10; agent already speaks tool-use |
-| AI: inline command explanation on hover | **FUTURE** | cheap once agent client exists |
-| AI: `send_to_user` verbatim delivery in agentic runs | **FUTURE** | pattern from the Claude API guide |
+| AI: MCP client (agent uses external tools) | **DROPPED** | in-process chat agent removed; use the CLIs |
+| AI: inline command explanation on hover | **DROPPED** | belonged to the removed chat-agent design |
+| AI: `send_to_user` verbatim delivery in agentic runs | **DROPPED** | belonged to the removed chat-agent design |
 
-Anything marked FUTURE gets a tracking issue when v1 lands; nothing here blocks the north-star set.
+Items still marked FUTURE are optional backlog; the north-star set has shipped.
 
 ---
 

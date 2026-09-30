@@ -18,13 +18,13 @@ Note the 0.35 API this crate uses (differs from older egui docs/examples):
 
 ## 0. Design system (shared components - USE THESE, don't hand-roll)
 
-Every surface/input/button must come from a shared primitive in `ui.rs`, so the whole app reads
+Every surface/input/button must come from a shared primitive in `widgets.rs`, so the whole app reads
 as one consistent system. **If you're about to style a `Frame`/`TextEdit`/`Button` inline, stop
 and use (or extend) the primitive instead.** When two places need the same thing (the find bar
 and the rename dialog are the same input + surface), they MUST call the same helper - never
 re-style a second copy by hand (that's how the rename dialog drifted ugly).
 
-Current primitives (`ui.rs`):
+Current primitives (`widgets.rs`):
 
 - `overlay_frame() -> Frame` - the floating surface for every popover/dialog (find bar, rename):
   elevated fill, hairline border, `corner_radius 12`, soft shadow, `Margin::symmetric(12,8)`.
@@ -174,7 +174,7 @@ only for the thin slice that truly needs a widget tree (focus moving on tab swit
 - [ ] No per-cell/per-frame allocation on the hot path.
 - [ ] Toolbar = one center-aligned row + fixed height; right-pin via spacer, never nested
       opposing layouts; icons painted centered (not `ui.label`).
-- [ ] Surfaces/inputs/buttons come from a `ui.rs` design-system primitive (`overlay_frame`,
+- [ ] Surfaces/inputs/buttons come from a `widgets.rs` design-system primitive (`overlay_frame`,
       `text_field`, `action_button`, …) - no hand-rolled `Frame`/`TextEdit`/`Button` styling; a
       text field that captures the keyboard gates pty input + focus (`pty_input_captured` +
       `hard_modal`, §6).

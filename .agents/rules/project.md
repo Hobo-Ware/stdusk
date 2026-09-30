@@ -27,6 +27,12 @@ drop-down, theming, tab management) plus a first-party AI agent Tabby lacks.
 
 ```
 src/
+  agent_codex.rs Codex session capture, pure part: thread and process types, the timing match (`judge`), argv and env readers
+  agent_codex_scan.rs Codex session capture, IO part: `CodexScanner`, rollout reads, the day-folder walk, scan memory
+  agent_pane.rs  per-pane agent state: record, queued resume input, and who arms what
+  agent_restore.rs restore plan: which saved sessions reopen, typed hint vs Enter, skip reasons, the toast
+  agent_track.rs per-pane agent record state machine (Track::scan)
+  agents.rs      agent session ids, the Claude registry parser, restore file checks
   main.rs        Stdusk app state + eframe::App loop (keybinds, quake window/hotkey, tray, session/CLI polling)
   macos.rs       objc2/AppKit glue: dock policy, unified titlebar, traffic-light centering, window alpha, Cmd+V image monitor, notifications
   fonts.rs       font resolution (core-text family lookup, bold face, Nerd Fonts) + egui FontDefinitions build

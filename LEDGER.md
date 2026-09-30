@@ -4,7 +4,7 @@ Living record of what's built, what's next, and the hard-won facts an agent need
 resume without rediscovering them. **Every agent updates this file after each work session
 or milestone.** Keep it truthful - if a test is red or a step was skipped, say so.
 
-- Project: a native Rust quake terminal with a real GUI tab bar + first-party AI agent.
+- Project: a native Rust quake terminal with a real GUI tab bar, AI-CLI awareness and agent-session resume.
 - Repo: `Hobo-Ware/stdusk` (began as a hard fork of Eugeny/tabby). The Rust rewrite is the
   whole repo now - the crate lives at the ROOT (`Cargo.toml`, `src/` at top level). The
   original Electron Tabby source was removed from the tree in 1.0.9 (promoted native to root);
@@ -41,7 +41,7 @@ cargo test             # unit + headless integration
 | M1 | pty + text render + input | ✅ done, human-verified |
 | M1.5 | Progress (%-regex + OSC 9;4) + OSC scanner (cwd) | ✅ done, human-verified (Tabby-style tabs + top progress) |
 | M2 | Colored cell renderer + cursor | ✅ done, human-verified (real colors + cursor) |
-| M2.5 | Clickable links | todo |
+| M2.5 | Clickable links | ✅ done; URL/path detection, configurable activation modifier and renderer integration |
 | M3 | Quake: configurable global hotkey (default Ctrl+`) | ✅ done, human-verified (toggle + hide/show + first-run sizing) |
 | M4 | Theming + config.toml (Tabby-default parity) | ✅ done, human-verified (themes + opacity + hotkey + font/height/progress) |
 | M5 | Tab mgmt: context menu, color, rename, reorder, keybinds, cwd | ✅ done; headless click / drag-reorder / close-x regression tests (0.2.3) + shipped through 0.1.0-0.5.0 daily use |
@@ -1793,6 +1793,10 @@ builder agent; implementation + integration here.
 > **REMOVED in 1.4.1** as unstable (cwd-scoped `--resume` + orphaned/moved sessions made it
 > unreliable). This section is kept for historical context only - the code, config, and tests
 > described below no longer exist. Split/pane restore survives; only the Claude resume layer is gone.
+> **SUPERSEDED on branch `feat/agent-session-resume`** (see the "Agent session resume" entry below). The
+> two causes of the 1.4.1 removal are gone: Claude's own `~/.claude/sessions/<pid>.json` names the exact
+> session, and the registry `cwd` follows a moved repo.
+> `claude --resume` is still cwd-scoped, so restore always runs it in the recorded session directory.
 - **What**: when you quit with Claude running in one or more tabs, next launch reattaches each of
   those tabs to its prior conversation. Scope: CLAUDE tabs only (the `procwatch` CLI detection
   already tells us which tabs run claude). QoL on top of session restore.
@@ -2493,12 +2497,82 @@ costs on the UI thread.
   `two_bound_chords_in_one_frame_both_leave_the_pty_alone`.
 - Showcase check: `site/index.html` and the README do not describe this behavior. No change needed.
 
+## Agent session resume (branch feat/agent-session-resume, from main 1.8.0)
+The spec holds the design, the contracts, the probe evidence and the limits:
+[agent resume spec](docs/superpowers/specs/2026-09-30-agent-session-resume-meta-plan.md).
+This section holds the state only.
+
+- Built: the `resume_agents` config and Settings modes, Claude and Codex capture without wrappers
+  or hooks, the per-pane record state machine, restore with notices and toast, durable saves,
+  quit and OS-termination saves, live handoff adoption, and Open at login.
+- Modules: `agents`, `agent_codex`, `agent_track`, `agent_pane`, `agent_restore`, plus wiring in
+  `procwatch`, `terminal`, `tabs`, `main`.
+- Dependencies added: serde_json, objc2-service-management, itoa and zmij (approved MIT/Apache/Zlib).
+  The removed hook design's sha2 and getrandom dependencies are gone.
+- Initial validation: 563 tests passed, 3 manual-only tests ignored. Offline build, fmt, Clippy with
+  warnings denied and diff checks passed.
+- Initial live acceptance passed on commit 2364ff5, and on 92a97f5 for the Codex filter.
+  Spec section 7 lists each check; the follow-ups below cover toasts, notices, registration,
+  de-registration and reboot/login. The optional
+  [VM plan](docs/superpowers/plans/2026-09-30-macos-vm-e2e-plan.md) was not executed.
+- Test fixtures: shared test-only PTY options and isolated shell fixtures keep every scenario,
+  assertion and timing, with automatic cleanup. The ignored test
+  `scan_cost_is_linear_in_the_number_of_rollouts` measures the Codex scan.
+- Decided not to do: startup cleanup of hook-era files (`agent-hook.sh`,
+  `~/.config/stdusk/agents/`, written only by dev builds of this branch, delete by hand) and a
+  `/clear` limit line (Claude writes the post-`/clear` transcript at once).
+- Out of scope, already on main: closing the pane of the first Codex TUI kills the shared daemon
+  (`pty_victims`).
+- Showcase: the README bullet and the site card describe agent resume, including that a `/new` in
+  doubt keeps the earlier conversation. No further copy change is needed.
+
+### Agent resume E2E follow-up (2026-09-30)
+
+- [E2E results](docs/superpowers/2026-09-30-agent-resume-e2e-results.md): final-tree suite
+  585 passed; both live handoff tests, native login-status read, and opt-in scan-cost test passed
+  (3,000 rollouts in 3.314 ms). Nine isolated app-launch scenarios passed with CLI stand-ins.
+- Real Codex with a local mock provider passed exact-ID resume, continued turns, same-directory
+  capture in tabs and a split, quit/relaunch, SIGKILL-to-prefill recovery, explicit Enter resume,
+  and the Type only / Off settings through the UI. Startup toasts and the persistent crash notice
+  were visually checked. Real Claude subsequently passed same-directory split capture,
+  exact-ID quit/relaunch, a continued turn, pane-local `/clear`, SIGKILL-to-prefill recovery,
+  explicit Enter resume, and clean-exit record removal using the local mock Messages API.
+  The user subsequently confirmed successful real macOS reboot/login restore, along with
+  Open at login registration and de-registration (2026-09-30). These are user-confirmed
+  acceptance results, separate from the automated run's evidence.
+- Test homes and bundles were isolated; test process trees and the mock server were stopped.
+  No product change or showcase update was needed.
+
+### Open at login first-registration fix (2026-09-30)
+
+- Keep macOS `NotFound` distinct from an unavailable API: a fresh app can register from
+  that state, so the toggle remains clickable. Registration failures still use the OS error toast.
+- Add state-specific hover help, including help on the disabled toggle with a System Settings
+  fallback.
+- Validation: the real ServiceManagement probe went NotFound -> Enabled -> NotRegistered;
+  the headless click regression fails with the old mapping and passes with the fix. Full suite:
+  586 passed, 4 ignored; Rust 1.98.1 fmt, Clippy with warnings denied, and release build passed.
+  The Session screenshot was rendered for inspection. Computer Use denied access to the isolated
+  app; the user independently tried the toggle and confirmed it worked.
+- Showcase checked: README already describes the toggle; site makes no conflicting claim.
+  No public feature-copy change needed.
+
 ## Next up
-- **Parity gap list**: [PARITY.md](./PARITY.md) is the comprehensive, source-scanned Tabby-vs-stdusk
-  audit (every hotkey/config/menu/setting, keep-defer-drop, suggested M11-M17 order). Top wants:
-  clickable links (M2.5 debt), keyboard pane nav/resize/maximize, input polish (select-all/clear/
-  font-zoom/copy-on-select/middle-click/scroll hotkeys), color-scheme import (191 XRDB schemes),
-  tab power features, session restore, settings GUI.
+- **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
+  Keep the unsaved-changes dialog open and report the error when writing config fails.
+- **Process-scan consolidation**: build one parent-to-child index per process snapshot for
+  `detect`, `busy_child`, `running_children` and `nearest_agent`; avoid the repeated `detect`
+  call when computing a tab's badge and busy name. Preserve traversal order, CLI priority,
+  cycle guards and foreground selection. Measure before/after; do not alter process teardown.
+  Also remove the per-candidate formatted prefix allocations in classification if equivalent.
+- **Parity gaps**: [PARITY.md](./PARITY.md) tracks remaining product work, including pane
+  rearrangement, drag-tab-to-split, explode/combine tabs, fullscreen, iTerm/base16 import and
+  optional window polish. Links, keyboard pane controls, input polish, XRDB themes, tab power
+  features, session restore and Settings already shipped.
+- **Additional agent-resume validation**: the latest isolated E2E run did not cover live
+  update handoff with real conversations, live `/new` ambiguity, or GUI acceptance of the final
+  Codex-exec filter. Earlier probes and unit/PTY coverage remain distinct evidence; reboot/login,
+  registration, de-registration, toasts and pane notices have passed.
 - **Cut future releases**: bump `Cargo.toml` version, tag `stdusk-v<x>`, push; then copy the
   release's generated `stdusk.rb` into the tap's `Casks/stdusk.rb` (consider automating the tap
   push with a PAT). Signing + notarization run automatically once the five Apple secrets exist

@@ -169,7 +169,8 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 | Feature | State | Notes |
 |---|---|---|
 | Session restore (`recoverTabs`, reopen tabs+cwd on launch) | ✅ | `[session] restore`; cwd/title/color, saved every 3s; also window geometry in `quake.mode = "window"` |
-| Auto-resume Claude Code tabs | ❌ removed (1.4.1) | Shipped briefly then removed as unstable: `claude --resume` is cwd-scoped, and orphaned / moved sessions made reattach unreliable. Split/pane restore is unaffected - restored panes just spawn a fresh shell in their cwd |
+| Exact-session Claude Code / Codex resume | ✅ on agent-resume branch | Replaces the removed 1.4.1 design: per-pane validated IDs and cwd, `auto` / `prefill` / `off`, crash hints, duplicate protection and grouped notices. See the [spec](docs/superpowers/specs/2026-09-30-agent-session-resume-meta-plan.md) for capture limits and acceptance evidence |
+| Open at login (macOS) | ✅ on agent-resume branch | Native ServiceManagement status and Settings toggle; user confirmed registration, de-registration and reboot/login restore (2026-09-30) |
 | Behavior on session end (keep/close/restart) | ✅ | `terminal.on_exit` (0.3.0): close (default) / keep with overlay / restart + crash-loop guard |
 | Dynamic title from shell (OSC 0/2) + disable toggle | ✅ | `dynamic_title` (0.3.0); 1.0.2 moved parsing to the Term's Title events, adding the xterm title STACK (`CSI 22/23 t`) - a popped title restores instead of sticking |
 | Save/load terminal output & state (debug) | ⛔ | niche debug tooling |
@@ -190,6 +191,6 @@ ligatures; Tabby-grade settings GUI (Cmd+,); settings sync via git; menu-bar ico
 ---
 
 ## Next milestones
-M11-M17 from the original list all shipped (0.1.x-0.2.x). The remaining gaps, ranked and
-batched into releases (0.3.0 → 1.0.0), live in **[V1.md](./V1.md)** - that file supersedes
-this section as the release roadmap.
+M11-M17 from the original list all shipped (0.1.x-0.2.x). [V1.md](./V1.md) preserves the
+historical roadmap to 1.0. Current engineering follow-ups live in [LEDGER.md](./LEDGER.md#next-up);
+the incomplete rows above remain the product gap inventory.
