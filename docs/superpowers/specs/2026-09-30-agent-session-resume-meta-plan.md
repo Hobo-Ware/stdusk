@@ -66,7 +66,9 @@ The registry immediately reflects `/clear` and `/resume`. `procStart` is not par
 **Codex:** read `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<id>.jsonl`, otherwise
 `~/.codex`. There is no exact daemon-to-TUI pid link. `codex resume <id>` in argv names an exact
 session. In all other cases the code matches a rollout thread to the live Codex processes by cwd
-and start time. `agent_codex::judge` holds the exact rules, and its table test is the reference.
+and start time. The cwd comes from `--cd`/`-C` when supplied, resolved against the process cwd
+and canonicalized like rollout metadata. Codex keeps its OS cwd when it uses this option.
+`agent_codex::judge` holds the exact rules, and its table test is the reference.
 Agent homes come from stdusk's environment, not the pane's environment. A `codex exec` run is
 never a TUI, so the match ignores it. It is not a rival and it is not kept after it ends.
 
@@ -124,7 +126,9 @@ Healthy records claim the ID. Crash hints do not claim it, but are skipped if al
 by an earlier healthy pane. A failed handoff adoption reports "shell not handed over".
 
 Spawn the shell in the session cwd, never type a `cd`. Queue the command before spawn; the
-reader consumes it once on the first OSC 133 A. Integrated shells have no fallback. Other shells
+reader consumes it once on an OSC 133 A only while the pane shell owns the PTY foreground
+process group. A startup child's prompt mark leaves the command queued for the shell.
+Integrated shells have no fallback. Other shells
 get a 5 s fallback only when the PTY foreground process group is the shell; otherwise drop it
 and show "shell busy at start". Any user input cancels pending typing.
 
