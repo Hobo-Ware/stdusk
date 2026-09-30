@@ -9,6 +9,7 @@ use eframe::egui;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
+mod agent_codex;
 mod agents;
 mod colors;
 mod config;
