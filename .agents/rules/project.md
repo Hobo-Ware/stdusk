@@ -41,12 +41,13 @@ src/
   finder.rs      Cmd+F scrollback-search bar + multiline paste-confirm modal
   ui.rs          pure UI helpers extracted from the render loop (grid render, draw_tab, pos_to_cell)
   widgets.rs     design-system egui primitives (text_field, num_field, slider, chip, toggle_switch, focus_ring, icon buttons)
+  settings.rs    settings view and reapply_config (runtime theme/hotkey/font; callers own edit baselines)
   keys.rs        keyboard input encoding (key_to_bytes, ctrl/alt sequences, hotkey parse/match)
   terminal.rs    PtyTerm: pty spawn, reader thread, alacritty Term, grid snapshot, selection
   mouse.rs       SGR 1006 mouse reporting (wheel/click encoding, drag autoscroll) gated on TermMode
   pane.rs        binary split tree: layout, focus paths, splitters, neighbor navigation
   config.rs      TOML config + hotkey string parsing
-  colors.rs      Theme + alacritty Color -> Color32 + derived chrome colors
+  colors.rs      Theme + explicit-theme alacritty Color -> Color32 + derived chrome colors
   themes.rs      community XRDB color schemes (embedded pack + user files)
   progress.rs    ProgressScanner: Tabby's %-regex scrape (alt-screen guarded)
   osc.rs         OscScanner: OSC 7/1337/52/9;4 framing across chunk boundaries
@@ -55,10 +56,11 @@ src/
   search.rs      scrollback search: match finding + options
   links.rs       URL/path detection for clickable links
   session.rs     session save/restore (tabs, cwd, title, color)
-  shell.rs       login+interactive shell launch + shell-integration injection
+  shell.rs       login+interactive shell launch, shell-integration injection and POSIX single_quote
   procwatch.rs   AI-CLI process detection for tab badges
   repo.rs        repo groups: git-root detection, the repo chip, repo switching (appearance.group_by_repo)
   tray.rs        macOS menu-bar status item
+  test_support.rs shared test-only PTY options and isolated ShellFixture directories with Drop cleanup
 ```
 
 State-of-the-work lives in `LEDGER.md` (what's built) and `PLAN.md` (architecture +

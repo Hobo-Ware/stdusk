@@ -2557,6 +2557,43 @@ This section holds the state only.
 - Showcase checked: README already describes the toggle; site makes no conflicting claim.
   No public feature-copy change needed.
 
+### Refactornado cleanup (2026-09-30)
+
+- Borrow search matches during rendering; aggregate tab and repo progress/command states from
+  iterators; copy the theme once before the grid lock; release the grid lock before ANSI encoding.
+- Share POSIX quoting in `shell::single_quote`, terminal construction in `new_term`, and runtime
+  configuration reapplication in `reapply_config`. Shell tests reuse `ShellFixture` cleanup.
+- [Measurements and equivalence receipt](docs/superpowers/2026-09-30-refactornado-measurements.md):
+  isolated 10,000-match search processing 7.835 -> 4.192 us; mixed 80 x 24 color conversion
+  13.664 -> 4.327 us. These are CPU component timings, not full-frame or FPS claims.
+  Equivalence covered 11,111 progress sequences, 1,364 command cases, 4,681 quoted strings and
+  5,272 color outputs. A separate source review found no behavior regression.
+- Validation: Rust 1.98.1 fmt, Clippy with warnings denied, full tests and debug build passed;
+  589 tests passed, 4 opt-in tests ignored (baseline 586 passed, 4 ignored). Added real-shell
+  quoting, explicit-theme mapping and terminal-construction regressions.
+  Terminal and Settings screenshot harnesses exited successfully and were visually inspected
+  under isolated state directories. The terminal shot was rerun without inherited ZDOTDIR
+  variables after the first run sourced host rc files against the disposable home.
+- Documentation reconciles completed migration milestones and agent-resume acceptance. The
+  user confirmed registration, de-registration and real reboot/login restore. Process-scan
+  consolidation is queued below; settings-save failure is tracked as issue #12.
+- Showcase checked: these internal changes add no public feature or new default; README and
+  site feature copy already cover resume and require no update. Validation completed before committing.
+
+### Sensei PR 11 review (2026-09-30)
+
+- Guard queued resume input with the PTY foreground owner. A child started from `.zshrc` can
+  emit OSC 133 A, but must not receive the shell's resume command.
+- Match Codex rollouts using `--cd`/`-C`, including relative paths and symlinks. A live isolated
+  Codex 0.159.2 probe confirmed that its OS cwd stays at the launch directory while rollout
+  metadata records the selected workspace.
+- Both regressions failed before the fixes. Four new tests cover the real startup-child PTY,
+  directory flags, missing cwd, literal prompt arguments and symlink normalization.
+- Rust 1.98.1: fmt, Clippy with warnings denied, debug build and all 593 tests passed;
+  4 opt-in tests remained ignored. The non-bundled login-item status test also passed explicitly.
+- README and site copy already describe the intended behavior. The meta-plan now specifies
+  foreground ownership and Codex workspace selection. No GUI or reboot acceptance was repeated.
+
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
   Keep the unsaved-changes dialog open and report the error when writing config fails.
