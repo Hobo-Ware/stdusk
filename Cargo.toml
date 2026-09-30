@@ -21,6 +21,7 @@ regex = "1.13.0"
 resvg = { version = "0.45", default-features = false } # CLI-badge brand SVGs -> egui textures (paths only; no text/fonts needed)
 rustix = { version = "1.1.4", features = ["net", "termios"] } # session handoff: SCM_RIGHTS fd passing + tcsetwinsize, both SAFE (the crate forbids unsafe)
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.151"
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 toml = "1.1.3"
 tray-icon = "0.24.1"

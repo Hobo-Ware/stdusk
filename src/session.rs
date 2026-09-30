@@ -58,6 +58,18 @@ pub(crate) enum SavedPane {
     Leaf {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
+        /// The agent session this pane ran at save time. Unknown content reads as `None`. The
+        /// alias only lets a 1.4.0 file load: its `claude` table has another shape, so the lenient
+        /// reader turns it into `None`. (The toml crate rejects unknown keys inside an enum
+        /// variant, so without the alias such a file would lose the whole session.) It is never
+        /// written back under that name.
+        #[serde(
+            default,
+            alias = "claude",
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::config::lenient"
+        )]
+        agent: Option<SavedAgent>,
     },
     Split {
         dir: SavedSplitDir,
@@ -65,6 +77,27 @@ pub(crate) enum SavedPane {
         a: Box<SavedPane>,
         b: Box<SavedPane>,
     },
+}
+
+/// The Claude Code or Codex session a pane ran. Holds a plain string id: it is validated when the
+/// record is used (`agents::SessionId::parse`), never trusted from the file.
+///
+/// Downgrade note: a session file with an `agent` key fails to load in stdusk 1.8.0 and older
+/// (toml rejects unknown keys inside an enum variant), and a live update handoff to such a build
+/// aborts. Newer builds load older files.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SavedAgent {
+    pub(crate) kind: crate::agents::AgentKind,
+    pub(crate) session: String,
+    pub(crate) cwd: String,
+    /// The transcript file (a Codex rollout). Absent for a Claude registry record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) transcript: Option<String>,
+    /// The record was kept only because the agent died of a crash signal (which statuses count is
+    /// `agent_track::CRASH_SIGNALS`). This is a crash hint: restore types its resume command
+    /// without Enter. Absent means a normal record.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) crashed: bool,
 }
 
 /// Serializable mirror of `pane::SplitDir` (kept local so `pane.rs` needn't derive serde).
@@ -186,7 +219,7 @@ mod tests {
                     color: Some("#e06c75".into()),
                     cwd: Some("/tmp".into()),
                     pinned: true,
-                    pane: Some(SavedPane::Leaf { cwd: Some("/tmp".into()) }),
+                    pane: Some(SavedPane::Leaf { cwd: Some("/tmp".into()), agent: None }),
                     repo: Some("/Users/x/Git/stdusk".into()),
                 },
                 SavedTab {
@@ -240,7 +273,7 @@ mod tests {
 
     /// A saved leaf carrying just a cwd, for the round-trip shape tests.
     fn leaf(cwd: &str) -> SavedPane {
-        SavedPane::Leaf { cwd: Some(cwd.into()) }
+        SavedPane::Leaf { cwd: Some(cwd.into()), agent: None }
     }
 
     #[test]
@@ -253,15 +286,17 @@ mod tests {
             a: Box::new(Pane::leaf("/proj/left".to_owned())),
             b: Box::new(Pane::leaf("/proj/right".to_owned())),
         };
-        let saved =
-            SavedPane::from_tree(&tree, &|cwd: &String| SavedPane::Leaf { cwd: Some(cwd.clone()) });
+        let saved = SavedPane::from_tree(&tree, &|cwd: &String| SavedPane::Leaf {
+            cwd: Some(cwd.clone()),
+            agent: None,
+        });
         // Serializes inside a SavedTab (the real embedding) and comes back identical.
         let tab = SavedTab { pane: Some(saved.clone()), ..Default::default() };
         let back: SavedTab = toml::from_str(&toml::to_string(&tab).unwrap()).unwrap();
         assert_eq!(back.pane, Some(saved.clone()));
         // ...and rebuilds to the same shape: two leaves in order, Row split, ratio preserved.
         let rebuilt = back.pane.unwrap().rebuild(&|sp| match sp {
-            SavedPane::Leaf { cwd } => cwd.clone().unwrap_or_default(),
+            SavedPane::Leaf { cwd, .. } => cwd.clone().unwrap_or_default(),
             SavedPane::Split { .. } => unreachable!(),
         });
         assert_eq!(rebuilt.leaf_count(), 2);
@@ -290,7 +325,7 @@ mod tests {
         let back: SavedPane = toml::from_str(&toml::to_string(&saved).unwrap()).unwrap();
         assert_eq!(back, saved);
         let rebuilt = back.rebuild(&|sp| match sp {
-            SavedPane::Leaf { cwd } => cwd.clone().unwrap_or_default(),
+            SavedPane::Leaf { cwd, .. } => cwd.clone().unwrap_or_default(),
             SavedPane::Split { .. } => unreachable!(),
         });
         let by_path: Vec<String> =
@@ -307,5 +342,109 @@ mod tests {
         assert_eq!(back.tabs.len(), 1);
         assert_eq!(back.tabs[0].cwd.as_deref(), Some("/tmp"));
         assert!(back.tabs[0].pane.is_none());
+    }
+
+    // --- Agent session persistence -------------------------------------------------------------
+
+    const SID: &str = "0c2cbc96-1111-4222-8333-444455556666";
+
+    fn agent_leaf(kind: crate::agents::AgentKind, cwd: &str) -> SavedPane {
+        SavedPane::Leaf {
+            cwd: Some(cwd.into()),
+            agent: Some(SavedAgent {
+                kind,
+                session: SID.into(),
+                cwd: cwd.into(),
+                transcript: None,
+                crashed: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_leaf_with_an_agent_round_trips_for_both_agents() {
+        use crate::agents::AgentKind::{Claude, Codex};
+        let pane = SavedPane::Split {
+            dir: SavedSplitDir::Row,
+            ratio: 0.5,
+            a: Box::new(agent_leaf(Claude, "/work/a")),
+            b: Box::new(agent_leaf(Codex, "/work/b")),
+        };
+        let tab = SavedTab { pane: Some(pane.clone()), ..Default::default() };
+        let body = toml::to_string(&tab).unwrap();
+        assert!(body.contains("kind = \"claude\"") && body.contains("kind = \"codex\""), "{body}");
+        let back: SavedTab = toml::from_str(&body).unwrap();
+        assert_eq!(back.pane, Some(pane));
+    }
+
+    #[test]
+    fn a_leaf_without_an_agent_writes_no_agent_key() {
+        let body =
+            toml::to_string(&SavedPane::Leaf { cwd: Some("/x".into()), agent: None }).unwrap();
+        assert!(!body.contains("agent"), "{body}");
+    }
+
+    #[test]
+    fn agent_records_load_from_the_written_shape() {
+        let body = format!(
+            "active = 0\n\n[[tabs]]\n[tabs.pane.Leaf]\ncwd = \"/w\"\n[tabs.pane.Leaf.agent]\nkind = \"codex\"\nsession = \"{SID}\"\ncwd = \"/w\"\n"
+        );
+        let s: SavedSession = toml::from_str(&body).unwrap();
+        let Some(SavedPane::Leaf { agent: Some(a), .. }) = &s.tabs[0].pane else {
+            panic!("expected a leaf with an agent");
+        };
+        assert_eq!(
+            (a.kind, a.session.as_str(), a.cwd.as_str()),
+            (crate::agents::AgentKind::Codex, SID, "/w")
+        );
+    }
+
+    #[test]
+    fn an_old_1_4_0_claude_key_still_loads_and_is_ignored() {
+        // 1.4.0 wrote a `claude` key on the leaf. It must not fail the load, and must not resume.
+        let body =
+            format!("active = 0\n\n[[tabs]]\n[tabs.pane.Leaf]\ncwd = \"/w\"\nclaude = \"{SID}\"\n");
+        let s: SavedSession = toml::from_str(&body).unwrap();
+        assert_eq!(s.tabs[0].pane, Some(SavedPane::Leaf { cwd: Some("/w".into()), agent: None }));
+    }
+
+    #[test]
+    fn an_unknown_agent_kind_or_shape_loads_the_leaf_without_an_agent() {
+        let bad_agents = [
+            "kind = \"gemini\"\nsession = \"x\"\ncwd = \"/w\"",
+            "kind = \"claude\"\ncwd = \"/w\"",
+            "kind = 3",
+        ];
+        for agent in bad_agents {
+            let body = format!(
+                "active = 0\n\n[[tabs]]\ncwd = \"/keep\"\n[tabs.pane.Leaf]\ncwd = \"/w\"\n[tabs.pane.Leaf.agent]\n{agent}\n"
+            );
+            let s: SavedSession = toml::from_str(&body).unwrap_or_else(|e| panic!("{agent}: {e}"));
+            assert_eq!(s.tabs[0].cwd.as_deref(), Some("/keep"), "the rest of the file survives");
+            assert_eq!(
+                s.tabs[0].pane,
+                Some(SavedPane::Leaf { cwd: Some("/w".into()), agent: None })
+            );
+        }
+    }
+
+    #[test]
+    fn the_crashed_mark_is_written_only_when_set_and_an_absent_mark_means_normal() {
+        let agent = |crashed| SavedAgent {
+            kind: crate::agents::AgentKind::Claude,
+            session: SID.into(),
+            cwd: "/w".into(),
+            transcript: None,
+            crashed,
+        };
+        let leaf = |crashed| SavedPane::Leaf { cwd: None, agent: Some(agent(crashed)) };
+        let normal = toml::to_string(&leaf(false)).unwrap();
+        assert!(!normal.contains("crashed"), "{normal}");
+        let marked = toml::to_string(&leaf(true)).unwrap();
+        assert!(marked.contains("crashed = true"), "{marked}");
+        for (body, want) in [(normal, false), (marked, true)] {
+            let back: SavedPane = toml::from_str(&body).unwrap();
+            assert_eq!(back, leaf(want));
+        }
     }
 }

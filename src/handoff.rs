@@ -678,14 +678,14 @@ mod tests {
                     pane: Some(SavedPane::Split {
                         dir: crate::session::SavedSplitDir::Row,
                         ratio: 0.5,
-                        a: Box::new(SavedPane::Leaf { cwd: Some("/left".into()) }),
-                        b: Box::new(SavedPane::Leaf { cwd: Some("/right".into()) }),
+                        a: Box::new(SavedPane::Leaf { cwd: Some("/left".into()), agent: None }),
+                        b: Box::new(SavedPane::Leaf { cwd: Some("/right".into()), agent: None }),
                     }),
                     repo: None,
                 },
                 SavedTab {
                     cwd: Some("/solo".into()),
-                    pane: Some(SavedPane::Leaf { cwd: Some("/solo".into()) }),
+                    pane: Some(SavedPane::Leaf { cwd: Some("/solo".into()), agent: None }),
                     ..Default::default()
                 },
             ],
@@ -808,7 +808,7 @@ mod tests {
         let (rx, _tx) = std::io::pipe().unwrap();
         let session = SavedSession {
             tabs: vec![SavedTab {
-                pane: Some(SavedPane::Leaf { cwd: None }),
+                pane: Some(SavedPane::Leaf { cwd: None, agent: None }),
                 ..Default::default()
             }],
             ..Default::default()
@@ -985,7 +985,7 @@ mod tests {
         let session = SavedSession {
             tabs: vec![SavedTab {
                 title: Some("live".into()),
-                pane: Some(SavedPane::Leaf { cwd: Some(LIVE_CWD.into()) }),
+                pane: Some(SavedPane::Leaf { cwd: Some(LIVE_CWD.into()), agent: None }),
                 ..Default::default()
             }],
             ..Default::default()

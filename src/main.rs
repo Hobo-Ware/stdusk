@@ -9,6 +9,7 @@ use eframe::egui;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
+mod agents;
 mod colors;
 mod config;
 mod finder;
@@ -471,7 +472,7 @@ impl Stdusk {
                     // shell per leaf - nothing is replayed into it) and a handoff can pair one
                     // passed fd per leaf.
                     pane: Some(session::SavedPane::from_tree(t.root(), &|term: &PtyTerm| {
-                        session::SavedPane::Leaf { cwd: term.cwd() }
+                        session::SavedPane::Leaf { cwd: term.cwd(), agent: None }
                     })),
                     repo: t.group.to_saved(),
                 })

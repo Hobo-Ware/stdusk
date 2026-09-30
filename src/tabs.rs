@@ -150,7 +150,7 @@ fn apply_saved_tab(tab: &mut Tab, st: &session::SavedTab) {
 /// A saved tab's layout: its stored pane tree, or a single pane in the flat `cwd` (sessions written
 /// before split-restore, and the shape a handoff header falls back to).
 fn saved_tree(st: &session::SavedTab) -> session::SavedPane {
-    st.pane.clone().unwrap_or(session::SavedPane::Leaf { cwd: st.cwd.clone() })
+    st.pane.clone().unwrap_or(session::SavedPane::Leaf { cwd: st.cwd.clone(), agent: None })
 }
 
 /// Rebuild a live pane tree from a persisted layout, spawning one shell per leaf in its saved cwd.
@@ -1517,7 +1517,7 @@ mod tests {
             color: Some("#e06c75".into()),
             cwd: Some("/tmp/beta".into()),
             pinned: true,
-            pane: Some(session::SavedPane::Leaf { cwd: Some("/tmp/beta".into()) }),
+            pane: Some(session::SavedPane::Leaf { cwd: Some("/tmp/beta".into()), agent: None }),
             repo: Some("/Users/x/Git/stdusk".into()),
         };
         let (tab, _tx) = adopt_one(&st, Some("/tmp/beta"));
@@ -1537,7 +1537,7 @@ mod tests {
         // The adopted shell is mid-session and re-emits OSC 7 only at its next prompt, so without
         // the cwd off the wire an unrenamed tab would sit on the "zsh" placeholder indefinitely.
         let st = session::SavedTab {
-            pane: Some(session::SavedPane::Leaf { cwd: Some("/stale/leaf".into()) }),
+            pane: Some(session::SavedPane::Leaf { cwd: Some("/stale/leaf".into()), agent: None }),
             ..Default::default()
         };
         let (tab, _tx) = adopt_one(&st, Some("/Users/x/Git/stdusk"));
@@ -1592,7 +1592,10 @@ mod tests {
         // an app re-emits its title only when the title CHANGES - so a successor that did not carry
         // it fell back to the cwd basename for the rest of the session.
         let st = session::SavedTab {
-            pane: Some(session::SavedPane::Leaf { cwd: Some("/Users/vladjerca".into()) }),
+            pane: Some(session::SavedPane::Leaf {
+                cwd: Some("/Users/vladjerca".into()),
+                agent: None,
+            }),
             ..Default::default()
         };
         let (tab, _tx) = adopt_one_titled(&st, Some("/Users/vladjerca"), Some("claude - locales"));
@@ -1618,7 +1621,7 @@ mod tests {
         // per-frame auto-title pass off the tab entirely.
         let st = session::SavedTab {
             title: Some("deploy".into()),
-            pane: Some(session::SavedPane::Leaf { cwd: Some("/tmp/x".into()) }),
+            pane: Some(session::SavedPane::Leaf { cwd: Some("/tmp/x".into()), agent: None }),
             ..Default::default()
         };
         let (tab, _tx) = adopt_one_titled(&st, Some("/tmp/x"), Some("vim README.md"));
