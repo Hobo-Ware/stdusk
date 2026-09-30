@@ -127,6 +127,9 @@ struct Stdusk {
     pending_update: Option<String>, // version installed on disk when it differs from the running one
     next_update_check: f64,         // egui time of the next throttled bundle-version check
     restart_on_quit: bool,          // relaunch the bundle after this quit (Restart / update flow)
+    /// The final snapshot is saved: later saves must not overwrite its agent records.
+    session_frozen: bool,
+    ctx: egui::Context, // for the final save that `on_exit` takes when no frame runs (a terminate)
 }
 
 impl Stdusk {
@@ -466,6 +469,8 @@ impl Stdusk {
             pending_update: update::pending_for_running_exe(),
             next_update_check: 0.0,
             restart_on_quit: false,
+            session_frozen: false,
+            ctx: cc.egui_ctx.clone(),
         }
     }
 
@@ -716,6 +721,17 @@ pub(crate) fn apply_visibility(
 }
 
 impl eframe::App for Stdusk {
+    /// Runs on every exit, including the one macOS forces with a terminate (a logout, a restart or
+    /// a quit AppleEvent). That one never raises a close request, so this is the only place that
+    /// can save the session before the process ends. A normal quit or a handoff has frozen the
+    /// session already, and then there is nothing left to do.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if !self.session_frozen {
+            let ctx = self.ctx.clone();
+            self.save_then_kill_panes(&ctx);
+        }
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         // Transparent framebuffer; the panel fills below carry the tint at `opacity`.
         [0.0, 0.0, 0.0, 0.0]
@@ -812,7 +828,7 @@ impl eframe::App for Stdusk {
                 } else {
                     // Nothing to confirm: let the close proceed, but kill the groups first so no
                     // shell tree leaks (Drop is the backstop if this path is ever missed).
-                    self.kill_all_panes();
+                    self.save_then_kill_panes(&ctx);
                     self.quit_confirmed = true;
                 }
             }
@@ -1082,7 +1098,7 @@ impl eframe::App for Stdusk {
 
         // Session persist: snapshot open tabs (cwd/title/color) every few seconds; skip identical
         // writes so the file only changes when the session does.
-        if self.cfg.session.restore && self.screenshot.is_none() {
+        if self.cfg.session.restore && self.screenshot.is_none() && !self.session_frozen {
             let now = ctx.input(|i| i.time);
             if now >= self.next_session_save {
                 self.next_session_save = now + 3.0;

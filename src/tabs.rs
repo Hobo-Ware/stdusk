@@ -962,6 +962,33 @@ impl Stdusk {
         agent_restore::auto_resumable(&saved, mode, &agents::SystemFs::from_env())
     }
 
+    /// The quit path for every kill: save one final snapshot, stop the periodic save, THEN kill.
+    /// The kill ends the agents, and a save after it would read panes with no agent and erase the
+    /// records the next launch needs. Saving first, and freezing, makes that order impossible to
+    /// break. The wait means the file is on the disk before the kill. (A macOS logout skips this and keeps
+    /// the last periodic snapshot, at most 3 s old.)
+    pub(crate) fn save_then_kill_panes(&mut self, ctx: &egui::Context) {
+        self.final_save(ctx);
+        self.session_frozen = true;
+        self.kill_all_panes();
+    }
+
+    /// The last save of a session that ends now: a quit, and the terminate that the OS sends on a
+    /// logout or a restart. The agent records are judged first, by a scan taken now and by any
+    /// status the reader got since, so the file holds what the agents are and not what they were
+    /// up to a second ago.
+    pub(crate) fn final_save(&mut self, ctx: &egui::Context) {
+        if !self.cfg.session.restore || self.screenshot.is_some() {
+            return;
+        }
+        self.settle_agents();
+        // Always wait, even when the snapshot equals the last one: that one may still sit in the
+        // writer's queue, and the process is about to end.
+        let snap = self.session_snapshot(ctx);
+        session::save_and_wait(&snap);
+        self.last_session = snap;
+    }
+
     /// Kill every pane's shell process group (the shell + its descendants), so nothing leaks as an
     /// orphan when the app quits. Idempotent per pane (`PtyTerm::kill` guards re-entry / Drop).
     pub(crate) fn kill_all_panes(&mut self) {
@@ -1052,6 +1079,9 @@ impl Stdusk {
             if crate::handoff::available() {
                 match self.hand_off(ctx) {
                     Ok(()) => {
+                        // The successor owns the session file now. A save from here could
+                        // overwrite what it saves on its first frame.
+                        self.session_frozen = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         return;
                     }
@@ -1070,7 +1100,7 @@ impl Stdusk {
             }
             spawn_relaunch_watcher();
         }
-        self.kill_all_panes();
+        self.save_then_kill_panes(ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
