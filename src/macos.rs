@@ -315,6 +315,108 @@ pub(crate) fn notify_done(title: &str, code: i32) {
     notify(&format!("{title}: command {status}"));
 }
 
+// --- Open at login (SMAppService) --------------------------------------------------------------
+
+/// Where the "Open at login" item stands. `status()` is the only source of truth: the user can
+/// also change the item in System Settings > General > Login Items, so stdusk stores nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LoginItem {
+    Off,
+    On,
+    /// Registered, but the user must approve it in System Settings.
+    NeedsApproval,
+    /// macOS has no record yet; first registration can still succeed.
+    NotFound,
+    /// The API is unavailable or returned an unknown status.
+    Unavailable,
+}
+
+/// Map `SMAppServiceStatus`' raw value (0 not registered, 1 enabled, 2 requires approval,
+/// 3 not found). Not found is recoverable by registration; unknown values are unavailable.
+pub(crate) fn login_item_from_raw(raw: isize) -> LoginItem {
+    match raw {
+        0 => LoginItem::Off,
+        1 => LoginItem::On,
+        2 => LoginItem::NeedsApproval,
+        3 => LoginItem::NotFound,
+        _ => LoginItem::Unavailable,
+    }
+}
+
+/// The current login-item state of this app.
+#[cfg(target_os = "macos")]
+pub(crate) fn login_item_status() -> LoginItem {
+    use objc2_service_management::SMAppService;
+    if !login_item_api_available() {
+        return LoginItem::Unavailable;
+    }
+    // SAFETY: `mainAppService` and `status` take no pointers and have no preconditions. They are
+    // `unsafe fn` in the generated binding only because every ObjC method is.
+    #[allow(unsafe_code)]
+    let raw = unsafe { SMAppService::mainAppService().status().0 };
+    login_item_from_raw(raw)
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn login_item_status() -> LoginItem {
+    LoginItem::Unavailable
+}
+
+/// Register (`true`) or unregister the app as a login item. The error is the OS text, for a toast.
+#[cfg(target_os = "macos")]
+pub(crate) fn set_login_item(enabled: bool) -> Result<(), String> {
+    use objc2_service_management::SMAppService;
+    if !login_item_api_available() {
+        return Err("Open at login needs macOS 13 or newer".to_owned());
+    }
+    // SAFETY: same as `login_item_status`. The NSError out-parameter is handled by the binding,
+    // which returns it as `Err`.
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        let service = SMAppService::mainAppService();
+        if enabled { service.registerAndReturnError() } else { service.unregisterAndReturnError() }
+    };
+    result.map_err(|e| e.localizedDescription().to_string())
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn set_login_item(_enabled: bool) -> Result<(), String> {
+    Err("Open at login needs macOS".to_owned())
+}
+
+/// Open System Settings > General > Login Items, where the user approves a pending item.
+#[cfg(target_os = "macos")]
+pub(crate) fn open_login_items_settings() {
+    if !login_item_api_available() {
+        return;
+    }
+    // SAFETY: a class method with no arguments and no preconditions.
+    #[allow(unsafe_code)]
+    unsafe {
+        objc2_service_management::SMAppService::openSystemSettingsLoginItems();
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn open_login_items_settings() {}
+
+/// Is this a build that can register a login item: macOS, running from an `.app` bundle? A
+/// `cargo run` binary has no bundle to register.
+pub(crate) fn login_item_supported(exe: &std::path::Path) -> bool {
+    cfg!(target_os = "macos")
+        && login_item_api_available()
+        && crate::update::bundle_path(exe).is_some()
+}
+
+/// `SMAppService` was added in macOS 13. objc2's typed class cache assumes a class exists, so
+/// check the Objective-C runtime first on every public entry point that uses the API.
+#[cfg(target_os = "macos")]
+fn login_item_api_available() -> bool {
+    objc2::runtime::AnyClass::get(c"SMAppService").is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn login_item_api_available() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::{decide_cmd_v_image_paste, traffic_light_y};
@@ -362,5 +464,48 @@ mod tests {
         assert!(!decide_cmd_v_image_paste(true, false, true));
         assert!(!decide_cmd_v_image_paste(false, true, true));
         assert!(!decide_cmd_v_image_paste(false, false, false));
+    }
+
+    #[test]
+    fn login_item_status_maps_every_service_management_value() {
+        use super::{LoginItem, login_item_from_raw};
+        let cases = [
+            (0, LoginItem::Off),
+            (1, LoginItem::On),
+            (2, LoginItem::NeedsApproval),
+            (3, LoginItem::NotFound),
+            (99, LoginItem::Unavailable),
+            (-1, LoginItem::Unavailable),
+        ];
+        for (raw, want) in cases {
+            assert_eq!(login_item_from_raw(raw), want, "raw {raw}");
+        }
+    }
+
+    #[test]
+    fn open_at_login_is_offered_only_from_an_app_bundle() {
+        use std::path::Path;
+        let bundle = Path::new("/Applications/stdusk.app/Contents/MacOS/stdusk");
+        assert_eq!(
+            super::login_item_supported(bundle),
+            cfg!(target_os = "macos") && super::login_item_api_available()
+        );
+        assert!(!super::login_item_supported(Path::new("/repo/target/debug/stdusk")));
+    }
+
+    /// Reading the status is a plain read and must work in a bare test binary (no bundle): the
+    /// service reports "not registered" or "not found", never a crash. It never registers anything.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "makes a live ServiceManagement call: run it by hand with --ignored"]
+    fn reading_the_login_item_status_is_safe_outside_a_bundle() {
+        let status = super::login_item_status();
+        assert!(
+            matches!(
+                status,
+                super::LoginItem::Off | super::LoginItem::NotFound | super::LoginItem::Unavailable
+            ),
+            "{status:?}"
+        );
     }
 }

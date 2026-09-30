@@ -94,6 +94,9 @@ pub(crate) struct SettingsState {
     profile_loaded: Option<usize>,  // which profile index the edit buffers below reflect
     profile_args: String,           // args line as typed (parsed into the Vec on change)
     profile_env: Vec<(String, String)>, // env rows as typed (folded into the map on change)
+    login_item: Option<crate::macos::LoginItem>, // Open-at-login state as last read; None = read it next frame
+    login_item_checked_at: Option<f64>, // bounded refresh while Session settings are visible
+    login_error: Option<String>, // a register/unregister failure, shown as a toast then cleared
 }
 
 impl SettingsState {
@@ -117,6 +120,9 @@ impl SettingsState {
             profile_loaded: None,
             profile_args: String::new(),
             profile_env: Vec::new(),
+            login_item: None,
+            login_item_checked_at: None,
+            login_error: None,
         }
     }
 
@@ -128,6 +134,22 @@ impl SettingsState {
         self.dropdown_open = None;
         self.scheme_bright = None; // back to the auto pre-filter on (re)entry
         self.profile_loaded = None;
+        if section == Section::Session {
+            self.login_item = None;
+            self.login_item_checked_at = None;
+        }
+    }
+
+    fn refresh_login_item(
+        &mut self,
+        now: f64,
+        read_status: impl FnOnce() -> crate::macos::LoginItem,
+    ) -> crate::macos::LoginItem {
+        if login_item_refresh_due(now, self.login_item_checked_at) {
+            self.login_item = Some(read_status());
+            self.login_item_checked_at = Some(now);
+        }
+        self.login_item.unwrap_or(crate::macos::LoginItem::Unavailable)
     }
 
     /// Expand a profile into the inline editor (the screenshot harness's Profiles shot).
@@ -1800,8 +1822,79 @@ const RESUME_CHOICES: [(&str, config::ResumeAgents); 3] = [
     ("Off", config::ResumeAgents::Off),
 ];
 
+/// Does this build offer "Open at login"? Only a macOS `.app` bundle can register the item.
+fn login_item_shown() -> bool {
+    // The executable path cannot change while the app runs, and this is asked every frame.
+    static SHOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SHOWN.get_or_init(|| {
+        std::env::current_exe().is_ok_and(|exe| crate::macos::login_item_supported(&exe))
+    })
+}
+
+const LOGIN_ITEM_REFRESH_SECONDS: f64 = 1.0;
+
+fn login_item_refresh_due(now: f64, checked_at: Option<f64>) -> bool {
+    checked_at.is_none_or(|last| now < last || now - last >= LOGIN_ITEM_REFRESH_SECONDS)
+}
+
+/// Keep OS reads and registration outside the widget so first-registration clicks are testable.
+fn login_item_switch(ui: &mut egui::Ui, status: crate::macos::LoginItem) -> (egui::Response, bool) {
+    use crate::macos::LoginItem;
+    let mut on = matches!(status, LoginItem::On | LoginItem::NeedsApproval);
+    let tip = match status {
+        LoginItem::Off | LoginItem::NotFound => "Turn on to add stdusk to your Mac's login items.",
+        LoginItem::On => "Turn off to stop stdusk from opening when you log in.",
+        LoginItem::NeedsApproval => {
+            "Allow stdusk in System Settings > General > Login Items to finish enabling this."
+        }
+        LoginItem::Unavailable => {
+            "macOS couldn't read the login-item status. Try reopening stdusk from Applications, or add it in System Settings > General > Login Items."
+        }
+    };
+    let response = ui
+        .add_enabled_ui(status != LoginItem::Unavailable, |ui| {
+            crate::widgets::toggle_switch(ui, &mut on)
+        })
+        .inner
+        .on_hover_text(tip)
+        .on_disabled_hover_text(tip);
+    (response, on)
+}
+
+/// Read the OS source of truth on entry and at bounded intervals while this row is visible.
+fn open_at_login_row(ui: &mut egui::Ui, st: &mut SettingsState) {
+    use crate::macos::{LoginItem, login_item_status, open_login_items_settings, set_login_item};
+    let now = ui.ctx().input(|input| input.time);
+    let status = st.refresh_login_item(now, login_item_status);
+    // Settings may be idle while the user changes this value in System Settings. Poll at a
+    // bounded rate so the row updates promptly when focus returns or approval completes.
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(LOGIN_ITEM_REFRESH_SECONDS));
+    row(ui, "Open at login", "Start stdusk when you log in to your Mac", |ui| {
+        let (response, on) = login_item_switch(ui, status);
+        if response.changed() {
+            if let Err(why) = set_login_item(on) {
+                st.login_error = Some(format!("Open at login failed: {why}"));
+            }
+            st.login_item = None; // read the real state next frame
+            st.login_item_checked_at = None;
+        }
+        if status == LoginItem::NeedsApproval
+            && crate::widgets::action_button(ui, "Approve in System Settings", false).clicked()
+        {
+            open_login_items_settings();
+            st.login_item = None;
+            st.login_item_checked_at = None;
+        }
+    });
+}
+
 /// Session + settings-sync. Returns the sync operation to start, if a button was clicked.
-fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> Option<sync::Op> {
+fn session_section(
+    ui: &mut egui::Ui,
+    cfg: &mut config::Config,
+    st: &mut SettingsState,
+    busy: bool,
+) -> Option<sync::Op> {
     title(ui, "Session");
     rows(ui, |ui| {
         row(
@@ -1830,6 +1923,9 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
                 });
             },
         );
+        if login_item_shown() {
+            open_at_login_row(ui, st);
+        }
     });
 
     subheading(ui, "Sync");
@@ -2304,8 +2400,12 @@ impl Stdusk {
                                             quake_fx = Some(quake_section(ui, &mut self.cfg));
                                         }
                                         Section::Session => {
-                                            sync_op =
-                                                session_section(ui, &mut self.cfg, self.sync_busy);
+                                            sync_op = session_section(
+                                                ui,
+                                                &mut self.cfg,
+                                                &mut self.settings,
+                                                self.sync_busy,
+                                            );
                                         }
                                         Section::About => {
                                             restart_req = about_section(
@@ -2362,6 +2462,12 @@ impl Stdusk {
         {
             let now = ctx.input(|i| i.time);
             self.toast = Some((format!("Invalid hotkey: {bad}"), now + 2.2));
+        }
+
+        // Open at login: a register/unregister failure is said once, as a toast.
+        if let Some(msg) = self.settings.login_error.take() {
+            let now = ctx.input(|i| i.time);
+            self.toast = Some((msg, now + 4.0));
         }
 
         // Kick off a settings push/pull; a push saves first so the repo gets what you see.
@@ -2466,6 +2572,85 @@ impl Stdusk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_login_registration_is_clickable_but_unknown_status_is_disabled() {
+        for (raw, clickable) in [(0, true), (3, true), (99, false)] {
+            let ctx = egui::Context::default();
+            let status = crate::macos::login_item_from_raw(raw);
+            let mut response = None;
+            let mut draw = |events| {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        focused: true,
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        rows(ui, |ui| {
+                            row(
+                                ui,
+                                "Open at login",
+                                "Start stdusk when you log in to your Mac",
+                                |ui| {
+                                    response = Some(login_item_switch(ui, status));
+                                },
+                            );
+                        });
+                    },
+                );
+                response.take().expect("the login row renders on every test frame")
+            };
+            let (initial, _) = draw(vec![]);
+            assert_eq!(initial.enabled(), clickable, "raw status {raw}");
+            let pos = initial.rect.center();
+            draw(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                let (response, on) = draw(vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+                if !pressed {
+                    assert_eq!(response.changed(), clickable, "raw status {raw}");
+                    assert_eq!(on, clickable, "raw status {raw}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn login_item_status_refreshes_on_entry_and_at_bounded_intervals() {
+        let mut state = SettingsState::new();
+        assert_eq!(
+            state.refresh_login_item(0.0, || crate::macos::LoginItem::NeedsApproval),
+            crate::macos::LoginItem::NeedsApproval
+        );
+        assert_eq!(
+            state.refresh_login_item(0.5, || panic!("must keep the cached value before deadline")),
+            crate::macos::LoginItem::NeedsApproval
+        );
+        assert_eq!(
+            state.refresh_login_item(1.0, || crate::macos::LoginItem::On),
+            crate::macos::LoginItem::On
+        );
+        assert_eq!(
+            state.refresh_login_item(2.0, || crate::macos::LoginItem::Off),
+            crate::macos::LoginItem::Off
+        );
+
+        state.open_section(Section::Session);
+        assert!(state.login_item.is_none() && state.login_item_checked_at.is_none());
+        assert_eq!(
+            state.refresh_login_item(2.1, || crate::macos::LoginItem::On),
+            crate::macos::LoginItem::On
+        );
+    }
 
     #[test]
     fn preview_exercises_the_core_palette() {
@@ -2831,18 +3016,22 @@ mod tests {
         assert!(st.dropdown_open.is_none(), "Esc must close the popup");
         assert_eq!(value, "one-half-dark", "Esc must never commit a pick");
     }
+
     #[test]
     fn session_section_renders_with_restore_on_and_off() {
         let ctx = egui::Context::default();
+        let mut st = SettingsState::new();
         let mut cfg = config::Config::default();
         for restore in [true, false, true] {
             cfg.session.restore = restore;
             run_frame(&ctx, vec![], |ui| {
-                let op = session_section(ui, &mut cfg, false);
+                let op = session_section(ui, &mut cfg, &mut st, false);
                 assert!(op.is_none());
             });
         }
-        // The chip row never changes the mode by itself.
+        // The chip row never changes the mode by itself, and a bare test binary (no bundle)
+        // offers no login item, so nothing reads or writes the OS login items here.
         assert_eq!(cfg.session.resume_agents, config::ResumeAgents::Auto);
+        assert!(st.login_item.is_none() && st.login_error.is_none());
     }
 }
