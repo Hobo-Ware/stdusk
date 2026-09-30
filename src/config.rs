@@ -15,6 +15,10 @@ pub(crate) struct Config {
     pub(crate) sync: Sync,
     pub(crate) hotkeys: Hotkeys,
     pub(crate) profiles: Vec<Profile>,
+    /// A `--screenshot` run. Never read from or written to the file. The demo panes track no
+    /// agents, and this keeps `[session] resume_agents` showing its real value on the settings page.
+    #[serde(skip)]
+    pub(crate) screenshot_run: bool,
 }
 
 /// Settings sync: a git repo (ideally a private GitHub repo) that config.toml + custom
@@ -143,16 +147,56 @@ pub(crate) fn expand_tilde(path: &str) -> String {
     }
 }
 
+/// What to do with a pane that ran a Claude Code or Codex session when stdusk relaunches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ResumeAgents {
+    /// Type the resume command and press Enter at the first prompt.
+    #[default]
+    Auto,
+    /// Type the resume command but leave Enter to the user.
+    Prefill,
+    /// Restore directories only, and track no agent sessions.
+    Off,
+}
+
+/// The one mapping from the setting to how restore reopens sessions. `None` is "Off": nothing is
+/// tracked and nothing is typed.
+impl From<ResumeAgents> for Option<crate::agents::ResumeMode> {
+    fn from(setting: ResumeAgents) -> Self {
+        use crate::agents::ResumeMode;
+        match setting {
+            ResumeAgents::Auto => Some(ResumeMode::Auto),
+            ResumeAgents::Prefill => Some(ResumeMode::Prefill),
+            ResumeAgents::Off => None,
+        }
+    }
+}
+
+/// Read a value that falls back to its default when the text does not fit, so one typo or one
+/// unknown future value cannot make a whole file fail to load. Used as `deserialize_with`.
+pub(crate) fn lenient<'de, T, D>(d: D) -> Result<T, D::Error>
+where
+    T: serde::de::DeserializeOwned + Default,
+    D: serde::Deserializer<'de>,
+{
+    let raw = toml::Value::deserialize(d)?;
+    Ok(raw.try_into().unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct Session {
     pub(crate) restore: bool, // reopen last session's tabs (cwd/title/color) on launch
     pub(crate) confirm_quit_running: bool, // confirm before quitting while child processes run
+    /// Reopen the Claude Code / Codex conversation of each pane. Needs `restore`.
+    #[serde(deserialize_with = "lenient")] // a typo reads as "auto"
+    pub(crate) resume_agents: ResumeAgents,
 }
 
 impl Default for Session {
     fn default() -> Self {
-        Self { restore: true, confirm_quit_running: true }
+        Self { restore: true, confirm_quit_running: true, resume_agents: ResumeAgents::Auto }
     }
 }
 
@@ -714,6 +758,38 @@ name = "ops"
         assert!(back.session.confirm_quit_running);
         assert_eq!(back.profiles[0].name, "ops");
         assert!(back.profiles[0].shell.is_none() && back.profiles[0].color.is_none());
+    }
+
+    #[test]
+    fn resume_agents_defaults_to_auto_and_survives_a_partial_file() {
+        assert_eq!(Config::default().session.resume_agents, ResumeAgents::Auto);
+        let cfg: Config = toml::from_str("[session]\nrestore = true\n").unwrap();
+        assert_eq!(cfg.session.resume_agents, ResumeAgents::Auto);
+    }
+
+    #[test]
+    fn resume_agents_parses_every_mode_and_ignores_junk() {
+        let cases = [
+            ("auto", ResumeAgents::Auto),
+            ("prefill", ResumeAgents::Prefill),
+            ("off", ResumeAgents::Off),
+            ("nonsense", ResumeAgents::Auto), // a typo must not throw the whole config away
+        ];
+        for (text, want) in cases {
+            let cfg: Config =
+                toml::from_str(&format!("[session]\nresume_agents = \"{text}\"\n")).unwrap();
+            assert_eq!(cfg.session.resume_agents, want, "input {text:?}");
+        }
+    }
+
+    #[test]
+    fn resume_agents_round_trips_through_toml() {
+        for mode in [ResumeAgents::Auto, ResumeAgents::Prefill, ResumeAgents::Off] {
+            let mut cfg = Config::default();
+            cfg.session.resume_agents = mode;
+            let back: Config = toml::from_str(&config_to_toml(&cfg)).unwrap();
+            assert_eq!(back.session.resume_agents, mode);
+        }
     }
 
     #[test]
