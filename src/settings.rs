@@ -2210,9 +2210,16 @@ impl Stdusk {
         }
     }
 
+    /// Reconcile runtime settings after replacing the config; callers own the edit baseline.
+    pub(crate) fn reapply_config(&mut self, ctx: &egui::Context) {
+        self.reapply_appearance(ctx);
+        self.reregister_hotkey();
+        self.reapply_font(ctx);
+    }
+
     /// Re-resolve + re-apply the active theme from `self.cfg` (after Revert / Discard / a
     /// settings-sync pull).
-    pub(crate) fn reapply_appearance(&mut self, ctx: &egui::Context) {
+    fn reapply_appearance(&mut self, ctx: &egui::Context) {
         // Same appearance source as the per-frame reconcile in main.rs - a different one here would
         // apply a theme the next reconcile immediately undoes.
         let system_light =
@@ -2242,11 +2249,8 @@ impl Stdusk {
             }
             if crate::widgets::action_button(ui, "Revert", false).clicked() {
                 self.cfg = config::Config::load();
-                self.settings.baseline = Some(self.cfg.clone());
-                self.settings.profile_loaded = None; // buffers reload from the restored config
-                self.reapply_appearance(ctx);
-                self.reregister_hotkey();
-                self.reapply_font(ctx);
+                self.rebaseline_settings();
+                self.reapply_config(ctx);
                 let now = ctx.input(|i| i.time);
                 self.toast = Some(("Reverted".into(), now + 1.4));
             }
@@ -2557,9 +2561,7 @@ impl Stdusk {
                 self.cfg = b;
             }
             self.settings.profile_loaded = None; // buffers reload from the restored config
-            self.reapply_appearance(ctx);
-            self.reregister_hotkey();
-            self.reapply_font(ctx);
+            self.reapply_config(ctx);
             self.settings.confirm_close = false;
             self.settings_open = false;
             self.settings_tab = false;
