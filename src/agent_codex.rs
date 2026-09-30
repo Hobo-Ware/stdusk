@@ -175,6 +175,34 @@ pub(crate) fn resume_id(cmd: &[String]) -> Option<SessionId> {
     cmd.windows(2).find(|w| w[0] == "resume").and_then(|w| SessionId::parse(&w[1]))
 }
 
+/// Codex keeps its OS cwd when `--cd` selects another workspace. Relative paths are based on
+/// that OS cwd, and arguments after `--` are prompt text.
+pub(crate) fn working_dir(cmd: &[String], process_cwd: Option<&str>) -> Option<PathBuf> {
+    let mut args = cmd.iter().skip(1);
+    let mut selected = None;
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        let value = if arg == "--cd" || arg == "-C" {
+            Some(args.next()?.as_str())
+        } else {
+            arg.strip_prefix("--cd=").or_else(|| {
+                arg.strip_prefix("-C").map(|value| value.strip_prefix('=').unwrap_or(value))
+            })
+        };
+        if let Some(value) = value {
+            selected = Some(value);
+        }
+    }
+    let path = PathBuf::from(selected.or(process_cwd)?);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        process_cwd.map(|cwd| PathBuf::from(cwd).join(path))
+    }
+}
+
 /// True for `codex exec` (also `codex e`): a short non-interactive run. It is never a TUI, so it
 /// makes no thread for a pane and must not be a rival. Its own threads are already refused by
 /// originator (see `tui_user_thread_cwd` in `agent_codex_scan`). Found as `resume_id` finds
@@ -229,6 +257,20 @@ pub(crate) mod fixtures {
 mod tests {
     use super::fixtures::*;
     use super::*;
+
+    #[test]
+    fn working_directory_flags_resolve_against_the_process_and_stop_at_prompt_text() {
+        let run = |args: &[&str], cwd| {
+            working_dir(&args.iter().map(|arg| (*arg).into()).collect::<Vec<_>>(), cwd)
+        };
+        assert_eq!(run(&["codex"], Some("/work")), Some("/work".into()));
+        assert_eq!(run(&["codex", "-C=/other work"], None), Some("/other work".into()));
+        assert_eq!(run(&["codex", "--cd", "/other"], None), Some("/other".into()));
+        assert_eq!(run(&["codex", "--", "--cd=/other"], Some("/work")), Some("/work".into()));
+        assert_eq!(run(&["codex", "--cd", "relative"], None), None);
+        assert_eq!(run(&["codex", "--cd"], Some("/work")), None);
+        assert_eq!(run(&["codex"], None), None);
+    }
 
     #[test]
     fn a_thread_goes_to_the_one_tui_that_could_own_it_and_to_nobody_in_doubt() {

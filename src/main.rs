@@ -1056,7 +1056,8 @@ impl eframe::App for Stdusk {
         // demo badges directly).
         let detect_clis = self.cfg.terminal.detect_clis && self.screenshot.is_none();
         self.procs.set_enabled(detect_clis);
-        if detect_clis && let Some(procs) = self.procs.take() {
+        if detect_clis && let Some(scan) = self.procs.take() {
+            let procs = scan.procs;
             for tab in &mut self.tabs {
                 let pids: Vec<u32> =
                     tab.root().leaves().iter().filter_map(|t| t.shell_pid()).collect();
