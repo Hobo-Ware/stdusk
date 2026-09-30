@@ -164,8 +164,7 @@ impl Stdusk {
                 let tcfg = self.cfg.terminal.clone();
                 // All find-bar matches, drawn as a dim overlay on the searched (focused) pane;
                 // the current match keeps its brighter selection highlight on top.
-                let search_marks: Vec<crate::search::Match> =
-                    self.search.as_ref().map(|s| s.matches.clone()).unwrap_or_default();
+                let search_marks = self.search.as_ref().map_or(&[][..], |s| s.matches.as_slice());
                 let tab = &mut self.tabs[self.active];
 
                 // Cmd+C copies the focused pane's selection; intelligent Ctrl+C (Tabby) copies
@@ -365,7 +364,7 @@ impl Stdusk {
                             app_mouse,
                         },
                         // The find bar searches the focused pane only.
-                        if path == &tab.focused { &search_marks } else { &[] },
+                        if path == &tab.focused { search_marks } else { &[] },
                     );
                     // Broadcast mode: an accent border on EVERY pane makes the keys-go-everywhere
                     // state unmistakable (Tabby paints an app-wide red border + a banner).
