@@ -381,16 +381,10 @@ mod tests {
             .into_bytes()
     }
 
-    fn scratch(kind: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!("stdusk-osc7-{}-{kind}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        base
-    }
-
     #[test]
     fn real_zsh_reports_a_fussy_directory_name_intact() {
-        let base = scratch("zsh");
+        let fixture = crate::test_support::ShellFixture::new("zsh");
+        let base = &fixture.home;
         let (bridge, home, start) = (base.join("bridge"), base.join("home"), base.join(FUSSY_DIR));
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&start).unwrap();
@@ -408,12 +402,12 @@ mod tests {
 
         let want = std::fs::canonicalize(&start).unwrap();
         assert_eq!(cwd.as_deref(), want.to_str(), "zsh must report the exact directory");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn real_bash_reports_a_fussy_directory_name_intact() {
-        let base = scratch("bash");
+        let fixture = crate::test_support::ShellFixture::new("bash");
+        let base = &fixture.home;
         let (home, start) = (base.join("home"), base.join(FUSSY_DIR));
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&start).unwrap();
@@ -428,12 +422,12 @@ mod tests {
 
         let want = std::fs::canonicalize(&start).unwrap();
         assert_eq!(cwd.as_deref(), want.to_str(), "bash must report the exact directory");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn a_directory_name_cannot_inject_a_sequence_through_the_zsh_hook() {
-        let base = scratch("zsh-inject");
+        let fixture = crate::test_support::ShellFixture::new("zsh-inject");
+        let base = &fixture.home;
         let (bridge, home, dir) =
             (base.join("bridge"), base.join("home"), base.join(INJECTION_DIR));
         std::fs::create_dir_all(&home).unwrap();
@@ -451,12 +445,12 @@ mod tests {
         assert_eq!(out, expected_osc7(&dir), "one OSC 7, the whole path encoded");
         assert_eq!(count_byte(&out, 0x1b), 1, "exactly one ESC");
         assert_eq!(count_byte(&out, 0x07), 1, "exactly one BEL");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn a_directory_name_cannot_inject_a_sequence_through_the_bash_hook() {
-        let base = scratch("bash-inject");
+        let fixture = crate::test_support::ShellFixture::new("bash-inject");
+        let base = &fixture.home;
         let (home, dir) = (base.join("home"), base.join(INJECTION_DIR));
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
@@ -474,7 +468,6 @@ mod tests {
         assert_eq!(out, expected_osc7(&dir), "one OSC 7, the whole path encoded");
         assert_eq!(count_byte(&out, 0x1b), 1, "exactly one ESC");
         assert_eq!(count_byte(&out, 0x07), 1, "exactly one BEL");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -532,7 +525,8 @@ mod tests {
     fn a_nested_stdusk_shell_sources_the_users_real_files_once() {
         // Instance A (HOME = home_a) runs a pane. Instance B has another HOME and starts inside it,
         // so it inherits A's ZDOTDIR and STDUSK_REAL_ZDOTDIR. The real startup file must run, once.
-        let base = scratch("zsh-nested-real");
+        let fixture = crate::test_support::ShellFixture::new("zsh-nested-real");
+        let base = &fixture.home;
         let (user, home_a, home_b) = (base.join("user"), base.join("a"), base.join("b"));
         std::fs::create_dir_all(&user).unwrap();
         std::fs::write(user.join(".zshenv"), "print real-zshenv-ran\n").unwrap();
@@ -548,7 +542,6 @@ mod tests {
         let (ok, out, err) = run.expect("zsh looped and hit the timeout");
         assert!(ok && err.trim().is_empty(), "ok={ok} err={err:?}");
         assert_eq!(out.matches("real-zshenv-ran").count(), 1, "{out:?}");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Run `zsh -l -i -c 'print done'` with a clean env, under a hard timeout. A rc loop must not
@@ -591,7 +584,8 @@ mod tests {
 
     #[test]
     fn zsh_starts_when_the_real_dir_is_a_bridge_with_a_trailing_slash() {
-        let base = scratch("zsh-nested-slash");
+        let fixture = crate::test_support::ShellFixture::new("zsh-nested-slash");
+        let base = &fixture.home;
         let (home_a, home_b) = (base.join("a"), base.join("b"));
         let (a, b) = (bridge_in(&home_a), bridge_in(&home_b));
         let slashed = PathBuf::from(format!("{}/", a.display()));
@@ -603,14 +597,14 @@ mod tests {
         let (ok, out, err) = run.expect("zsh looped and hit the timeout");
         assert!(ok && out.contains("done"), "ok={ok} out={out:?} err={err:?}");
         assert!(err.trim().is_empty(), "a loop prints an error: {err:?}");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn zsh_starts_when_the_real_dir_is_another_stdusks_bridge() {
         // The state a nested launch left behind before the fix: the real dir names a bridge, and
         // that bridge's files source the real dir again. The bridge must refuse, not loop.
-        let base = scratch("zsh-nested-loop");
+        let fixture = crate::test_support::ShellFixture::new("zsh-nested-loop");
+        let base = &fixture.home;
         let (home_a, home_b) = (base.join("a"), base.join("b"));
         let (a, b) = (bridge_in(&home_a), bridge_in(&home_b));
         let run =
@@ -618,7 +612,6 @@ mod tests {
         let (ok, out, err) = run.expect("zsh looped and hit the timeout");
         assert!(ok && out.contains("done"), "ok={ok} out={out:?} err={err:?}");
         assert!(err.trim().is_empty(), "a loop prints an error: {err:?}");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -631,7 +624,8 @@ mod tests {
 
     #[test]
     fn write_files_sources_plugin_only_when_autosuggest_on() {
-        let base = std::env::temp_dir().join(format!("stdusk-shtest-{}", std::process::id()));
+        let fixture = crate::test_support::ShellFixture::new("shell-files");
+        let base = &fixture.home;
         let on = base.join("on");
         let off = base.join("off");
 
@@ -646,14 +640,13 @@ mod tests {
         assert!(!off.join("zsh-autosuggestions.zsh").exists());
         // OSC 133 marks survive in both.
         assert!(zshrc_on.contains("133;A") && zshrc_off.contains("133;A"));
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn shared_files_are_rewritten_only_when_the_content_changes() {
         use std::os::unix::fs::MetadataExt as _;
-        let base = scratch("write-if-changed");
+        let fixture = crate::test_support::ShellFixture::new("write-if-changed");
+        let base = &fixture.home;
         let file = base.join("rc");
         write_if_changed(&file, "one\n").unwrap();
         let first = std::fs::metadata(&file).unwrap().ino();
@@ -663,9 +656,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "two\n");
         // The swap is a rename, so no temp file stays behind.
         let names: Vec<_> =
-            std::fs::read_dir(&base).unwrap().flatten().map(|e| e.file_name()).collect();
+            std::fs::read_dir(base).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(names.len(), 1, "{names:?}");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
