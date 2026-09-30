@@ -439,13 +439,13 @@ pub(crate) fn pin_target(pins: &[bool], i: usize) -> (bool, usize) {
 /// The tab bar's progress across ALL of a tab's panes: an error state wins outright (the red
 /// full bar must not be masked by a neighbor's percentage); otherwise the active progress with
 /// the largest fill fraction (ties keep the first, i.e. leaf order). All-idle stays `None`.
-pub(crate) fn aggregate_progress(items: &[Progress]) -> Progress {
-    if let Some(e) = items.iter().find(|p| matches!(p, Progress::Error(_))) {
-        return *e;
-    }
+pub(crate) fn aggregate_progress(items: impl IntoIterator<Item = Progress>) -> Progress {
     let mut best = Progress::None;
     let mut best_frac = 0.0_f32;
-    for &p in items {
+    for p in items {
+        if matches!(p, Progress::Error(_)) {
+            return p;
+        }
         if let Some(f) = ui::progress_fraction(p)
             && f > best_frac
         {
@@ -460,9 +460,13 @@ pub(crate) fn aggregate_progress(items: &[Progress]) -> Progress {
 /// pane's state stands (only Fail is drawn today, but keep the semantics honest).
 pub(crate) fn aggregate_cmd(
     focused: terminal::CmdState,
-    all: &[terminal::CmdState],
+    all: impl IntoIterator<Item = terminal::CmdState>,
 ) -> terminal::CmdState {
-    if all.contains(&terminal::CmdState::Fail) { terminal::CmdState::Fail } else { focused }
+    if all.into_iter().any(|state| state == terminal::CmdState::Fail) {
+        terminal::CmdState::Fail
+    } else {
+        focused
+    }
 }
 
 /// Deferred tab mutations collected during the UI pass, applied after (avoids borrow clashes).
@@ -1258,12 +1262,10 @@ impl Stdusk {
                         // Progress + command state fold ALL panes, not just the focused one
                         // (a background pane's build/error must stay visible on the tab).
                         let leaves = tab.root().leaves();
-                        let progress = aggregate_progress(
-                            &leaves.iter().map(|t| t.progress()).collect::<Vec<_>>(),
-                        );
+                        let progress = aggregate_progress(leaves.iter().map(|t| t.progress()));
                         let cmd = aggregate_cmd(
                             tab.focused_term().cmd_state(),
-                            &leaves.iter().map(|t| t.cmd_state()).collect::<Vec<_>>(),
+                            leaves.iter().map(|t| t.cmd_state()),
                         );
                         let (resp, close) = draw_tab(
                             ui,
@@ -1912,8 +1914,11 @@ mod tests {
     #[test]
     fn aggregate_progress_takes_max_fraction_and_error_wins() {
         use Progress::{Error, Indeterminate, None, Normal, Paused};
-        let cases: [(&[Progress], Progress); 8] = [
+        let cases: [(&[Progress], Progress); 11] = [
             (&[], None),
+            (&[Paused(40), Normal(40)], Paused(40)),
+            (&[Normal(40), Paused(40)], Normal(40)),
+            (&[Indeterminate, Error(0)], Error(0)),
             (&[None, None], None),                         // all idle: no bar
             (&[Normal(30), None, Normal(70)], Normal(70)), // max fraction across panes
             (&[Paused(80), Normal(20)], Paused(80)),       // paused still carries its fraction
@@ -1923,7 +1928,7 @@ mod tests {
             (&[Normal(40), Normal(40)], Normal(40)),       // tie keeps the first (leaf order)
         ];
         for (items, want) in cases {
-            assert_eq!(aggregate_progress(items), want, "{items:?}");
+            assert_eq!(aggregate_progress(items.iter().copied()), want, "{items:?}");
         }
     }
 
@@ -1937,7 +1942,7 @@ mod tests {
             (Fail, &[Fail], Fail),
         ];
         for (focused, all, want) in cases {
-            assert_eq!(aggregate_cmd(focused, all), want, "{focused:?} {all:?}");
+            assert_eq!(aggregate_cmd(focused, all.iter().copied()), want, "{focused:?} {all:?}");
         }
     }
 
