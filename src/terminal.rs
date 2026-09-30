@@ -661,6 +661,16 @@ fn spawn_reader(c: ReaderCtx) {
     });
 }
 
+/// Spawned and adopted panes share the same grid configuration.
+fn new_term(dims: &Dims, opts: &SpawnOpts, events: EventProxy) -> Arc<FairMutex<Term<EventProxy>>> {
+    let config = Config {
+        scrolling_history: opts.scrollback_lines,
+        semantic_escape_chars: opts.word_separators.clone(),
+        ..Config::default()
+    };
+    Arc::new(FairMutex::new(Term::new(config, dims, events)))
+}
+
 impl PtyTerm {
     pub(crate) fn spawn(cols: usize, rows: usize, ctx: egui::Context, opts: &SpawnOpts) -> Self {
         let SpawnOpts {
@@ -726,16 +736,11 @@ impl PtyTerm {
 
         let state = Arc::new(Mutex::new(TabState::default()));
         let replies = Arc::new(Mutex::new(Vec::new()));
-        let term_config = Config {
-            scrolling_history: opts.scrollback_lines,
-            semantic_escape_chars: opts.word_separators.clone(),
-            ..Config::default()
-        };
-        let term = Arc::new(FairMutex::new(Term::new(
-            term_config,
+        let term = new_term(
             &Dims { cols, rows },
+            opts,
             EventProxy { state: state.clone(), replies: replies.clone() },
-        )));
+        );
 
         let pty = Pty::Spawned(pair.master);
         let prompt_owner = agent
@@ -821,16 +826,11 @@ impl PtyTerm {
             ..TabState::default()
         }));
         let replies = Arc::new(Mutex::new(Vec::new()));
-        let term_config = Config {
-            scrolling_history: opts.scrollback_lines,
-            semantic_escape_chars: opts.word_separators.clone(),
-            ..Config::default()
-        };
-        let term = Arc::new(FairMutex::new(Term::new(
-            term_config,
+        let term = new_term(
             &Dims { cols, rows },
+            opts,
             EventProxy { state: state.clone(), replies: replies.clone() },
-        )));
+        );
         // Enter the alt screen ourselves when the handed-over app owned it: its repaint then lands
         // on the alt grid, and the `ESC[?1049l` it sends when it exits restores our (empty) primary
         // one instead of being a no-op that leaves its leftovers under the shell's next prompt. A
@@ -1578,6 +1578,41 @@ mod tests {
     use crate::agent_track::Status;
     use crate::config::Profile;
     use crate::mouse::wheel_sgr;
+
+    #[test]
+    fn fresh_grid_honors_dimensions_history_and_word_separators() {
+        use super::{
+            Arc, Column, Dimensions, Dims, EventProxy, Line, Mutex, Point, Processor, Selection,
+            SelectionType, Side, TabState, new_term,
+        };
+
+        let mut opts = crate::test_support::spawn_opts("/bin/sh", &[]);
+        opts.scrollback_lines = 3;
+        opts.word_separators = "@".into();
+        let state = Arc::new(Mutex::new(TabState::default()));
+        let replies = Arc::new(Mutex::new(Vec::new()));
+        let term = new_term(
+            &Dims { cols: 20, rows: 2 },
+            &opts,
+            EventProxy { state: state.clone(), replies: replies.clone() },
+        );
+        let mut term = term.lock();
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut *term, b"0\r\n1\r\n2\r\n3\r\n4\r\n5\r\nleft@right");
+        assert_eq!(term.grid().columns(), 20);
+        assert_eq!(term.grid().screen_lines(), 2);
+        assert_eq!(term.grid().history_size(), 3);
+        term.selection = Some(Selection::new(
+            SelectionType::Semantic,
+            Point::new(Line(1), Column(1)),
+            Side::Left,
+        ));
+        assert_eq!(term.selection_to_string().as_deref(), Some("left"));
+        parser.advance(&mut *term, b"\x1b]2;configured\x07\x1b[6n");
+        drop(term);
+        assert_eq!(state.lock().unwrap().title_osc.as_deref(), Some("configured"));
+        assert!(!replies.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn exit_code_to_state() {
