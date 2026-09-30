@@ -1351,6 +1351,7 @@ impl PtyTerm {
             (cp.line.0.max(0) as usize).min(rows.saturating_sub(1)),
             cp.column.0.min(cols.saturating_sub(1)),
         );
+        drop(term);
         crate::screen::encode(&lines, rows, cursor)
     }
 
