@@ -38,41 +38,41 @@ pub(crate) fn is_default_bg(c: Color) -> bool {
     matches!(c, Color::Named(NamedColor::Background))
 }
 
-pub(crate) fn to_color32(c: Color) -> Color32 {
+pub(crate) fn to_color32_in(t: &Theme, c: Color) -> Color32 {
     match c {
         Color::Spec(rgb) => Color32::from_rgb(rgb.r, rgb.g, rgb.b),
-        Color::Indexed(i) => indexed(i),
-        Color::Named(n) => named(n),
+        Color::Indexed(i) => indexed(t, i),
+        Color::Named(n) => named(t, n),
     }
 }
 
 /// Foreground for a cell: when `bold` (drawBoldTextInBrightColors), promote the 8 base ANSI
 /// colors to their bright counterparts; everything else is unchanged.
-pub(crate) fn cell_fg(c: Color, bold: bool) -> Color32 {
+pub(crate) fn cell_fg_in(t: &Theme, c: Color, bold: bool) -> Color32 {
     use NamedColor::{Black, Blue, Cyan, Green, Magenta, Red, White, Yellow};
     if !bold {
-        return to_color32(c);
+        return to_color32_in(t, c);
     }
     match c {
-        Color::Indexed(i @ 0..=7) => indexed(i + 8),
+        Color::Indexed(i @ 0..=7) => indexed(t, i + 8),
         Color::Named(n) => match n {
-            Black => theme().ansi[8],
-            Red => theme().ansi[9],
-            Green => theme().ansi[10],
-            Yellow => theme().ansi[11],
-            Blue => theme().ansi[12],
-            Magenta => theme().ansi[13],
-            Cyan => theme().ansi[14],
-            White => theme().ansi[15],
-            other => named(other),
+            Black => t.ansi[8],
+            Red => t.ansi[9],
+            Green => t.ansi[10],
+            Yellow => t.ansi[11],
+            Blue => t.ansi[12],
+            Magenta => t.ansi[13],
+            Cyan => t.ansi[14],
+            White => t.ansi[15],
+            other => named(t, other),
         },
-        other => to_color32(other),
+        other => to_color32_in(t, other),
     }
 }
 
-fn named(n: NamedColor) -> Color32 {
+fn named(t: &Theme, n: NamedColor) -> Color32 {
     use NamedColor::*;
-    let a = theme().ansi;
+    let a = t.ansi;
     match n {
         Black => a[0],
         Red => a[1],
@@ -90,14 +90,14 @@ fn named(n: NamedColor) -> Color32 {
         BrightMagenta => a[13],
         BrightCyan => a[14],
         BrightWhite => a[15],
-        Background => theme().bg,
-        _ => theme().fg, // Foreground, Cursor, Dim*, BrightForeground, ...
+        Background => t.bg,
+        _ => t.fg, // Foreground, Cursor, Dim*, BrightForeground, ...
     }
 }
 
-fn indexed(i: u8) -> Color32 {
+fn indexed(t: &Theme, i: u8) -> Color32 {
     match i {
-        0..=15 => theme().ansi[i as usize],
+        0..=15 => t.ansi[i as usize],
         16..=231 => {
             let i = i - 16;
             let step = |v: u8| if v == 0 { 0 } else { v * 40 + 55 };
@@ -116,7 +116,7 @@ fn indexed(i: u8) -> Color32 {
 pub(crate) fn query_color_in(t: &Theme, index: usize) -> Color32 {
     match index {
         0..=15 => t.ansi[index],
-        16..=255 => indexed(index as u8),
+        16..=255 => indexed(t, index as u8),
         257 => t.bg,
         258 => t.cursor,
         _ => t.fg, // 256 (Foreground) + anything exotic
@@ -463,19 +463,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cell_mapping_uses_the_supplied_theme_for_every_color_kind() {
+        use NamedColor::*;
+        use alacritty_terminal::vte::ansi::Rgb;
+
+        let named_ansi = [
+            Black,
+            Red,
+            Green,
+            Yellow,
+            Blue,
+            Magenta,
+            Cyan,
+            White,
+            BrightBlack,
+            BrightRed,
+            BrightGreen,
+            BrightYellow,
+            BrightBlue,
+            BrightMagenta,
+            BrightCyan,
+            BrightWhite,
+        ];
+        // Different themes in the same test expose accidental reads of the global theme.
+        for t in [one_half_dark(), one_half_light()] {
+            for (i, name) in named_ansi.into_iter().enumerate() {
+                for c in [Color::Named(name), Color::Indexed(i as u8)] {
+                    assert_eq!(to_color32_in(&t, c), t.ansi[i]);
+                    assert_eq!(cell_fg_in(&t, c, false), t.ansi[i]);
+                    assert_eq!(cell_fg_in(&t, c, true), t.ansi[if i < 8 { i + 8 } else { i }]);
+                }
+            }
+            let fixed = [
+                (Color::Named(Foreground), t.fg),
+                (Color::Named(Background), t.bg),
+                (Color::Named(Cursor), t.fg),
+                (Color::Named(DimForeground), t.fg),
+                (Color::Indexed(16), Color32::BLACK),
+                (Color::Indexed(231), Color32::WHITE),
+                (Color::Indexed(232), Color32::from_gray(8)),
+                (Color::Indexed(255), Color32::from_gray(238)),
+                (Color::Spec(Rgb { r: 12, g: 34, b: 56 }), Color32::from_rgb(12, 34, 56)),
+            ];
+            for (c, expected) in fixed {
+                assert_eq!(to_color32_in(&t, c), expected);
+                for bold in [false, true] {
+                    assert_eq!(cell_fg_in(&t, c, bold), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn bold_promotes_base_ansi_to_bright() {
-        init(one_half_dark());
         let t = one_half_dark();
         // Named base colors -> bright counterparts when bold.
-        assert_eq!(cell_fg(Color::Named(NamedColor::Red), true), t.ansi[9]);
-        assert_eq!(cell_fg(Color::Named(NamedColor::Red), false), t.ansi[1]);
+        assert_eq!(cell_fg_in(&t, Color::Named(NamedColor::Red), true), t.ansi[9]);
+        assert_eq!(cell_fg_in(&t, Color::Named(NamedColor::Red), false), t.ansi[1]);
         // Indexed 0-7 -> 8-15.
-        assert_eq!(cell_fg(Color::Indexed(2), true), t.ansi[10]);
+        assert_eq!(cell_fg_in(&t, Color::Indexed(2), true), t.ansi[10]);
         // Truecolor unchanged by bold.
         let spec = Color::Spec(alacritty_terminal::vte::ansi::Rgb { r: 1, g: 2, b: 3 });
-        assert_eq!(cell_fg(spec, true), Color32::from_rgb(1, 2, 3));
+        assert_eq!(cell_fg_in(&t, spec, true), Color32::from_rgb(1, 2, 3));
         // Bright colors stay bright.
-        assert_eq!(cell_fg(Color::Named(NamedColor::BrightRed), true), t.ansi[9]);
+        assert_eq!(cell_fg_in(&t, Color::Named(NamedColor::BrightRed), true), t.ansi[9]);
     }
 
     #[test]

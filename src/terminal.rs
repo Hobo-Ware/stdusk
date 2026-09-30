@@ -1262,6 +1262,7 @@ impl PtyTerm {
 
     /// Snapshot the visible viewport (honoring scrollback offset) with colors + cursor.
     pub(crate) fn grid_snapshot(&self) -> GridSnap {
+        let theme = colors::theme();
         let term = self.term.lock();
         let selection = term.selection.as_ref().and_then(|s| s.to_range(&term));
         let show_cursor = term.mode().contains(TermMode::SHOW_CURSOR);
@@ -1283,7 +1284,7 @@ impl PtyTerm {
             let bg = if !inverse && colors::is_default_bg(cell.bg) {
                 None
             } else {
-                Some(colors::to_color32(bg_c))
+                Some(colors::to_color32_in(&theme, bg_c))
             };
             let selected = selection.as_ref().is_some_and(|r| r.contains(indexed.point));
             let bold = cell.flags.contains(Flags::BOLD);
@@ -1292,7 +1293,7 @@ impl PtyTerm {
             let (c, wide) = snap_glyph(cell.c, cell.flags);
             cells.push(CellSnap {
                 c,
-                fg: colors::cell_fg(fg_c, bright),
+                fg: colors::cell_fg_in(&theme, fg_c, bright),
                 bg,
                 selected,
                 wide,
