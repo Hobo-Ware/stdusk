@@ -15,6 +15,21 @@ use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
 
+/// POSIX single-quote a string: wrap in `'...'`, and render any embedded `'` as `'\''`.
+pub(crate) fn single_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum ShellKind {
     Zsh,
@@ -262,6 +277,28 @@ pub(crate) fn configure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_quoted_arguments_reach_the_shell_unchanged() {
+        for value in [
+            "",
+            "plain",
+            "two words",
+            "a'b",
+            "''",
+            "雪",
+            "line\nend",
+            "$HOME; `echo wrong` \\ \" $(echo wrong)",
+        ] {
+            let script = format!("printf %s {}", single_quote(value));
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", &script])
+                .output()
+                .expect("the test requires the system POSIX shell");
+            assert!(output.status.success());
+            assert_eq!(output.stdout, value.as_bytes(), "{value:?}");
+        }
+    }
 
     #[test]
     fn shell_kind_detection() {

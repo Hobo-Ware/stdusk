@@ -634,18 +634,13 @@ fn spawn_relaunch_watcher() {
     let script = format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.2; done; exec open -a {app}",
         pid = std::process::id(),
-        app = shell_quote(&app.to_string_lossy()),
+        app = crate::shell::single_quote(&app.to_string_lossy()),
     );
     // Detached on purpose: it must outlive us, which is why it waits on our pid instead of
     // being reaped with us.
     if let Err(e) = std::process::Command::new("/bin/sh").arg("-c").arg(&script).spawn() {
         eprintln!("stdusk: could not arm relaunch ({e})");
     }
-}
-
-/// POSIX single-quote for the relaunch script (a bundle path can contain spaces).
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 impl Stdusk {

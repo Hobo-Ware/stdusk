@@ -69,24 +69,9 @@ pub(crate) fn update_dot_center(icon: egui::Rect) -> egui::Pos2 {
 pub(crate) fn drop_paste_string(paths: &[std::path::PathBuf]) -> String {
     let mut out = String::new();
     for p in paths {
-        out.push_str(&shell_single_quote(&p.to_string_lossy()));
+        out.push_str(&crate::shell::single_quote(&p.to_string_lossy()));
         out.push(' ');
     }
-    out
-}
-
-/// POSIX single-quote a string: wrap in `'...'`, and render any embedded `'` as `'\''`.
-fn shell_single_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('\'');
-    for ch in s.chars() {
-        if ch == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('\'');
     out
 }
 
