@@ -170,19 +170,35 @@ fn real_zdotdir(inherited: &str, inherited_real: &str, home: &str) -> String {
     home.to_owned()
 }
 
-fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
+/// Write `content` to `path` only when it differs, through a temp file and a rename. Every pane
+/// spawn calls this, and a restore spawns many panes at once: a shell must never source a file
+/// that another spawn is halfway through writing.
+fn write_if_changed(path: &Path, content: &str) -> std::io::Result<()> {
+    if std::fs::read_to_string(path).is_ok_and(|old| old == content) {
+        return Ok(());
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// Write the generated rc files.
+pub(crate) fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join(".zshenv"), ZSHENV)?;
-    std::fs::write(dir.join(".zprofile"), ZPROFILE)?;
-    std::fs::write(dir.join(".zlogin"), ZLOGIN)?;
-    let mut zshrc = ZSHRC.to_string();
+    write_if_changed(&dir.join(".zshenv"), ZSHENV)?;
+    write_if_changed(&dir.join(".zprofile"), ZPROFILE)?;
+    write_if_changed(&dir.join(".zlogin"), ZLOGIN)?;
+    let mut zshrc = ZSHRC.to_owned();
     if autosuggest {
         let plugin = dir.join("zsh-autosuggestions.zsh");
-        std::fs::write(&plugin, ZSH_AUTOSUGGEST)?;
+        write_if_changed(&plugin, ZSH_AUTOSUGGEST)?;
         zshrc.push_str(&autosuggest_source_line(&plugin));
     }
-    std::fs::write(dir.join(".zshrc"), zshrc)?;
-    std::fs::write(dir.join("bashrc"), BASHRC)?;
+    write_if_changed(&dir.join(".zshrc"), &zshrc)?;
+    write_if_changed(&dir.join("bashrc"), BASHRC)?;
     Ok(())
 }
 
@@ -613,6 +629,23 @@ mod tests {
         // OSC 133 marks survive in both.
         assert!(zshrc_on.contains("133;A") && zshrc_off.contains("133;A"));
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+    #[test]
+    fn shared_files_are_rewritten_only_when_the_content_changes() {
+        use std::os::unix::fs::MetadataExt as _;
+        let base = scratch("write-if-changed");
+        let file = base.join("rc");
+        write_if_changed(&file, "one\n").unwrap();
+        let first = std::fs::metadata(&file).unwrap().ino();
+        write_if_changed(&file, "one\n").unwrap();
+        assert_eq!(std::fs::metadata(&file).unwrap().ino(), first, "same content, same file");
+        write_if_changed(&file, "two\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "two\n");
+        // The swap is a rename, so no temp file stays behind.
+        let names: Vec<_> =
+            std::fs::read_dir(&base).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names.len(), 1, "{names:?}");
         let _ = std::fs::remove_dir_all(&base);
     }
 }
