@@ -502,7 +502,9 @@ impl crate::Stdusk {
         let listener =
             listen(&path).map_err(|e| format!("cannot bind the handoff socket ({e})"))?;
         // Snapshot BEFORE the successor launches: same shape the session file gets, so the new
-        // window rebuilds the identical layout and just adopts instead of spawning.
+        // window rebuilds the identical layout and just adopts instead of spawning. The agent
+        // records are judged first: a status no scan has seen would otherwise be lost with us.
+        self.settle_agents();
         let session = self.session_snapshot(ctx);
         spawn_successor(&app, &path).map_err(|e| format!("cannot launch the successor ({e})"))?;
         let sock = accept_within(&listener, LAUNCH_TIMEOUT).map_err(|e| e.to_string());
@@ -1122,5 +1124,15 @@ mod tests {
         let mut w = &a;
         w.write_all(&u32::try_from(MAX_TEXT + 1).unwrap().to_be_bytes()).unwrap();
         assert!(recv_text(&b).is_err());
+    }
+
+    #[test]
+    fn a_header_from_a_build_that_sent_a_pane_token_still_decodes_and_the_token_is_dropped() {
+        // Builds of this branch before the hookless capture sent `pane_token`. Serde ignores an
+        // unknown key, so the handoff stays compatible both ways.
+        let text = encode(&meta(0)).unwrap();
+        assert!(!text.contains("pane_token"), "the token is not written any more");
+        let old = text.replacen('{', &format!("{{\"pane_token\":\"{}\",", "ab".repeat(16)), 1);
+        assert_eq!(decode::<PaneMeta>(&old).unwrap(), meta(0));
     }
 }

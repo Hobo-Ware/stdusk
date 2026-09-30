@@ -273,6 +273,7 @@ impl Stdusk {
                 let mut focus_click: Option<Vec<pane::Side>> = None;
                 let mut mouse_paste: Option<(Vec<pane::Side>, ClipboardPaste)> = None; // middle/right click
                 let mut restart_pane: Option<Vec<pane::Side>> = None;
+                let mut clicked_pane: Option<Vec<pane::Side>> = None; // a click ends its restore notice
                 let (pointer_events, mods) = ui.input(|i| (i.events.clone(), i.modifiers));
                 for (path, rect) in &layout {
                     let app_mouse;
@@ -466,8 +467,12 @@ impl Stdusk {
                             restart_pane = Some(path.clone());
                         }
                     }
+                    if let Some(notice) = term.notice() {
+                        ui::draw_pane_notice(ui, *rect, &ui::pane_notice_text(notice));
+                    }
                     if resp.clicked() || resp.drag_started() {
                         focus_click = Some(path.clone());
+                        clicked_pane = Some(path.clone());
                     }
                     // Keep egui keyboard focus on the active terminal, or a typed Space/Enter
                     // would activate a focused tab-bar button (e.g. the gear opening config.toml).
@@ -496,6 +501,9 @@ impl Stdusk {
                 }
                 if let Some(p) = focus_click {
                     tab.focused = p;
+                }
+                if let Some(t) = clicked_pane.and_then(|p| tab.root_mut().leaf_at_mut(&p)) {
+                    t.dismiss_notice();
                 }
                 // Apply the middle/right-click paste (deferred: needs &mut past the render
                 // borrow). Runs through the same normalize/trim pipeline; skips the multiline

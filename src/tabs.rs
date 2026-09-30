@@ -1,6 +1,9 @@
 //! Tabs: the `Tab` model + spawn helpers, the tab-bar panel, the right-click tab
 //! menu, and Stdusk's tab-management methods (new/close/move/reopen/rename/apply).
 
+use crate::agent_pane::{AgentSetup, PROMPT_FALLBACK};
+use crate::agent_restore;
+use crate::agents::{self, ResumeMode};
 use std::sync::atomic::Ordering;
 
 use eframe::egui;
@@ -95,9 +98,22 @@ pub(crate) fn spawn_opts(cfg: &Config, cwd: Option<String>) -> terminal::SpawnOp
         scrollback_lines: cfg.terminal.scrollback_lines,
         word_separators: cfg.terminal.word_separators.clone(),
         bold_bright: cfg.terminal.bold_bright,
-        agent_tracking: None,
+        agent_tracking: agent_setup(cfg),
         cwd,
     }
+}
+
+/// How restore reopens agent sessions, or `None` when it does not. This is the one gate for the
+/// whole feature: tracking, typing and the quit sentence all follow it. Tracking with nothing to
+/// restore into would only add work, so `session.restore` gates it together with `resume_agents`.
+/// A `--screenshot` run tracks nothing: no agent state on any pane.
+pub(crate) fn resume_mode(cfg: &Config) -> Option<ResumeMode> {
+    if cfg.session.restore && !cfg.screenshot_run { cfg.session.resume_agents.into() } else { None }
+}
+
+/// Agent tracking for a new pane, on when [`resume_mode`] is.
+pub(crate) fn agent_setup(cfg: &Config) -> Option<AgentSetup> {
+    resume_mode(cfg).map(|_| AgentSetup { fallback_delay: PROMPT_FALLBACK, ..Default::default() })
 }
 
 /// A tab around a freshly built pane tree: default presentation (auto-titled, uncolored, unpinned)
@@ -154,22 +170,6 @@ fn saved_tree(st: &session::SavedTab) -> session::SavedPane {
     st.pane.clone().unwrap_or(session::SavedPane::Leaf { cwd: st.cwd.clone(), agent: None })
 }
 
-/// Rebuild a live pane tree from a persisted layout, spawning one shell per leaf in its saved cwd.
-/// Order (A before B) matches the saved tree, so a rebuilt tree's `leaf_paths()` lines up with it.
-pub(crate) fn spawn_saved_tree(
-    cfg: &Config,
-    ctx: &egui::Context,
-    sp: &session::SavedPane,
-) -> pane::Pane<PtyTerm> {
-    sp.rebuild(&|leaf| {
-        let cwd = match leaf {
-            session::SavedPane::Leaf { cwd, .. } => cwd.clone(),
-            session::SavedPane::Split { .. } => None,
-        };
-        PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd))
-    })
-}
-
 /// Rebuild a live pane tree by ADOPTING panes a predecessor handed over (see `handoff`), popping one
 /// per leaf in the same A-before-B order the sender collected them in. A pane the queue can't supply
 /// (or whose fd won't adopt) degrades to a FRESH shell in the saved cwd: one restarted pane beats a
@@ -179,10 +179,23 @@ fn adopt_saved_tree(
     ctx: &egui::Context,
     sp: &session::SavedPane,
     panes: &mut std::vec::IntoIter<(crate::handoff::PaneMeta, std::os::fd::OwnedFd)>,
+    plan: &mut agent_restore::RestorePlan,
 ) -> pane::Pane<PtyTerm> {
     // RefCell because `rebuild` takes a `Fn` (it's shared down the recursion), and popping the
     // queue for each leaf is exactly the mutation that has to happen inside it.
     let queue = std::cell::RefCell::new(panes);
+    let plan = std::cell::RefCell::new(plan);
+    // A leaf whose shell was not handed over gets a fresh shell, and its agent record ends with
+    // the old one. That is a skip like any other: the toast counts it and the pane says so.
+    let fresh = |leaf: &session::SavedPane, cwd: Option<String>| {
+        let mut term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
+        if let session::SavedPane::Leaf { agent: Some(saved), .. } = leaf {
+            let reason = agent_restore::SkipReason::NotHandedOver;
+            plan.borrow_mut().skipped(saved, reason);
+            term.set_notice(agent_restore::PaneNotice::NotResumed { kind: saved.kind, reason });
+        }
+        term
+    };
     sp.rebuild(&|leaf| {
         let cwd = match leaf {
             session::SavedPane::Leaf { cwd, .. } => cwd.clone(),
@@ -191,7 +204,7 @@ fn adopt_saved_tree(
         let next = queue.borrow_mut().next();
         let Some((meta, fd)) = next else {
             eprintln!("stdusk: no pane to adopt for a leaf; starting a fresh shell");
-            return PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
+            return fresh(leaf, cwd);
         };
         // The pane's own cwd at handover beats the saved leaf's: it rides with the fd, so it is
         // right even for a layout that shifted, and an adopted pty has no other way to know it.
@@ -209,17 +222,40 @@ fn adopt_saved_tree(
             title_osc: crate::handoff::clamp_title(meta.title_osc.clone()),
             theme_reports: meta.theme_reports,
         };
-        PtyTerm::adopt(ctx.clone(), handover, &opts).unwrap_or_else(|_| {
+        let Ok(mut term) = PtyTerm::adopt(ctx.clone(), handover, &opts) else {
             eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
             // The failed adoption dropped the only fd we had for that shell, and the predecessor
-            // disarms every pane as soon as we acknowledge - so this is the last chance anyone has to
-            // reap it. See `terminal::reap_orphaned_session`.
+            // disarms every pane as soon as we acknowledge - so this is the last chance anyone has
+            // to reap it. The fresh shell gets no record: no agent runs in it.
             if let Some(pgid) = meta.pgid {
                 terminal::reap_orphaned_session(pgid);
             }
-            PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts)
-        })
+            return fresh(leaf, opts.cwd);
+        };
+        // The agent keeps running in an adopted shell, so the pane keeps its record.
+        if let Some((session, crash_hint)) = leaf_agent(leaf) {
+            term.adopt_agent(session, crash_hint);
+        }
+        term
     })
+}
+
+/// The session-file form of one pane. It holds no agent record while resume is off: a pane that
+/// spawned under `auto` and is tracked no more (the setting changed) keeps the record it had, and
+/// saving it would bring a stale session back when the setting turns on again.
+pub(crate) fn saved_leaf(cfg: &Config, term: &PtyTerm) -> session::SavedPane {
+    let agent = resume_mode(cfg).and_then(|_| term.agent_saved());
+    session::SavedPane::Leaf { cwd: term.cwd(), agent }
+}
+
+/// The agent record a saved leaf holds (if its id is valid), and whether it is a crash hint.
+fn leaf_agent(leaf: &session::SavedPane) -> Option<(agents::AgentSession, bool)> {
+    match leaf {
+        session::SavedPane::Leaf { agent: Some(a), .. } => {
+            agents::AgentSession::from_saved(a).map(|s| (s, a.crashed))
+        }
+        session::SavedPane::Leaf { agent: None, .. } | session::SavedPane::Split { .. } => None,
+    }
 }
 
 /// A tab whose panes are ADOPTED from a predecessor instead of spawned. Same layout rebuild and the
@@ -230,18 +266,85 @@ pub(crate) fn adopt_saved_tab(
     ctx: &egui::Context,
     st: &session::SavedTab,
     panes: &mut std::vec::IntoIter<(crate::handoff::PaneMeta, std::os::fd::OwnedFd)>,
+    plan: &mut agent_restore::RestorePlan,
 ) -> Tab {
-    let mut tab = tab_with_root(adopt_saved_tree(cfg, ctx, &saved_tree(st), panes));
+    let mut tab = tab_with_root(adopt_saved_tree(cfg, ctx, &saved_tree(st), panes, plan));
     apply_saved_tab(&mut tab, st);
     tab
 }
 
-/// A tab restored from a saved session: rebuild its whole pane tree (a fresh shell per leaf, in the
-/// leaf's cwd), focus the first leaf, and re-apply the saved title/color/pinning.
-pub(crate) fn spawn_saved_tab(cfg: &Config, ctx: &egui::Context, st: &session::SavedTab) -> Tab {
-    let mut tab = tab_with_root(spawn_saved_tree(cfg, ctx, &saved_tree(st)));
-    apply_saved_tab(&mut tab, st);
-    tab
+/// Point a leaf at the session it resumes: the shell starts in the session's directory and queues
+/// the resume command for its first prompt.
+fn resume_opts(opts: &mut terminal::SpawnOpts, resume: &agent_restore::Resume) {
+    if let Some(setup) = opts.agent_tracking.as_mut() {
+        setup.pending_input = Some(resume.input());
+        opts.cwd = Some(resume.session.cwd.clone());
+    }
+}
+
+/// Restore every saved tab: a shell per leaf in its saved directory, and for a leaf with a saved
+/// agent session that passes the checks, the resume command at its first prompt. One plan covers
+/// the whole session, so a conversation that two saved panes claim resumes in the first one only.
+/// A session kept after a crash gets its command typed without Enter, whatever the mode says.
+/// Returns the tabs and the one toast text about sessions that did not resume or wait for Enter.
+pub(crate) fn spawn_saved_tabs(
+    cfg: &Config,
+    ctx: &egui::Context,
+    saved: &[session::SavedTab],
+) -> (Vec<Tab>, Option<String>) {
+    let mode = resume_mode(cfg);
+    let fs = agents::SystemFs::from_env();
+    // One plan for ALL tabs, not one per tab: it claims each `(agent, session)` as it resumes it, so
+    // a conversation that two saved panes hold resumes in the first pane only, even across tabs.
+    // RefCell because `rebuild` takes a shared `Fn` and each leaf records its decision.
+    let plan = std::cell::RefCell::new(agent_restore::RestorePlan::default());
+    let tabs = saved
+        .iter()
+        .map(|st| {
+            let root = saved_tree(st).rebuild(&|leaf| {
+                let (cwd, agent) = match leaf {
+                    session::SavedPane::Leaf { cwd, agent } => (cwd.clone(), agent.as_ref()),
+                    session::SavedPane::Split { .. } => (None, None),
+                };
+                let mut opts = spawn_opts(cfg, cwd);
+                let restored = mode
+                    .zip(agent)
+                    .map(|(mode, agent)| (agent.kind, plan.borrow_mut().resume(agent, mode, &fs)));
+                if let Some((_, Ok(resume))) = &restored {
+                    resume_opts(&mut opts, resume);
+                }
+                let mut term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts);
+                if let Some((kind, outcome)) = restored {
+                    if let Some(notice) = restore_notice(kind, &outcome) {
+                        term.set_notice(notice);
+                    }
+                    // Hold the reopened session until an agent binds (Codex names it only on its
+                    // first turn).
+                    if let Ok(resume) = outcome {
+                        term.restore_agent(resume.session, resume.crash_hint);
+                    }
+                }
+                term
+            });
+            let mut tab = tab_with_root(root);
+            apply_saved_tab(&mut tab, st);
+            tab
+        })
+        .collect();
+    (tabs, plan.into_inner().into_toast())
+}
+
+/// What a restored pane tells the user about its session: why it did not resume, or that its
+/// command waits for Enter. Nothing for a session that resumed as usual.
+fn restore_notice(
+    kind: agents::AgentKind,
+    outcome: &Result<agent_restore::Resume, agent_restore::SkipReason>,
+) -> Option<agent_restore::PaneNotice> {
+    match outcome {
+        Ok(resume) if resume.crash_hint => Some(agent_restore::PaneNotice::CrashHint { kind }),
+        Ok(_) => None,
+        Err(reason) => Some(agent_restore::PaneNotice::NotResumed { kind, reason: *reason }),
+    }
 }
 
 /// Fresh shell in place of a dead pane's (same cwd), carrying the crash-loop counter: a death
@@ -846,6 +949,19 @@ impl Stdusk {
         }
     }
 
+    /// How many panes hold an agent session that the next launch reopens without a keypress. Zero
+    /// when resume is off, because nothing resumes then.
+    pub(crate) fn resumable_sessions(&self) -> usize {
+        let Some(mode) = resume_mode(&self.cfg) else { return 0 };
+        let saved: Vec<_> = self
+            .tabs
+            .iter()
+            .flat_map(|t| t.root().leaves())
+            .filter_map(PtyTerm::agent_saved)
+            .collect();
+        agent_restore::auto_resumable(&saved, mode, &agents::SystemFs::from_env())
+    }
+
     /// Kill every pane's shell process group (the shell + its descendants), so nothing leaks as an
     /// orphan when the app quits. Idempotent per pane (`PtyTerm::kill` guards re-entry / Drop).
     pub(crate) fn kill_all_panes(&mut self) {
@@ -901,7 +1017,12 @@ impl Stdusk {
         if self.screenshot.is_none()
             && ui::should_confirm_running(self.cfg.session.confirm_quit_running, procs)
         {
-            self.pending_quit = Some(ui::quit_confirm_message(procs, tabs, self.quit_kind(), 0));
+            self.pending_quit = Some(ui::quit_confirm_message(
+                procs,
+                tabs,
+                self.quit_kind(),
+                self.resumable_sessions(),
+            ));
         } else {
             self.finish_quit(ctx);
         }
@@ -1494,6 +1615,16 @@ mod tests {
         cwd: Option<&str>,
         title_osc: Option<&str>,
     ) -> (Tab, std::io::PipeWriter) {
+        adopt_with(&Config::default(), st, cwd, title_osc)
+    }
+
+    /// As `adopt_one_titled`, with the config the successor runs under.
+    fn adopt_with(
+        cfg: &Config,
+        st: &session::SavedTab,
+        cwd: Option<&str>,
+        title_osc: Option<&str>,
+    ) -> (Tab, std::io::PipeWriter) {
         let (rx, tx) = std::io::pipe().expect("pipe");
         let meta = crate::handoff::PaneMeta {
             pgid: None,
@@ -1508,8 +1639,39 @@ mod tests {
             theme_reports: false,
         };
         let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
-        let tab = adopt_saved_tab(&Config::default(), &egui::Context::default(), st, &mut panes);
+        let tab = adopt_saved_tab(
+            cfg,
+            &egui::Context::default(),
+            st,
+            &mut panes,
+            &mut agent_restore::RestorePlan::default(),
+        );
         (tab, tx)
+    }
+
+    #[test]
+    fn an_adopted_pane_keeps_its_agent_record_only_when_it_tracks_agents() {
+        use crate::config::ResumeAgents::{Auto, Off};
+        let agent = session::SavedAgent {
+            kind: agents::AgentKind::Claude,
+            session: "0c2cbc96-1111-4222-8333-444455556666".into(),
+            cwd: "/w".into(),
+            transcript: None,
+            crashed: false,
+        };
+        let st = session::SavedTab {
+            pane: Some(session::SavedPane::Leaf { cwd: Some("/w".into()), agent: Some(agent) }),
+            ..Default::default()
+        };
+        // No token or wrapper is needed: the scan finds the agent under any shell. With tracking
+        // off, the pane must not carry a record that nothing would ever update.
+        for (resume_agents, kept) in [(Auto, true), (Off, false)] {
+            let mut cfg = Config::default();
+            cfg.session.resume_agents = resume_agents;
+            let (tab, _tx) = adopt_with(&cfg, &st, Some("/w"), None);
+            let record = tab.root().leaves()[0].agent_saved().map(|a| a.session);
+            assert_eq!(record.is_some(), kept, "{resume_agents:?}");
+        }
     }
 
     #[test]
@@ -1571,6 +1733,7 @@ mod tests {
                 &egui::Context::default(),
                 &session::SavedTab::default(),
                 &mut panes,
+                &mut agent_restore::RestorePlan::default(),
             );
             std::io::Write::write_all(&mut tx, b" 50% done\r\n").expect("write to the fake pty");
             let term = tab.focused_term();
@@ -1652,6 +1815,7 @@ mod tests {
                 &egui::Context::default(),
                 &session::SavedTab::default(),
                 &mut panes,
+                &mut agent_restore::RestorePlan::default(),
             );
             assert_eq!(tab.focused_term().theme_reports(), enabled);
         }
@@ -1755,5 +1919,161 @@ mod tests {
         assert_eq!(drag_swap_target(&r, 0, 161.0), Some(1));
         assert_eq!(drag_swap_target(&r, 2, 161.0), None);
         assert_eq!(drag_swap_target(&r, 2, 159.0), Some(1));
+    }
+
+    #[test]
+    fn a_resumed_leaf_starts_in_the_session_dir_and_queues_the_command() {
+        use crate::agents::{AgentKind, AgentSession, SessionId};
+        let cfg = Config::default();
+        let session = AgentSession {
+            kind: AgentKind::Codex,
+            id: SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap(),
+            cwd: "/work/api".into(),
+            transcript: None,
+        };
+        let mut opts = spawn_opts(&cfg, Some("/somewhere/else".into()));
+        let resume = agent_restore::Resume::new(session, false, ResumeMode::Auto);
+        resume_opts(&mut opts, &resume);
+        assert_eq!(
+            opts.cwd.as_deref(),
+            Some("/work/api"),
+            "the session dir wins over the leaf dir"
+        );
+        let want = b"codex resume 0c2cbc96-1111-4222-8333-444455556666\r".to_vec();
+        assert_eq!(opts.agent_tracking.and_then(|a| a.pending_input), Some(want));
+    }
+
+    #[test]
+    fn demo_panes_track_no_agent() {
+        let mut cfg = Config::default();
+        assert!(spawn_opts(&cfg, None).agent_tracking.is_some(), "the default tracks");
+        cfg.screenshot_run = true;
+        assert!(spawn_opts(&cfg, None).agent_tracking.is_none());
+        assert_eq!(resume_mode(&cfg), None);
+        // The setting itself stays as the user wrote it, and the flag never reaches the file.
+        assert_eq!(cfg.session.resume_agents, crate::config::ResumeAgents::Auto);
+        assert!(!crate::config::config_to_toml(&cfg).contains("screenshot_run"));
+    }
+
+    #[test]
+    fn agent_tracking_needs_restore_on_and_resume_not_off() {
+        use crate::config::ResumeAgents::{Auto, Off, Prefill};
+        let cases = [
+            (true, Auto, Some(ResumeMode::Auto)),
+            (true, Prefill, Some(ResumeMode::Prefill)),
+            (true, Off, None),
+            (false, Auto, None),
+            (false, Prefill, None),
+        ];
+        for (restore, mode, want) in cases {
+            let mut cfg = Config::default();
+            cfg.session.restore = restore;
+            cfg.session.resume_agents = mode;
+            assert_eq!(resume_mode(&cfg), want, "restore={restore} mode={mode:?}");
+            let tracked = want.is_some();
+            assert_eq!(agent_setup(&cfg).is_some(), tracked);
+            assert_eq!(spawn_opts(&cfg, None).agent_tracking.is_some(), tracked);
+        }
+    }
+
+    #[test]
+    fn a_restored_pane_gets_a_notice_only_for_a_skip_or_a_crash_hint() {
+        use agent_restore::{PaneNotice, SkipReason};
+        use agents::AgentKind::{Claude, Codex};
+        let session = |kind| {
+            let id = agents::SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap();
+            agents::AgentSession { kind, id, cwd: "/w".into(), transcript: None }
+        };
+        let resume = |kind, crashed| {
+            Ok(agent_restore::Resume::new(session(kind), crashed, ResumeMode::Auto))
+        };
+        let cases = [
+            (Claude, resume(Claude, false), None),
+            (Claude, resume(Claude, true), Some(PaneNotice::CrashHint { kind: Claude })),
+            (Codex, resume(Codex, true), Some(PaneNotice::CrashHint { kind: Codex })),
+            (
+                Codex,
+                Err(SkipReason::TranscriptMissing),
+                Some(PaneNotice::NotResumed { kind: Codex, reason: SkipReason::TranscriptMissing }),
+            ),
+        ];
+        for (kind, outcome, want) in cases {
+            assert_eq!(restore_notice(kind, &outcome), want);
+        }
+    }
+
+    fn saved_agent_record() -> session::SavedAgent {
+        session::SavedAgent {
+            kind: agents::AgentKind::Claude,
+            session: "0c2cbc96-1111-4222-8333-444455556666".into(),
+            cwd: "/work/stdusk".into(),
+            transcript: None,
+            crashed: false,
+        }
+    }
+
+    #[test]
+    fn a_pane_saves_no_agent_record_while_resume_is_off() {
+        use crate::config::ResumeAgents::{Auto, Off, Prefill};
+        // The pane spawned under `auto` and holds a record. The setting changes while it runs.
+        let auto = Config::default();
+        let mut term =
+            PtyTerm::spawn(COLS, ROWS, egui::Context::default(), &spawn_opts(&auto, None));
+        let session = agents::AgentSession::from_saved(&saved_agent_record()).unwrap();
+        term.restore_agent(session, false);
+        assert!(term.agent_saved().is_some(), "the pane holds a record");
+        for (mode, keeps) in [(Auto, true), (Prefill, true), (Off, false)] {
+            let mut cfg = Config::default();
+            cfg.session.resume_agents = mode;
+            let session::SavedPane::Leaf { agent, .. } = saved_leaf(&cfg, &term) else {
+                panic!("a leaf")
+            };
+            assert_eq!(agent.is_some(), keeps, "{mode:?}");
+        }
+        // With restore off the whole feature is off, so nothing is saved either.
+        let mut cfg = Config::default();
+        cfg.session.restore = false;
+        let session::SavedPane::Leaf { agent, .. } = saved_leaf(&cfg, &term) else { panic!() };
+        assert!(agent.is_none());
+    }
+
+    #[test]
+    fn a_pane_that_could_not_be_adopted_gets_the_toast_and_the_notice_of_any_skip() {
+        let cfg = Config::default();
+        let st = session::SavedTab {
+            pane: Some(session::SavedPane::Split {
+                dir: session::SavedSplitDir::Row,
+                ratio: 0.5,
+                a: Box::new(session::SavedPane::Leaf {
+                    cwd: Some("/work/stdusk".into()),
+                    agent: Some(saved_agent_record()),
+                }),
+                b: Box::new(session::SavedPane::Leaf {
+                    cwd: Some("/work/api".into()),
+                    agent: None,
+                }),
+            }),
+            ..session::SavedTab::default()
+        };
+        // The predecessor passed no pane at all, so both leaves get a fresh shell.
+        let mut panes = Vec::new().into_iter();
+        let mut plan = agent_restore::RestorePlan::default();
+        let tab = adopt_saved_tab(&cfg, &egui::Context::default(), &st, &mut panes, &mut plan);
+        assert_eq!(
+            plan.into_toast().as_deref(),
+            Some("Could not resume 1 session: stdusk (shell not handed over)"),
+            "only the leaf that held an agent record is a skip"
+        );
+        let notices: Vec<_> = tab.root().leaves().iter().map(|t| t.notice()).collect();
+        assert_eq!(
+            notices,
+            vec![
+                Some(agent_restore::PaneNotice::NotResumed {
+                    kind: agents::AgentKind::Claude,
+                    reason: agent_restore::SkipReason::NotHandedOver,
+                }),
+                None
+            ]
+        );
     }
 }

@@ -114,11 +114,13 @@ struct Stdusk {
     next_theme_check: f64,        // egui time of the next throttled OS-appearance read
     sys: sysinfo::System,         // process table for the on-demand close/quit running checks
     procs: procwatch::ProcScanner, // background ~1 Hz table for the CLI badges
-    next_session_save: f64,       // egui time of the next throttled session persist
+    /// The last scan's Codex match, by pid.
+    codex_last: std::collections::HashMap<u32, agents::AgentSession>,
+    next_session_save: f64, // egui time of the next throttled session persist
     last_session: session::SavedSession, // last persisted session (skip identical writes)
-    tray: Option<tray::Tray>,     // menu-bar status item (kept alive; Some when enabled)
-    sync_slot: sync::SyncSlot,    // settings-sync worker result, polled each frame
-    sync_busy: bool,              // a sync push/pull is in flight (buttons disabled)
+    tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
+    sync_slot: sync::SyncSlot, // settings-sync worker result, polled each frame
+    sync_busy: bool,        // a sync push/pull is in flight (buttons disabled)
     launch_pull_cfg: Option<String>, // config TOML when the launch autosync pull spawned (staleness gate)
     new_tab_req: Arc<AtomicUsize>,   // new-tab requests from other launches (single-instance)
     screenshot: Option<String>,      // --screenshot PATH: demo tabs, capture, exit
@@ -136,6 +138,7 @@ impl Stdusk {
         instance_listener: Option<instance::Listener>,
         incoming: Option<handoff::Incoming>,
     ) -> Self {
+        cfg.screenshot_run = screenshot.is_some();
         // Fonts: the shared builder (Phosphor icons + `appearance.font` at the top of Monospace
         // + emoji/symbol fallbacks). An unresolvable family keeps the bundled default + toasts.
         let custom = resolve_font(&cfg.appearance.font);
@@ -204,12 +207,16 @@ impl Stdusk {
         let mut tabs = Vec::new();
         let mut active = 0;
         let mut adopted = false;
+        let mut resume_toast = None;
         if let Some(mut inc) = incoming {
             let mut panes = inc.take_panes().into_iter();
             let session = inc.session().clone();
+            let mut plan = agent_restore::RestorePlan::default();
             for st in &session.tabs {
-                tabs.push(tabs::adopt_saved_tab(&cfg, &cc.egui_ctx, st, &mut panes));
+                tabs.push(tabs::adopt_saved_tab(&cfg, &cc.egui_ctx, st, &mut panes, &mut plan));
             }
+            // A pane that lost its agent record in the handoff is told about like any other skip.
+            resume_toast = plan.into_toast();
             active = session.active.min(tabs.len().saturating_sub(1));
             adopted = !tabs.is_empty();
             // The ACK is the predecessor's release: only now, with live PtyTerms, is it safe. A
@@ -233,9 +240,9 @@ impl Stdusk {
         // Session restore: reopen last session's tabs (cwd/title/color); else one fresh tab.
         if tabs.is_empty() && cfg.session.restore && screenshot.is_none() {
             let saved = session::load();
-            for st in &saved.tabs {
-                tabs.push(tabs::spawn_saved_tab(&cfg, &cc.egui_ctx, st));
-            }
+            let (restored, toast) = tabs::spawn_saved_tabs(&cfg, &cc.egui_ctx, &saved.tabs);
+            tabs = restored;
+            resume_toast = toast;
             active = saved.active.min(tabs.len().saturating_sub(1));
         }
         if tabs.is_empty() {
@@ -367,16 +374,22 @@ impl Stdusk {
 
         let registered_hotkey = cfg.quake.hotkey.clone();
         let applied_font = cfg.appearance.font.clone();
-        let toast = if font_missing {
-            Some((format!("Font not found: {}", cfg.appearance.font), 3.0))
-        } else if adopted {
-            // What a handoff does NOT carry: the screen and a bounded slice of scrollback are
-            // replayed (see `screen`), but the deep history is not. Said once, right after it
-            // happened - the shells themselves are the same processes.
-            Some(("Session reattached - older scrollback did not carry over".to_owned(), 6.0))
-        } else {
-            None
-        };
+        let toast = ui::join_startup_toasts(
+            [
+                // The sessions that stay closed or wait for Enter.
+                resume_toast.map(|text| (text, 8.0)),
+                font_missing.then(|| (format!("Font not found: {}", cfg.appearance.font), 3.0)),
+                // What a handoff does NOT carry: the screen and a bounded slice of scrollback are
+                // replayed (see `screen`), but the deep history is not. Said once, right after it
+                // happened - the shells themselves are the same processes.
+                adopted.then(|| {
+                    ("Session reattached - older scrollback did not carry over".to_owned(), 6.0)
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        );
         let fx_opacity = cfg.appearance.opacity;
         // Autosync: pull once on launch (in the background - startup never blocks on git).
         // The per-frame sync_done handler applies the result like a manual Pull; a failure
@@ -394,6 +407,8 @@ impl Stdusk {
         // launch, so `dock_when_visible` counts; window mode is always Regular.
         let dock_shown = config::activation_is_regular(&cfg, true);
         let detect_clis = cfg.terminal.detect_clis && screenshot.is_none();
+        let track_agents = tabs::resume_mode(&cfg).is_some();
+        let procs = procwatch::ProcScanner::spawn(cc.egui_ctx.clone(), detect_clis || track_agents);
         Self {
             tabs,
             active,
@@ -436,7 +451,8 @@ impl Stdusk {
             reported_theme: colors::theme(),
             next_theme_check: 0.0,
             sys: sysinfo::System::new(),
-            procs: procwatch::ProcScanner::spawn(cc.egui_ctx.clone(), detect_clis),
+            procs,
+            codex_last: std::collections::HashMap::new(),
             next_session_save: 0.0,
             last_session: session::SavedSession::default(),
             tray,
@@ -451,6 +467,60 @@ impl Stdusk {
             next_update_check: 0.0,
             restart_on_quit: false,
         }
+    }
+
+    /// One step of every pane's agent record from a scan. Also releases a resume command that a
+    /// shell without prompt marks is still holding.
+    fn step_agents(&mut self, scan: &procwatch::Scan) {
+        for tab in &mut self.tabs {
+            for term in tab.root_mut().leaves_mut() {
+                term.release_pending_after_wait();
+            }
+        }
+        self.codex_last.clone_from(&scan.files.codex);
+        self.step_panes(scan);
+    }
+
+    /// The nearest agent under a pane's own shell is the pane's session, so a sibling pane's
+    /// agent can never leak in.
+    fn step_panes(&mut self, scan: &procwatch::Scan) {
+        for tab in &mut self.tabs {
+            for term in tab.root_mut().leaves_mut() {
+                let Some(root) = term.shell_pid() else { continue };
+                let seen = procwatch::pane_seen(scan, root, term.foreground_pgid());
+                term.step_agent(seen, scan.taken);
+            }
+        }
+    }
+
+    /// Bring every pane's agent record up to date before a snapshot that outlives the panes (a
+    /// quit, a handoff): one process scan taken now, then the statuses the reader got since.
+    /// Without it a clean exit a moment before the quit keeps its record until the next 1 Hz scan,
+    /// and the next launch resumes a session the user just closed. A refresh takes about as long
+    /// as one frame.
+    pub(crate) fn settle_agents(&mut self) {
+        if tabs::resume_mode(&self.cfg).is_none() {
+            return;
+        }
+        let claude_home = agents::SystemFs::from_env().claude_home;
+        // The Codex match stays on the scan thread (it holds the memory of its verdicts and reads
+        // the rollouts), so this scan reuses the last one. A Codex process that started since is
+        // silent for now, which leaves its record as it was.
+        let mut scan = procwatch::scan_now(&mut self.sys, &claude_home, None);
+        scan.files.codex.clone_from(&self.codex_last);
+        self.step_panes(&scan);
+        self.apply_pending_statuses();
+    }
+
+    /// Apply every pane's pending status now. `true` if any pane had one.
+    fn apply_pending_statuses(&mut self) -> bool {
+        let mut any = false;
+        for tab in &mut self.tabs {
+            for term in tab.root_mut().leaves_mut() {
+                any |= term.apply_pending_status();
+            }
+        }
+        any
     }
 
     /// The session exactly as it stands: every tab's title/color/pinning and its whole pane tree
@@ -483,7 +553,7 @@ impl Stdusk {
                     // shell per leaf - nothing is replayed into it) and a handoff can pair one
                     // passed fd per leaf.
                     pane: Some(session::SavedPane::from_tree(t.root(), &|term: &PtyTerm| {
-                        session::SavedPane::Leaf { cwd: term.cwd(), agent: None }
+                        tabs::saved_leaf(&self.cfg, term)
                     })),
                     repo: t.group.to_saved(),
                 })
@@ -733,8 +803,12 @@ impl eframe::App for Stdusk {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     // An OS close (red button / Cmd+Q) is never a restart: it terminates the
                     // shells, handoff or not, so it asks the terminate question.
-                    self.pending_quit =
-                        Some(ui::quit_confirm_message(procs, tabs, ui::QuitKind::Quit, 0));
+                    self.pending_quit = Some(ui::quit_confirm_message(
+                        procs,
+                        tabs,
+                        ui::QuitKind::Quit,
+                        self.resumable_sessions(),
+                    ));
                 } else {
                     // Nothing to confirm: let the close proceed, but kill the groups first so no
                     // shell tree leaks (Drop is the backstop if this path is ever missed).
@@ -1061,14 +1135,29 @@ impl eframe::App for Stdusk {
         // row - never a synchronous scan on menu open). Skipped in the screenshot harness (it sets
         // demo badges directly).
         let detect_clis = self.cfg.terminal.detect_clis && self.screenshot.is_none();
-        self.procs.set_enabled(detect_clis);
-        if detect_clis && let Some(scan) = self.procs.take() {
-            let procs = scan.procs;
+        let track_agents = tabs::resume_mode(&self.cfg).is_some();
+        self.procs.set_enabled(detect_clis || track_agents);
+        // A status the shell reported is applied in this egui frame, not at the next 1 Hz procwatch
+        // scan. The session persist above this block runs in the next frame, so ask for that frame
+        // now. The save then does not wait for its 3 s tick.
+        if track_agents && self.apply_pending_statuses() {
+            self.next_session_save = 0.0;
+            ctx.request_repaint();
+        }
+        if (detect_clis || track_agents)
+            && let Some(scan) = self.procs.take()
+        {
+            let procs = &scan.procs;
             for tab in &mut self.tabs {
                 let pids: Vec<u32> =
                     tab.root().leaves().iter().filter_map(|t| t.shell_pid()).collect();
-                tab.cli = pids.iter().find_map(|&pid| procwatch::detect(&procs, pid));
-                tab.proc = pids.iter().find_map(|&pid| procwatch::busy_child(&procs, pid));
+                if detect_clis {
+                    tab.cli = pids.iter().find_map(|&pid| procwatch::detect(procs, pid));
+                    tab.proc = pids.iter().find_map(|&pid| procwatch::busy_child(procs, pid));
+                }
+            }
+            if track_agents {
+                self.step_agents(&scan);
             }
         }
 
