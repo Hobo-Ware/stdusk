@@ -4,6 +4,7 @@
 //! `eframe::App` loop stays a thin caller.
 use eframe::egui;
 
+use crate::agent_restore::PaneNotice;
 use crate::colors;
 use crate::progress::Progress;
 use crate::terminal::{CmdState, GridSnap, PtyTerm};
@@ -507,15 +508,26 @@ pub(crate) enum QuitKind {
 
 /// The quit confirm body: what the action does to what's running. `procs` running child processes
 /// summed across `tabs` tabs. Title ("Quit stdusk?") is drawn by the modal; this is the detail line.
-pub(crate) fn quit_confirm_message(procs: usize, tabs: usize, kind: QuitKind) -> String {
+pub(crate) fn quit_confirm_message(
+    procs: usize,
+    tabs: usize,
+    kind: QuitKind,
+    resumable: usize,
+) -> String {
     let p_noun = if procs == 1 { "process" } else { "processes" };
     let t_noun = if tabs == 1 { "tab" } else { "tabs" };
+    // Only a quit that ends the processes resumes anything: a handoff keeps them alive.
+    let resume = match (kind, resumable) {
+        (QuitKind::RestartKeepingShells, _) | (_, 0) => String::new(),
+        (_, 1) => " 1 agent session resumes on the next launch.".to_owned(),
+        (_, n) => format!(" {n} agent sessions resume on the next launch."),
+    };
     match kind {
         QuitKind::Quit => {
-            format!("This will terminate {procs} running {p_noun} across {tabs} {t_noun}.")
+            format!("This will terminate {procs} running {p_noun} across {tabs} {t_noun}.{resume}")
         }
         QuitKind::Restart => format!(
-            "This will terminate {procs} running {p_noun} across {tabs} {t_noun}, then relaunch stdusk."
+            "This will terminate {procs} running {p_noun} across {tabs} {t_noun}, then relaunch stdusk.{resume}"
         ),
         // Nothing is terminated here, so the line must not say it is. Scrollback is the one real
         // loss (alacritty's Term has no serialization), so it's stated up front.
@@ -628,18 +640,28 @@ pub(crate) fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(v);
 }
 
-/// Paint a small pill-shaped status toast centered near the bottom edge. `fade` in 0..1
-/// scales opacity so the message dissolves as it expires.
+/// The one toast for everything startup has to say: one line per message, in order, shown as
+/// long as the longest of them. `None` when there is nothing to say.
+pub(crate) fn join_startup_toasts(parts: Vec<(String, f64)>) -> Option<(String, f64)> {
+    let secs = parts.iter().map(|(_, secs)| *secs).reduce(f64::max)?;
+    let texts: Vec<String> = parts.into_iter().map(|(text, _)| text).collect();
+    Some((texts.join("\n"), secs))
+}
+
+/// Paint a small pill-shaped status toast centered near the bottom edge. A long message wraps
+/// inside the window, and a newline starts a new line. `fade` in 0..1 scales opacity so the
+/// message dissolves as it expires.
 pub(crate) fn draw_toast(ui: &egui::Ui, msg: &str, fade: f32) {
     let a = |c: egui::Color32, base: u8| {
         egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (f32::from(base) * fade) as u8)
     };
     let area = ui.max_rect();
     let font = egui::FontId::proportional(13.0);
-    let galley = ui.painter().layout_no_wrap(msg.to_owned(), font.clone(), colors::fg());
     let pad = egui::vec2(14.0, 8.0);
+    let wrap_width = (area.width() - 2.0 * (pad.x + 16.0)).max(120.0);
+    let galley = ui.painter().layout(msg.to_owned(), font, colors::fg(), wrap_width);
     let size = galley.size() + pad * 2.0;
-    let center = egui::pos2(area.center().x, area.bottom() - 34.0);
+    let center = egui::pos2(area.center().x, area.bottom() - 34.0 - (size.y - 32.0).max(0.0) / 2.0);
     let rect = egui::Rect::from_center_size(center, size);
     let p = ui.painter();
     p.rect_filled(rect, 8.0, a(colors::elevated(), 235));
@@ -649,7 +671,42 @@ pub(crate) fn draw_toast(ui: &egui::Ui, msg: &str, fade: f32) {
         egui::Stroke::new(1.0, a(colors::border(), 255)),
         egui::StrokeKind::Inside,
     );
-    p.text(center, egui::Align2::CENTER_CENTER, msg, font, a(colors::fg(), 255));
+    p.galley_with_override_text_color(rect.min + pad, galley, a(colors::fg(), 255));
+}
+
+/// The one line a pane's restore notice says.
+pub(crate) fn pane_notice_text(notice: PaneNotice) -> String {
+    match notice {
+        PaneNotice::NotResumed { kind, reason } => {
+            format!("{} session not resumed: {}", kind.display_name(), reason.text())
+        }
+        PaneNotice::CrashHint { kind } => {
+            format!(
+                "{} session ended by a crash signal. Press Enter to reopen it.",
+                kind.display_name()
+            )
+        }
+    }
+}
+
+/// Paint a dim notice pill along the bottom edge of a pane, inside `pane`. This is stdusk's own
+/// chrome, drawn over the grid. It never goes into the pty or the terminal grid. A text that is
+/// too long for a narrow pane wraps. Returns the pill's rectangle.
+pub(crate) fn draw_pane_notice(ui: &egui::Ui, pane: egui::Rect, text: &str) -> egui::Rect {
+    let font = egui::FontId::proportional(12.0);
+    let (pad, margin) = (egui::vec2(10.0, 5.0), 8.0);
+    let wrap_width = (pane.width() - 2.0 * (margin + pad.x)).max(60.0);
+    let galley = ui.painter().layout(text.to_owned(), font, colors::dim(), wrap_width);
+    let size = galley.size() + pad * 2.0;
+    let pill = egui::Rect::from_min_size(
+        egui::pos2(pane.center().x - size.x / 2.0, pane.bottom() - margin - size.y),
+        size,
+    );
+    let p = ui.painter_at(pane);
+    p.rect_filled(pill, 6.0, colors::elevated().gamma_multiply(0.92));
+    p.rect_stroke(pill, 6.0, egui::Stroke::new(1.0, colors::border()), egui::StrokeKind::Inside);
+    p.galley(pill.min + pad, galley, colors::dim());
+    pill
 }
 
 /// Dim scrim + centered "[process exited]" banner over a dead pane (`on_exit = "keep"` or the
@@ -1565,13 +1622,115 @@ mod tests {
     #[test]
     fn quit_confirm_message_pluralizes() {
         assert_eq!(
-            quit_confirm_message(1, 1, QuitKind::Quit),
+            quit_confirm_message(1, 1, QuitKind::Quit, 0),
             "This will terminate 1 running process across 1 tab."
         );
         assert_eq!(
-            quit_confirm_message(5, 2, QuitKind::Quit),
+            quit_confirm_message(5, 2, QuitKind::Quit, 0),
             "This will terminate 5 running processes across 2 tabs."
         );
+    }
+
+    #[test]
+    fn startup_toasts_join_instead_of_replacing_each_other() {
+        let font = ("Font not found: Foo".to_owned(), 3.0);
+        let resume = ("Could not resume 1 session: api (directory missing)".to_owned(), 8.0);
+        assert_eq!(join_startup_toasts(vec![]), None);
+        assert_eq!(join_startup_toasts(vec![font.clone()]), Some(font.clone()));
+        assert_eq!(
+            join_startup_toasts(vec![resume.clone(), font.clone()]),
+            Some((format!("{}\n{}", resume.0, font.0), 8.0))
+        );
+    }
+
+    #[test]
+    fn a_long_startup_toast_wraps_inside_the_window() {
+        let long = "1 session ended by a crash signal. Its resume command is typed. Press Enter to reopen it.";
+        let (text, _) = join_startup_toasts(vec![
+            (format!("Could not resume 3 sessions: api (directory missing), web (transcript missing), x (invalid session id). {long}"), 8.0),
+            ("Font not found: Foo".to_owned(), 3.0),
+            ("Session reattached - older scrollback did not carry over".to_owned(), 6.0),
+        ])
+        .unwrap();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(480.0, 300.0));
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+        let out = ctx.run_ui(raw, |ui| draw_toast(ui, &text, 1.0));
+        let shapes: Vec<_> = out.shapes.iter().map(|s| s.shape.visual_bounding_rect()).collect();
+        assert!(!shapes.is_empty(), "the toast paints something");
+        let bounds = shapes.into_iter().fold(egui::Rect::NOTHING, egui::Rect::union);
+        assert!(screen.contains_rect(bounds), "toast {bounds:?} sticks out of {screen:?}");
+        assert!(bounds.height() > 60.0, "the long text wrapped onto several lines: {bounds:?}");
+    }
+
+    #[test]
+    fn a_pane_notice_names_the_agent_and_the_reason() {
+        use crate::agent_restore::SkipReason;
+        use crate::agents::AgentKind::{Claude, Codex};
+        let cases = [
+            (
+                PaneNotice::NotResumed { kind: Claude, reason: SkipReason::TranscriptMissing },
+                "Claude session not resumed: transcript missing",
+            ),
+            (
+                PaneNotice::NotResumed { kind: Codex, reason: SkipReason::DirectoryMissing },
+                "Codex session not resumed: directory missing",
+            ),
+            (
+                PaneNotice::NotResumed { kind: Claude, reason: SkipReason::Duplicate },
+                "Claude session not resumed: duplicate of another pane",
+            ),
+            (
+                PaneNotice::NotResumed { kind: Codex, reason: SkipReason::NotHandedOver },
+                "Codex session not resumed: shell not handed over",
+            ),
+            (
+                PaneNotice::NotResumed { kind: Claude, reason: SkipReason::ShellBusy },
+                "Claude session not resumed: shell busy at start",
+            ),
+            (
+                PaneNotice::CrashHint { kind: Claude },
+                "Claude session ended by a crash signal. Press Enter to reopen it.",
+            ),
+            (
+                PaneNotice::CrashHint { kind: Codex },
+                "Codex session ended by a crash signal. Press Enter to reopen it.",
+            ),
+        ];
+        for (notice, want) in cases {
+            assert_eq!(pane_notice_text(notice), want);
+        }
+    }
+
+    #[test]
+    fn a_pane_notice_stays_inside_its_pane_even_when_the_pane_is_narrow() {
+        let text =
+            pane_notice_text(PaneNotice::CrashHint { kind: crate::agents::AgentKind::Codex });
+        for width in [600.0, 220.0] {
+            let pane = egui::Rect::from_min_size(egui::pos2(40.0, 30.0), egui::vec2(width, 200.0));
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 300.0));
+            let ctx = egui::Context::default();
+            let raw = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            let mut pill = egui::Rect::NOTHING;
+            let _ = ctx.run_ui(raw, |ui| pill = draw_pane_notice(ui, pane, &text));
+            assert!(pane.contains_rect(pill), "width {width}: {pill:?} sticks out of {pane:?}");
+            assert!(pill.bottom() > pane.bottom() - 20.0, "the pill sits at the bottom edge");
+        }
+    }
+
+    #[test]
+    fn quit_confirm_says_how_many_agent_sessions_resume() {
+        assert_eq!(
+            quit_confirm_message(2, 1, QuitKind::Quit, 1),
+            "This will terminate 2 running processes across 1 tab. 1 agent session resumes on the next launch."
+        );
+        assert_eq!(
+            quit_confirm_message(4, 2, QuitKind::Restart, 3),
+            "This will terminate 4 running processes across 2 tabs, then relaunch stdusk. 3 agent sessions resume on the next launch."
+        );
+        // A handoff restart keeps every process alive, so nothing resumes and nothing is claimed.
+        assert!(!quit_confirm_message(4, 2, QuitKind::RestartKeepingShells, 3).contains("resume"));
+        assert!(!quit_confirm_message(4, 2, QuitKind::Quit, 0).contains("resume"));
     }
 
     #[test]
@@ -1585,26 +1744,26 @@ mod tests {
         );
         assert_eq!(quit_confirm_labels(QuitKind::Quit), ("Quit stdusk?", "Quit"));
         // The restart wording also has to promise the relaunch, since that's the difference.
-        let m = quit_confirm_message(2, 1, QuitKind::Restart);
+        let m = quit_confirm_message(2, 1, QuitKind::Restart, 0);
         assert_eq!(
             m,
             "This will terminate 2 running processes across 1 tab, then relaunch stdusk."
         );
-        assert!(!quit_confirm_message(2, 1, QuitKind::Quit).contains("relaunch"));
+        assert!(!quit_confirm_message(2, 1, QuitKind::Quit, 0).contains("relaunch"));
     }
 
     #[test]
     fn handoff_restart_never_claims_it_terminates_anything() {
         // A restart that hands the ptys over keeps every shell alive, so the modal must drop the
         // "terminate" claim entirely - and must name the one thing that IS lost.
-        let m = quit_confirm_message(3, 2, QuitKind::RestartKeepingShells);
+        let m = quit_confirm_message(3, 2, QuitKind::RestartKeepingShells, 2);
         assert_eq!(
             m,
             "stdusk will relaunch and reattach 3 running processes across 2 tabs. Scrollback is not restored."
         );
         assert!(!m.contains("terminate"));
         // Without a handoff the wording stays honest about the kill.
-        assert!(quit_confirm_message(3, 2, QuitKind::Restart).contains("terminate"));
+        assert!(quit_confirm_message(3, 2, QuitKind::Restart, 0).contains("terminate"));
         // Same split for the About note.
         assert!(restart_shell_note(true).contains("reattached"));
         assert!(!restart_shell_note(true).contains("terminated"));

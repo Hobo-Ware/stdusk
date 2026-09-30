@@ -730,7 +730,7 @@ impl eframe::App for Stdusk {
                     // An OS close (red button / Cmd+Q) is never a restart: it terminates the
                     // shells, handoff or not, so it asks the terminate question.
                     self.pending_quit =
-                        Some(ui::quit_confirm_message(procs, tabs, ui::QuitKind::Quit));
+                        Some(ui::quit_confirm_message(procs, tabs, ui::QuitKind::Quit, 0));
                 } else {
                     // Nothing to confirm: let the close proceed, but kill the groups first so no
                     // shell tree leaks (Drop is the backstop if this path is ever missed).

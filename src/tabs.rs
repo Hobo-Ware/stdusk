@@ -900,7 +900,7 @@ impl Stdusk {
         if self.screenshot.is_none()
             && ui::should_confirm_running(self.cfg.session.confirm_quit_running, procs)
         {
-            self.pending_quit = Some(ui::quit_confirm_message(procs, tabs, self.quit_kind()));
+            self.pending_quit = Some(ui::quit_confirm_message(procs, tabs, self.quit_kind(), 0));
         } else {
             self.finish_quit(ctx);
         }
