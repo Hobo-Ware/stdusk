@@ -242,6 +242,10 @@ impl Stdusk {
             tabs.push(spawn_tab(&cfg, &cc.egui_ctx, None));
             active = 0;
         }
+        // Session temp files of dead writers are leftovers of an earlier run.
+        if screenshot.is_none() {
+            session::remove_stale_temp_files();
+        }
         let mut sized = false;
 
         // Visual-test harness: populate representative tabs and skip monitor sizing.
