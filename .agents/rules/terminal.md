@@ -60,8 +60,10 @@ keep while wheel-scrolling (buffer-point highlighting stays correct).
 
 ## Colors (`colors.rs`)
 
-One `Theme { bg, fg, cursor, ansi[16] }` set once at startup (`OnceLock`); all reads go
-through accessors. Chrome colors are *derived* from the theme (elevated/titlebar/border via
+One live `Theme { bg, fg, cursor, ansi[16] }` behind an `RwLock`; read it through accessors.
+`grid_snapshot` copies the theme before taking the terminal lock, then uses
+`to_color32_in` / `cell_fg_in` with that copy for every cell. Do not reacquire the theme
+lock per cell. Chrome colors are *derived* from the theme (elevated/titlebar/border via
 `shade`) so swapping themes recolors everything. `is_default_bg` → render transparent so
 window opacity shows through. Map `alacritty Color`: Named→16, Indexed→256-cube+grayscale,
 Spec→truecolor.
