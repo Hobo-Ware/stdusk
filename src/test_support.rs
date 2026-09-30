@@ -15,6 +15,7 @@ pub(crate) fn spawn_opts(shell: &str, args: &[&str]) -> SpawnOpts {
         scrollback_lines: 500,
         word_separators: " ".into(),
         bold_bright: false,
+        agent_tracking: None,
         cwd: None,
         profile: Some(Profile {
             name: "test".into(),

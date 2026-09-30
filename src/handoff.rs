@@ -913,6 +913,7 @@ mod tests {
             scrollback_lines: 200,
             word_separators: " ".into(),
             bold_bright: false,
+            agent_tracking: None,
             cwd: Some(dir.to_string_lossy().into_owned()),
             profile: Some(crate::config::Profile {
                 name: "cwdless".into(),
@@ -967,6 +968,7 @@ mod tests {
             scrollback_lines: 200,
             word_separators: " ".into(),
             bold_bright: false,
+            agent_tracking: None,
             cwd: None,
             profile: Some(crate::config::Profile {
                 name: "live".into(),
