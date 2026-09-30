@@ -252,9 +252,74 @@ fn write_session_file(s: &SavedSession) {
     }
 }
 
-/// Persist the session with a durable atomic replacement.
+/// A snapshot for the writer thread, and who to tell once it is on the disk.
+struct Job {
+    snapshot: SavedSession,
+    done: Option<std::sync::mpsc::Sender<()>>,
+}
+
+/// The one thread that writes the session file. A full sync can take tens of milliseconds, so the
+/// UI thread only hands snapshots over. Because one thread does all the writing, two saves never
+/// interleave, and a queue that built up while a sync ran collapses to its newest snapshot.
+struct SaveWriter {
+    jobs: std::sync::mpsc::Sender<Job>,
+}
+
+impl SaveWriter {
+    fn spawn(write: impl Fn(&SavedSession) + Send + 'static) -> Self {
+        let (jobs, queue) = std::sync::mpsc::channel::<Job>();
+        std::thread::spawn(move || {
+            while let Ok(mut latest) = queue.recv() {
+                let mut waiting: Vec<_> = latest.done.take().into_iter().collect();
+                while let Ok(mut newer) = queue.try_recv() {
+                    waiting.extend(newer.done.take());
+                    latest = newer;
+                }
+                write(&latest.snapshot);
+                for done in waiting {
+                    let _ = done.send(());
+                }
+            }
+        });
+        Self { jobs }
+    }
+
+    /// Queue a snapshot and return at once.
+    fn save(&self, snapshot: SavedSession) {
+        let _ = self.jobs.send(Job { snapshot, done: None });
+    }
+
+    /// Queue a snapshot and wait up to `limit` until it, or a newer one, is on the disk. Anything
+    /// queued before it is written first, so this snapshot is the last word. Returns whether it
+    /// got there in time.
+    fn save_and_wait(&self, snapshot: SavedSession, limit: std::time::Duration) -> bool {
+        let (done, written) = std::sync::mpsc::channel();
+        self.jobs.send(Job { snapshot, done: Some(done) }).is_ok()
+            && written.recv_timeout(limit).is_ok()
+    }
+}
+
+fn writer() -> &'static SaveWriter {
+    static WRITER: std::sync::OnceLock<SaveWriter> = std::sync::OnceLock::new();
+    WRITER.get_or_init(|| SaveWriter::spawn(write_session_file))
+}
+
+/// Persist the session in the background (best-effort). The periodic save uses this, so a slow
+/// disk never blocks a frame.
 pub(crate) fn save(s: &SavedSession) {
-    write_session_file(s);
+    writer().save(s.clone());
+}
+
+/// How long quit waits for the final save. A hung home volume must not freeze Cmd+Q.
+const FINAL_SAVE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Persist the session and return once it is on the disk, or after [`FINAL_SAVE_WAIT`]. The last
+/// save before the panes are killed uses this: the kill ends the agents, and this snapshot must
+/// be the one that stays.
+pub(crate) fn save_and_wait(s: &SavedSession) {
+    if !writer().save_and_wait(s.clone(), FINAL_SAVE_WAIT) {
+        eprintln!("stdusk: the final session save did not finish in time; quitting anyway");
+    }
 }
 
 #[cfg(test)]
@@ -479,25 +544,91 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_crashed_mark_is_written_only_when_set_and_an_absent_mark_means_normal() {
-        let agent = |crashed| SavedAgent {
-            kind: crate::agents::AgentKind::Claude,
-            session: SID.into(),
-            cwd: "/w".into(),
-            transcript: None,
-            crashed,
-        };
-        let leaf = |crashed| SavedPane::Leaf { cwd: None, agent: Some(agent(crashed)) };
-        let normal = toml::to_string(&leaf(false)).unwrap();
-        assert!(!normal.contains("crashed"), "{normal}");
-        let marked = toml::to_string(&leaf(true)).unwrap();
-        assert!(marked.contains("crashed = true"), "{marked}");
-        for (body, want) in [(normal, false), (marked, true)] {
-            let back: SavedPane = toml::from_str(&body).unwrap();
-            assert_eq!(back, leaf(want));
+    // --- Durable, single-writer saves -----------------------------------------------------------
+
+    fn snap(title: &str) -> SavedSession {
+        SavedSession {
+            tabs: vec![SavedTab { title: Some(title.into()), ..Default::default() }],
+            ..Default::default()
         }
     }
+
+    /// Longer than any test write takes.
+    const PATIENT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    fn titles(log: &std::sync::Mutex<Vec<String>>) -> Vec<String> {
+        log.lock().unwrap().clone()
+    }
+
+    /// A writer that records what it writes, and holds its first write until `gate` opens.
+    fn recording_writer(
+        gate: std::sync::mpsc::Receiver<()>,
+    ) -> (SaveWriter, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let gate = std::sync::Mutex::new(Some(gate));
+        let writer = SaveWriter::spawn(move |s| {
+            if let Some(g) = gate.lock().unwrap().take() {
+                let _ = g.recv();
+            }
+            seen.lock().unwrap().push(s.tabs[0].title.clone().unwrap());
+        });
+        (writer, log)
+    }
+
+    #[test]
+    fn a_save_returns_at_once_even_while_the_disk_is_slow() {
+        let (open, gate) = std::sync::mpsc::channel();
+        let (writer, log) = recording_writer(gate);
+        let started = std::time::Instant::now();
+        writer.save(snap("one")); // the writer is now stuck in its first write
+        writer.save(snap("two"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "save must not block");
+        assert!(titles(&log).is_empty(), "the slow write has not finished");
+        open.send(()).unwrap();
+        writer.save_and_wait(snap("last"), PATIENT);
+        assert_eq!(titles(&log).last().map(String::as_str), Some("last"));
+    }
+
+    #[test]
+    fn a_backlog_collapses_to_the_newest_snapshot_and_writes_never_overlap() {
+        let (open, gate) = std::sync::mpsc::channel();
+        let (writer, log) = recording_writer(gate);
+        writer.save(snap("stuck"));
+        std::thread::sleep(std::time::Duration::from_millis(150)); // the writer is inside its write
+        for n in 0..20 {
+            writer.save(snap(&format!("s{n}")));
+        }
+        open.send(()).unwrap();
+        writer.save_and_wait(snap("final"), PATIENT);
+        // The stuck write finished, the 20 queued ones collapsed, and the final one is last.
+        assert_eq!(titles(&log), vec!["stuck".to_owned(), "final".to_owned()]);
+    }
+
+    #[test]
+    fn the_final_save_is_written_after_everything_queued_before_it() {
+        let (open, gate) = std::sync::mpsc::channel();
+        let (writer, log) = recording_writer(gate);
+        writer.save(snap("periodic"));
+        open.send(()).unwrap();
+        writer.save_and_wait(snap("final"), PATIENT);
+        writer.save_and_wait(snap("final again"), PATIENT);
+        let seen = titles(&log);
+        assert_eq!(seen.last().map(String::as_str), Some("final again"));
+        assert!(seen.iter().position(|t| t == "periodic") < seen.iter().position(|t| t == "final"));
+    }
+
+    #[test]
+    fn a_save_that_the_disk_never_finishes_cannot_hold_quit_forever() {
+        let (open, gate) = std::sync::mpsc::channel();
+        let (writer, _log) = recording_writer(gate);
+        let started = std::time::Instant::now();
+        let written = writer.save_and_wait(snap("stuck"), std::time::Duration::from_millis(200));
+        assert!(!written, "the wait must report that the snapshot is not on the disk");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "the wait must end");
+        open.send(()).unwrap(); // let the writer thread finish
+    }
+
     #[test]
     fn two_processes_never_share_a_temp_file() {
         let path = std::path::Path::new("/x/session.toml");
@@ -555,5 +686,25 @@ mod tests {
         // A missing directory: the write fails quietly, never panics.
         write_durably(&dir.join("gone/session.toml"), "x = 1\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_crashed_mark_is_written_only_when_set_and_an_absent_mark_means_normal() {
+        let agent = |crashed| SavedAgent {
+            kind: crate::agents::AgentKind::Claude,
+            session: SID.into(),
+            cwd: "/w".into(),
+            transcript: None,
+            crashed,
+        };
+        let leaf = |crashed| SavedPane::Leaf { cwd: None, agent: Some(agent(crashed)) };
+        let normal = toml::to_string(&leaf(false)).unwrap();
+        assert!(!normal.contains("crashed"), "{normal}");
+        let marked = toml::to_string(&leaf(true)).unwrap();
+        assert!(marked.contains("crashed = true"), "{marked}");
+        for (body, want) in [(normal, false), (marked, true)] {
+            let back: SavedPane = toml::from_str(&body).unwrap();
+            assert_eq!(back, leaf(want));
+        }
     }
 }
