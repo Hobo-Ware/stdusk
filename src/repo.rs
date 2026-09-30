@@ -185,7 +185,7 @@ impl Activity {
 
 pub(crate) fn roll_up(items: &[Activity]) -> Activity {
     Activity {
-        progress: tabs::aggregate_progress(&items.iter().map(|a| a.progress).collect::<Vec<_>>()),
+        progress: tabs::aggregate_progress(items.iter().map(|a| a.progress)),
         attention: items.iter().any(|a| a.attention),
     }
 }
@@ -273,9 +273,7 @@ impl Stdusk {
     fn tab_activity(tab: &tabs::Tab) -> Activity {
         let leaves = tab.root().leaves();
         Activity {
-            progress: tabs::aggregate_progress(
-                &leaves.iter().map(|t| t.progress()).collect::<Vec<_>>(),
-            ),
+            progress: tabs::aggregate_progress(leaves.iter().map(|t| t.progress())),
             attention: tab.activity_notified
                 || leaves.iter().any(|t| t.cmd_state() == CmdState::Fail),
         }
