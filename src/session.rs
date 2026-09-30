@@ -191,19 +191,70 @@ pub(crate) fn load() -> SavedSession {
     std::fs::read_to_string(p).ok().and_then(|s| toml::from_str(&s).ok()).unwrap_or_default()
 }
 
-/// Persist the session (best-effort; a failed write is not worth interrupting the user).
-/// Atomic: write a temp file then rename, so a crash mid-write can't truncate the session.
-pub(crate) fn save(s: &SavedSession) {
+/// Write the session file so a power loss cannot leave it torn or lost: write a temp file, flush
+/// it to the disk (`sync_all` is `F_FULLFSYNC` on macOS), rename it over the old file, then flush
+/// the directory so the rename itself survives. The directory flush is best effort, because some
+/// platforms refuse to open a directory for it. A failed write is not worth interrupting the user.
+fn write_durably(path: &std::path::Path, body: &str) {
+    use std::io::Write as _;
+    let tmp = temp_path(path);
+    let written = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(body.as_bytes())?;
+        f.sync_all()
+    });
+    if written.is_ok() && std::fs::rename(&tmp, path).is_ok() {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
+        }
+    } else {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// The temp file for `path`. The process id is in the name, so two stdusk processes that save at
+/// once (a handoff successor and its predecessor) never write into one file.
+fn temp_path(path: &std::path::Path) -> std::path::PathBuf {
+    path.with_extension(format!("toml.{}.tmp", std::process::id()))
+}
+
+/// The pid in the name of a temp file (`session.toml.<pid>.tmp`), or `None` for any other name.
+fn temp_file_pid(name: &str) -> Option<u32> {
+    name.strip_prefix("session.toml.")?.strip_suffix(".tmp")?.parse().ok()
+}
+
+/// Delete the temp files in `dir` whose writer is not `alive`. A writer that quit mid-write (the
+/// final save gives up after a wait) leaves its file behind. Best effort.
+fn remove_dead_temp_files(dir: &std::path::Path, alive: impl Fn(u32) -> bool) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        if name.to_str().and_then(temp_file_pid).is_some_and(|pid| !alive(pid)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Clean up at startup after earlier runs. A process that is still alive keeps its file: it may be
+/// a handoff predecessor that still writes.
+pub(crate) fn remove_stale_temp_files() {
+    let Some(dir) = path().and_then(|p| p.parent().map(std::path::Path::to_path_buf)) else {
+        return;
+    };
+    remove_dead_temp_files(&dir, crate::procwatch::process_alive);
+}
+
+fn write_session_file(s: &SavedSession) {
     let Some(p) = path() else { return };
     if let Some(dir) = p.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Ok(body) = toml::to_string(s) {
-        let tmp = p.with_extension("toml.tmp");
-        if std::fs::write(&tmp, body).is_ok() {
-            let _ = std::fs::rename(&tmp, &p);
-        }
+        write_durably(&p, &body);
     }
+}
+
+/// Persist the session with a durable atomic replacement.
+pub(crate) fn save(s: &SavedSession) {
+    write_session_file(s);
 }
 
 #[cfg(test)]
@@ -446,5 +497,63 @@ mod tests {
             let back: SavedPane = toml::from_str(&body).unwrap();
             assert_eq!(back, leaf(want));
         }
+    }
+    #[test]
+    fn two_processes_never_share_a_temp_file() {
+        let path = std::path::Path::new("/x/session.toml");
+        let tmp = temp_path(path);
+        assert_eq!(tmp.parent(), path.parent());
+        let name = tmp.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.contains(&std::process::id().to_string()), "{name}");
+        assert_ne!(tmp, path);
+    }
+
+    #[test]
+    fn startup_removes_only_the_temp_files_of_dead_writers() {
+        let dir = std::env::temp_dir().join(format!("stdusk-stale-tmp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = [
+            "session.toml.111.tmp",  // dead writer: removed
+            "session.toml.222.tmp",  // live writer (a handoff predecessor): kept
+            "session.toml",          // the session itself: kept
+            "session.toml.abc.tmp",  // not a pid: kept
+            "session.toml.111.tmp2", // not a temp name: kept
+            "other.toml.111.tmp",    // not ours: kept
+        ];
+        for name in names {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        remove_dead_temp_files(&dir, |pid| pid == 222);
+        let mut left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        let mut want: Vec<String> =
+            names.iter().filter(|n| **n != "session.toml.111.tmp").map(|n| (*n).into()).collect();
+        want.sort();
+        assert_eq!(left, want);
+        // A directory that does not exist is fine.
+        remove_dead_temp_files(&dir.join("gone"), |_| false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_durable_write_replaces_the_file_whole_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("stdusk-durable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("session.toml");
+        write_durably(&file, "first = 1\n");
+        write_durably(&file, "second = 2\n");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "second = 2\n");
+        let names: Vec<_> =
+            std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        // A missing directory: the write fails quietly, never panics.
+        write_durably(&dir.join("gone/session.toml"), "x = 1\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
