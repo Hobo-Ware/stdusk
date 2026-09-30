@@ -33,26 +33,45 @@ fn shell_kind(shell: &str) -> ShellKind {
     }
 }
 
+/// Where the generated rc files live, under `HOME`.
+const BRIDGE_SUBDIR: &str = ".config/stdusk/shell";
+
 fn dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| Path::new(&h).join(".config/stdusk/shell"))
+    std::env::var_os("HOME").map(|h| Path::new(&h).join(BRIDGE_SUBDIR))
 }
 
 // zsh reads $ZDOTDIR/{.zshenv,.zprofile,.zshrc,.zlogin}; bridge each to the user's real file so
 // their PATH (.zprofile), env (.zshenv), and interactive config (.zshrc) all survive our redirect.
-const ZSHENV: &str = r#"[ -f "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zshenv" ] && source "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zshenv"
-"#;
+// A real dir that is itself a stdusk bridge (`*/.config/stdusk/shell`, with or without a trailing slash) is never sourced: its files
+// would source the real dir again, forever. That state comes from a stdusk started inside a pane
+// of another stdusk, and the shell then starts with no user config instead of looping.
+macro_rules! bridge {
+    ($file:literal) => {
+        concat!(
+            "case \"${STDUSK_REAL_ZDOTDIR:-$HOME}\" in\n",
+            "  */.config/stdusk/shell|*/.config/stdusk/shell/) ;;\n",
+            "  *) [ -f \"${STDUSK_REAL_ZDOTDIR:-$HOME}/",
+            $file,
+            "\" ] && source \"${STDUSK_REAL_ZDOTDIR:-$HOME}/",
+            $file,
+            "\" ;;\n",
+            "esac\n"
+        )
+    };
+}
 
-const ZPROFILE: &str = r#"[ -f "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zprofile" ] && source "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zprofile"
-"#;
+const ZSHENV: &str = bridge!(".zshenv");
 
-const ZLOGIN: &str = r#"[ -f "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zlogin" ] && source "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zlogin"
-"#;
+const ZPROFILE: &str = bridge!(".zprofile");
+
+const ZLOGIN: &str = bridge!(".zlogin");
 
 // macOS zsh emits OSC 7 only for Apple's own Terminal (`TERM_PROGRAM == Apple_Terminal`), so a
 // stdusk shell needs this hook to report its cwd.
-const ZSHRC: &str = r#"# stdusk shell integration (OSC 133 marks + OSC 7 cwd) - regenerated on launch, do not edit.
-[ -f "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zshrc" ] && source "${STDUSK_REAL_ZDOTDIR:-$HOME}/.zshrc"
-# `D` (exit) is only emitted after a real command ran, so the first/empty prompt stays idle.
+const ZSHRC: &str = concat!(
+    "# stdusk shell integration (OSC 133 marks + OSC 7 cwd) - regenerated on launch, do not edit.\n",
+    bridge!(".zshrc"),
+    r#"# `D` (exit) is only emitted after a real command ran, so the first/empty prompt stays idle.
 _stdusk_preexec() { typeset -g _stdusk_ran=1; print -n '\e]133;C\a' }
 # Report the cwd, percent-encoded byte by byte (LC_CTYPE=C), keeping only [/._~A-Za-z0-9-].
 _stdusk_osc7() {
@@ -70,7 +89,8 @@ _stdusk_precmd()  { local ec=$?; [[ -n ${_stdusk_ran-} ]] && print -n "\e]133;D;
 autoload -Uz add-zsh-hook 2>/dev/null
 add-zsh-hook preexec _stdusk_preexec 2>/dev/null
 add-zsh-hook precmd  _stdusk_precmd  2>/dev/null
-"#;
+"#
+);
 
 /// The bash hook text alone, so `BASHRC` and the tests use the very same script.
 macro_rules! bash_hook {
@@ -126,15 +146,26 @@ fn autosuggest_source_line(plugin: &Path) -> String {
     )
 }
 
-/// The user's REAL zsh dotfile dir, which our generated bridges source. Inherited `ZDOTDIR` wins
-/// over `$HOME` - EXCEPT when it already points at our own generated dir, which happens whenever
-/// stdusk is launched from inside a stdusk shell (the child inherits the ZDOTDIR we exported).
-/// Bridging to ourselves makes every rc file source itself: zsh dies with "recursion limit
-/// exceeded" and the pane comes up with no PATH, no prompt, no integration.
-/// Pure so the nested case is testable without mutating the environment.
-fn real_zdotdir(inherited: &str, home: &str, ours: &Path) -> String {
-    if !inherited.is_empty() && Path::new(inherited) != ours {
+/// Whether `dir` is a stdusk-generated bridge dir, by its path (`<HOME>/.config/stdusk/shell`).
+fn is_bridge_dir(dir: &str) -> bool {
+    Path::new(dir).ends_with(BRIDGE_SUBDIR)
+}
+
+/// The user's REAL zsh dotfile dir, which our generated bridges source. An inherited `ZDOTDIR`
+/// wins over `$HOME`, except when it is a stdusk bridge dir. That happens whenever stdusk starts
+/// inside a stdusk shell, ours or another instance's (a `--state-dir` run has its own `HOME`).
+/// Bridging to a bridge makes the rc files source each other in a loop. Then the real dir is the
+/// one the outer stdusk recorded in `STDUSK_REAL_ZDOTDIR`, or `$HOME` when that is not usable.
+/// Pure so the nested cases are testable without mutating the environment.
+fn real_zdotdir(inherited: &str, inherited_real: &str, home: &str) -> String {
+    if inherited.is_empty() {
+        return home.to_owned();
+    }
+    if !is_bridge_dir(inherited) {
         return inherited.to_owned();
+    }
+    if !inherited_real.is_empty() && !is_bridge_dir(inherited_real) {
+        return inherited_real.to_owned();
     }
     home.to_owned()
 }
@@ -175,7 +206,14 @@ pub(crate) fn configure(
             {
                 let inherited = std::env::var("ZDOTDIR").unwrap_or_default();
                 let home = std::env::var("HOME").unwrap_or_default();
-                cmd.env("STDUSK_REAL_ZDOTDIR", real_zdotdir(&inherited, &home, &dir));
+                cmd.env(
+                    "STDUSK_REAL_ZDOTDIR",
+                    real_zdotdir(
+                        &inherited,
+                        &std::env::var("STDUSK_REAL_ZDOTDIR").unwrap_or_default(),
+                        &home,
+                    ),
+                );
                 cmd.env("ZDOTDIR", dir.to_string_lossy().to_string());
             }
             // ZDOTDIR (if set) redirects the rc files; -l/-i still make zsh read the *profile*
@@ -427,19 +465,126 @@ mod tests {
     }
 
     #[test]
-    fn real_zdotdir_never_bridges_to_our_own_dir() {
-        // Nested launch (stdusk opened from a stdusk shell): the inherited ZDOTDIR IS our
-        // generated dir, so bridging to it would make each rc file source itself.
-        let ours = Path::new("/tmp/stdusk-shell");
-        // Self-referential (nested launch): fall back to HOME instead of bridging to ourselves.
-        assert_eq!(real_zdotdir("/tmp/stdusk-shell", "/Users/me", ours), "/Users/me");
-        // A genuine user ZDOTDIR is still honored.
-        assert_eq!(
-            real_zdotdir("/Users/me/dotfiles/zsh", "/Users/me", ours),
-            "/Users/me/dotfiles/zsh"
-        );
-        // Unset: HOME.
-        assert_eq!(real_zdotdir("", "/Users/me", ours), "/Users/me");
+    fn real_zdotdir_never_bridges_to_a_stdusk_bridge() {
+        const ME: &str = "/Users/me";
+        const DOTS: &str = "/Users/me/dotfiles/zsh";
+        const OURS: &str = "/Users/me/.config/stdusk/shell";
+        const OTHER: &str = "/tmp/state/.config/stdusk/shell";
+        // (inherited ZDOTDIR, inherited STDUSK_REAL_ZDOTDIR, HOME, want, why)
+        let cases = [
+            ("", "", ME, ME, "unset: HOME"),
+            ("", DOTS, ME, ME, "unset ZDOTDIR wins over a stale real dir"),
+            (DOTS, "", ME, DOTS, "a genuine user ZDOTDIR is honored"),
+            (DOTS, OTHER, ME, DOTS, "a user ZDOTDIR is not a bridge, whatever real says"),
+            (OURS, "", ME, ME, "nested in our own bridge, no record: HOME"),
+            (OURS, ME, ME, ME, "nested in our own bridge: the outer real dir"),
+            (OURS, DOTS, ME, DOTS, "nested in our own bridge: the user's custom ZDOTDIR"),
+            (
+                OTHER,
+                DOTS,
+                "/tmp/b",
+                DOTS,
+                "another instance's bridge: its real dir, not its bridge",
+            ),
+            (OTHER, OTHER, "/tmp/b", "/tmp/b", "a record that names a bridge is not usable"),
+            (OTHER, "", "/tmp/b", "/tmp/b", "another instance's bridge, no record: HOME"),
+        ];
+        for (inherited, real, home, want, why) in cases {
+            assert_eq!(real_zdotdir(inherited, real, home), want, "{why}");
+        }
+    }
+
+    #[test]
+    fn a_nested_stdusk_shell_sources_the_users_real_files_once() {
+        // Instance A (HOME = home_a) runs a pane. Instance B has another HOME and starts inside it,
+        // so it inherits A's ZDOTDIR and STDUSK_REAL_ZDOTDIR. The real startup file must run, once.
+        let base = scratch("zsh-nested-real");
+        let (user, home_a, home_b) = (base.join("user"), base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::write(user.join(".zshenv"), "print real-zshenv-ran\n").unwrap();
+        let (a, b) = (bridge_in(&home_a), bridge_in(&home_b));
+        let real =
+            real_zdotdir(a.to_str().unwrap(), user.to_str().unwrap(), home_b.to_str().unwrap());
+        assert_eq!(real, user.to_str().unwrap());
+        let run = run_zsh_startup(&[
+            ("HOME", &home_b),
+            ("ZDOTDIR", &b),
+            ("STDUSK_REAL_ZDOTDIR", Path::new(&real)),
+        ]);
+        let (ok, out, err) = run.expect("zsh looped and hit the timeout");
+        assert!(ok && err.trim().is_empty(), "ok={ok} err={err:?}");
+        assert_eq!(out.matches("real-zshenv-ran").count(), 1, "{out:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Run `zsh -l -i -c 'print done'` with a clean env, under a hard timeout. A rc loop must not
+    /// hang the test. Returns the exit success flag, stdout and stderr.
+    fn run_zsh_startup(env: &[(&str, &Path)]) -> Option<(bool, String, String)> {
+        use std::io::Read as _;
+        let mut child = std::process::Command::new("/bin/zsh")
+            .args(["-l", "-i", "-c", "print done"])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .envs(env.iter().map(|&(k, v)| (k, v)))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("zsh must launch");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let (mut out, mut err) = (String::new(), String::new());
+        child.stdout.take().unwrap().read_to_string(&mut out).unwrap();
+        child.stderr.take().unwrap().read_to_string(&mut err).unwrap();
+        Some((status.success(), out, err))
+    }
+
+    /// The bridge dir of a stdusk instance whose `HOME` is `home`.
+    fn bridge_in(home: &Path) -> PathBuf {
+        let bridge = home.join(BRIDGE_SUBDIR);
+        write_files(&bridge, false).unwrap();
+        bridge
+    }
+
+    #[test]
+    fn zsh_starts_when_the_real_dir_is_a_bridge_with_a_trailing_slash() {
+        let base = scratch("zsh-nested-slash");
+        let (home_a, home_b) = (base.join("a"), base.join("b"));
+        let (a, b) = (bridge_in(&home_a), bridge_in(&home_b));
+        let slashed = PathBuf::from(format!("{}/", a.display()));
+        let run = run_zsh_startup(&[
+            ("HOME", &home_b),
+            ("ZDOTDIR", &b),
+            ("STDUSK_REAL_ZDOTDIR", &slashed),
+        ]);
+        let (ok, out, err) = run.expect("zsh looped and hit the timeout");
+        assert!(ok && out.contains("done"), "ok={ok} out={out:?} err={err:?}");
+        assert!(err.trim().is_empty(), "a loop prints an error: {err:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn zsh_starts_when_the_real_dir_is_another_stdusks_bridge() {
+        // The state a nested launch left behind before the fix: the real dir names a bridge, and
+        // that bridge's files source the real dir again. The bridge must refuse, not loop.
+        let base = scratch("zsh-nested-loop");
+        let (home_a, home_b) = (base.join("a"), base.join("b"));
+        let (a, b) = (bridge_in(&home_a), bridge_in(&home_b));
+        let run =
+            run_zsh_startup(&[("HOME", &home_b), ("ZDOTDIR", &b), ("STDUSK_REAL_ZDOTDIR", &a)]);
+        let (ok, out, err) = run.expect("zsh looped and hit the timeout");
+        assert!(ok && out.contains("done"), "ok={ok} out={out:?} err={err:?}");
+        assert!(err.trim().is_empty(), "a loop prints an error: {err:?}");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
