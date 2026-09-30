@@ -1793,6 +1793,13 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     fx
 }
 
+/// The resume-mode chips, in display order.
+const RESUME_CHOICES: [(&str, config::ResumeAgents); 3] = [
+    ("Auto", config::ResumeAgents::Auto),
+    ("Type only", config::ResumeAgents::Prefill),
+    ("Off", config::ResumeAgents::Off),
+];
+
 /// Session + settings-sync. Returns the sync operation to start, if a button was clicked.
 fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> Option<sync::Op> {
     title(ui, "Session");
@@ -1803,6 +1810,24 @@ fn session_section(ui: &mut egui::Ui, cfg: &mut config::Config, busy: bool) -> O
             "Reopen last session's tabs (cwd, title, color) on launch",
             |ui| {
                 crate::widgets::toggle_switch(ui, &mut cfg.session.restore);
+            },
+        );
+        row_full(
+            ui,
+            "Resume agent sessions",
+            "Reopen each pane's Claude Code or Codex conversation",
+            "Applies to new panes and the next launch",
+            |ui| {
+                ui.add_enabled_ui(cfg.session.restore, |ui| {
+                    ui.horizontal(|ui| {
+                        for (label, mode) in RESUME_CHOICES {
+                            let selected = cfg.session.resume_agents == mode;
+                            if crate::widgets::chip(ui, label, selected).clicked() {
+                                cfg.session.resume_agents = mode;
+                            }
+                        }
+                    });
+                });
             },
         );
     });
@@ -2805,5 +2830,19 @@ mod tests {
         });
         assert!(st.dropdown_open.is_none(), "Esc must close the popup");
         assert_eq!(value, "one-half-dark", "Esc must never commit a pick");
+    }
+    #[test]
+    fn session_section_renders_with_restore_on_and_off() {
+        let ctx = egui::Context::default();
+        let mut cfg = config::Config::default();
+        for restore in [true, false, true] {
+            cfg.session.restore = restore;
+            run_frame(&ctx, vec![], |ui| {
+                let op = session_section(ui, &mut cfg, false);
+                assert!(op.is_none());
+            });
+        }
+        // The chip row never changes the mode by itself.
+        assert_eq!(cfg.session.resume_agents, config::ResumeAgents::Auto);
     }
 }
