@@ -12,6 +12,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 mod agent_codex;
 mod agent_codex_scan;
 mod agent_pane;
+mod agent_restore;
 mod agent_track;
 mod agents;
 mod colors;
