@@ -85,7 +85,8 @@ _stdusk_osc7() {
   done
   print -n "\e]7;file://localhost$out\a"
 }
-_stdusk_precmd()  { local ec=$?; [[ -n ${_stdusk_ran-} ]] && print -n "\e]133;D;${ec}\a"; unset _stdusk_ran; print -n '\e]133;A\a'; _stdusk_osc7 }
+# The `stdusk` word marks this `D` as ours. Other integrations (iTerm2) print a `D` at every prompt.
+_stdusk_precmd()  { local ec=$?; [[ -n ${_stdusk_ran-} ]] && print -n "\e]133;D;${ec};stdusk\a"; unset _stdusk_ran; print -n '\e]133;A\a'; _stdusk_osc7 }
 autoload -Uz add-zsh-hook 2>/dev/null
 add-zsh-hook preexec _stdusk_preexec 2>/dev/null
 add-zsh-hook precmd  _stdusk_precmd  2>/dev/null
@@ -107,8 +108,19 @@ __stdusk_osc7() {
   done
   printf '\033]7;file://localhost%s\007' "$out"
 }
-# Skip the exit mark on the very first prompt so a freshly-opened tab stays idle.
-__stdusk_prompt() { local ec=$?; [ -n "${__stdusk_started-}" ] && printf '\033]133;D;%d\007' "$ec"; __stdusk_started=1; printf '\033]133;A\007'; __stdusk_osc7; }
+# Report the exit mark only after a command ran, as zsh does. A command ran when the last history
+# entry moved, or the status changed (a repeat that HISTCONTROL keeps out of the history). The first
+# prompt and an empty Enter report nothing.
+__stdusk_prompt() {
+  local ec=$? last
+  last=$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)
+  if [ -n "${__stdusk_started-}" ] && { [ "$last" != "${__stdusk_last-}" ] || [ "$ec" != "${__stdusk_ec-}" ]; }; then
+    printf '\033]133;D;%d;stdusk\007' "$ec"
+  fi
+  __stdusk_started=1 __stdusk_last=$last __stdusk_ec=$ec
+  printf '\033]133;A\007'
+  __stdusk_osc7
+}
 case "$PROMPT_COMMAND" in
   *__stdusk_prompt*) ;;
   *) PROMPT_COMMAND="__stdusk_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
@@ -208,60 +220,43 @@ pub(crate) fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> 
 /// shells or a failed file write just skip the OSC 133 hooks. `autosuggest` (zsh-only, and only
 /// when `integration` is on since it reuses the ZDOTDIR redirect) sources the vendored
 /// fish-style history-suggestion plugin from our generated `.zshrc`.
+///
+/// Returns whether the shell got the integration, so it will mark its prompts (OSC 133 `A`).
 pub(crate) fn configure(
     cmd: &mut CommandBuilder,
     shell: &str,
     integration: bool,
     autosuggest: bool,
-) {
-    match shell_kind(shell) {
-        ShellKind::Zsh => {
-            if integration
-                && let Some(dir) = dir()
-                && write_files(&dir, autosuggest).is_ok()
-            {
-                let inherited = std::env::var("ZDOTDIR").unwrap_or_default();
-                let home = std::env::var("HOME").unwrap_or_default();
-                cmd.env(
-                    "STDUSK_REAL_ZDOTDIR",
-                    real_zdotdir(
-                        &inherited,
-                        &std::env::var("STDUSK_REAL_ZDOTDIR").unwrap_or_default(),
-                        &home,
-                    ),
-                );
+) -> bool {
+    let kind = shell_kind(shell);
+    let dir = dir().filter(|dir| {
+        integration
+            && kind != ShellKind::Other
+            && write_files(dir, autosuggest && kind == ShellKind::Zsh).is_ok()
+    });
+    if let Some(dir) = &dir {
+        match kind {
+            ShellKind::Zsh => {
+                let var = |name| std::env::var(name).unwrap_or_default();
+                let real = real_zdotdir(&var("ZDOTDIR"), &var("STDUSK_REAL_ZDOTDIR"), &var("HOME"));
+                cmd.env("STDUSK_REAL_ZDOTDIR", real);
                 cmd.env("ZDOTDIR", dir.to_string_lossy().to_string());
             }
-            // ZDOTDIR (if set) redirects the rc files; -l/-i still make zsh read the *profile*
-            // chain ($ZDOTDIR/.zprofile -> bridged) so PATH is set.
-            cmd.arg("-l");
-            cmd.arg("-i");
-        }
-        ShellKind::Bash => {
-            let mut rc_injected = false;
-            if integration
-                && let Some(dir) = dir()
-                && write_files(&dir, false).is_ok()
-            {
+            ShellKind::Bash => {
                 cmd.arg("--rcfile");
                 cmd.arg(dir.join("bashrc").to_string_lossy().to_string());
-                rc_injected = true;
             }
-            if rc_injected {
-                // --rcfile only applies to an interactive, non-login shell; our bashrc sources the
-                // profile chain itself for PATH.
-                cmd.arg("-i");
-            } else {
-                cmd.arg("-l");
-                cmd.arg("-i");
-            }
-        }
-        ShellKind::Other => {
-            // No OSC 133 injection, but still login+interactive for PATH (best-effort).
-            cmd.arg("-l");
-            cmd.arg("-i");
+            ShellKind::Other => {}
         }
     }
+    // zsh: ZDOTDIR (if set) redirects the rc files, and -l/-i still make zsh read the *profile*
+    // chain ($ZDOTDIR/.zprofile -> bridged) so PATH is set. bash with --rcfile is interactive and
+    // non-login: our bashrc sources the profile chain itself for PATH.
+    if !(dir.is_some() && kind == ShellKind::Bash) {
+        cmd.arg("-l");
+    }
+    cmd.arg("-i");
+    dir.is_some()
 }
 
 #[cfg(test)]
@@ -308,25 +303,11 @@ mod tests {
         env: std::collections::BTreeMap<String, String>,
         start: &Path,
     ) -> Option<String> {
-        use crate::config::Profile;
-        use crate::terminal::{PtyTerm, SpawnOpts};
-        let opts = SpawnOpts {
-            detect_progress: false,
-            shell_integration: false, // the test wires the bridge itself; see `env`
-            autosuggestions: false,
-            scrollback_lines: 100,
-            word_separators: " ".into(),
-            bold_bright: false,
-            cwd: Some(start.to_string_lossy().into_owned()),
-            profile: Some(Profile {
-                name: "osc7".into(),
-                shell: Some(shell.into()),
-                args: vec![],
-                cwd: None,
-                env,
-                color: None,
-            }),
-        };
+        use crate::terminal::PtyTerm;
+        let mut opts = crate::test_support::spawn_opts(shell, &[]);
+        opts.scrollback_lines = 100;
+        opts.cwd = Some(start.to_string_lossy().into_owned());
+        opts.profile.as_mut().unwrap().env = env;
         let term = PtyTerm::spawn(80, 24, eframe::egui::Context::default(), &opts);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut cwd = None;
@@ -631,6 +612,7 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&base);
     }
+
     #[test]
     fn shared_files_are_rewritten_only_when_the_content_changes() {
         use std::os::unix::fs::MetadataExt as _;
@@ -647,5 +629,12 @@ mod tests {
             std::fs::read_dir(&base).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(names.len(), 1, "{names:?}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn configure_reports_integration_only_for_zsh_and_bash_with_the_setting_on() {
+        let cmd = || CommandBuilder::new("x");
+        assert!(!configure(&mut cmd(), "/usr/bin/fish", true, false));
+        assert!(!configure(&mut cmd(), "/bin/zsh", false, false));
     }
 }

@@ -548,7 +548,7 @@ fn spawn_reader(c: ReaderCtx) {
                                     cmd_update = Some(CmdState::Running);
                                     cmd_started = Some(std::time::Instant::now());
                                 }
-                                ShellEvent::CommandEnd(code) => {
+                                ShellEvent::CommandEnd { code, .. } => {
                                     cmd_update = Some(cmd_from_exit(code));
                                     // Flag a "done" notification only for long-running commands.
                                     // Notify only for commands that ran a while (a "long" job).

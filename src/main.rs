@@ -40,6 +40,8 @@ mod shell;
 mod sync;
 mod tabs;
 mod terminal;
+#[cfg(test)]
+mod test_support;
 mod themes;
 mod tray;
 mod ui;
