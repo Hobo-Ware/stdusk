@@ -203,7 +203,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn resolve_font_finds_menlo_regular_face() {
         let f = resolve_font("Menlo").expect("Menlo ships with macOS");
-        assert!(!f.bytes.is_empty());
+        assert_ne!(f.bytes, [] as [u8; 0]);
         // The face must be the upright Regular, not Italic/Bold (select_best_match regression:
         // core-text matching handed back Menlo-Italic). Checked by name - core-text loads
         // report broken `properties()` (see face_name_score).

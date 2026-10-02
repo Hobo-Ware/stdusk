@@ -491,7 +491,7 @@ mod tests {
         let (a, b) = (repo("/a"), repo("/b"));
         let tabs = [Group::Other, b.clone(), a.clone(), b.clone(), Group::Other];
         assert_eq!(order(&tabs), vec![b, a, Group::Other]);
-        assert!(order(&[]).is_empty());
+        assert_eq!(order(&[]), []);
     }
 
     #[test]

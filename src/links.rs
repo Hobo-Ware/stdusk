@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn no_links_in_plain_text() {
-        assert!(find_in_row("just some words, no 3 links").is_empty());
+        assert_eq!(find_in_row("just some words, no 3 links"), []);
     }
 
     #[test]
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(find_in_row("http://10.0.0.1:8080/x").len(), 1);
         assert_eq!(find_in_row("http://10.0.0.1:8080/x")[0].kind, LinkKind::Url);
         // Version strings don't match (only 3 dots + digits do; 1.2.3 has 2 dots).
-        assert!(kinds("v1.2.3 released").is_empty());
+        assert_eq!(kinds("v1.2.3 released"), []);
     }
 
     fn grid(rows: &[&str], cols: usize) -> Vec<String> {

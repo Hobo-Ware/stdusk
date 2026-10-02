@@ -2686,7 +2686,7 @@ mod tests {
         assert_eq!(filter_schemes(&all, "DRAC"), vec![0]);
         assert_eq!(filter_schemes(&all, "  nor "), vec![1]); // trimmed
         assert_eq!(filter_schemes(&all, "o"), vec![1, 2]);
-        assert!(filter_schemes(&all, "zzz").is_empty());
+        assert_eq!(filter_schemes(&all, "zzz"), [] as [usize; 0]);
     }
 
     #[test]
@@ -2699,7 +2699,7 @@ mod tests {
         assert_eq!(filter_names(&all, "MENLO"), vec![0]); // query lowercased
         assert_eq!(filter_names(&all, "nerd"), vec![1]); // name lowercased
         assert_eq!(filter_names(&all, " mon "), vec![1, 2]); // trimmed substring
-        assert!(filter_names(&all, "zzz").is_empty());
+        assert_eq!(filter_names(&all, "zzz"), [] as [usize; 0]);
     }
 
     #[test]

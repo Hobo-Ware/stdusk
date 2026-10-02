@@ -691,7 +691,7 @@ mod tests {
         assert_eq!(alt_scroll_bytes(-1), b"\x1bOB".to_vec());
         assert_eq!(alt_scroll_bytes(3), b"\x1bOA\x1bOA\x1bOA".to_vec());
         assert_eq!(alt_scroll_bytes(-2), b"\x1bOB\x1bOB".to_vec());
-        assert!(alt_scroll_bytes(0).is_empty());
+        assert_eq!(alt_scroll_bytes(0), [] as [u8; 0]);
     }
 
     #[test]
@@ -923,7 +923,7 @@ mod tests {
         let events =
             vec![key_ev(Key::F3, none), egui::Event::Text("a".into()), key_ev(Key::A, none)];
         let (actions, left) = match_and_consume(events.clone(), &hk, open_guards());
-        assert!(actions.is_empty());
+        assert_eq!(actions, []);
         assert_eq!(left, events);
     }
 

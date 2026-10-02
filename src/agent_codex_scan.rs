@@ -822,7 +822,10 @@ mod tests {
         let three = walk_names(&sessions, before(2026, 9, 27));
         assert_eq!((three.len(), three[3].as_str()), (4, "2026/09/27"), "started three days ago");
         assert_eq!(walk_names(&sessions, before(2025, 1, 1)).len(), 6, "an old process reads all");
-        assert!(day_dirs_since(&home.join("missing"), noon(2026, 9, 30)).is_empty());
+        assert_eq!(
+            day_dirs_since(&home.join("missing"), noon(2026, 9, 30)),
+            [] as [std::path::PathBuf; 0]
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 

@@ -334,8 +334,8 @@ mod tests {
     fn a_blank_screen_dumps_to_nothing_at_all() {
         // "No replay" has to be distinguishable from "a replay of an empty screen": the caller
         // falls back to asking the shell to repaint, which is right for a blank pane.
-        assert!(encode(&[], 0, (0, 0)).is_empty());
-        assert!(encode(&[row("", 40), row("", 40)], 2, (1, 0)).is_empty());
-        assert!(!encode(&[row("", 40), row("x", 40)], 2, (1, 1)).is_empty());
+        assert_eq!(encode(&[], 0, (0, 0)), [] as [u8; 0]);
+        assert_eq!(encode(&[row("", 40), row("", 40)], 2, (1, 0)), [] as [u8; 0]);
+        assert_ne!(encode(&[row("", 40), row("x", 40)], 2, (1, 1)), [] as [u8; 0]);
     }
 }

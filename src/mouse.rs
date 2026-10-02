@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(wheel_sgr(1, 2, 4), b"\x1b[<64;3;5M".to_vec());
         assert_eq!(wheel_sgr(-1, 0, 0), b"\x1b[<65;1;1M".to_vec());
         assert_eq!(wheel_sgr(2, 0, 0), b"\x1b[<64;1;1M\x1b[<64;1;1M".to_vec());
-        assert!(wheel_sgr(0, 3, 3).is_empty());
+        assert_eq!(wheel_sgr(0, 3, 3), [] as [u8; 0]);
     }
 
     #[test]

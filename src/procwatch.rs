@@ -736,7 +736,7 @@ mod tests {
     fn running_children_of_an_idle_shell_is_empty() {
         // A bare shell (no descendants) has nothing to terminate - the no-nag case.
         let procs = vec![p(999, 1, "Finder", &["Finder"])];
-        assert!(running_children(&procs, 100).is_empty());
+        assert_eq!(running_children(&procs, 100), [] as [std::string::String; 0]);
     }
 
     fn m(pid: u32, parent: u32, session: u32) -> Member {
@@ -779,7 +779,7 @@ mod tests {
 
     #[test]
     fn an_idle_shell_has_no_victims() {
-        assert!(victims_of(&[m(900, 1, 900)], 100).is_empty());
+        assert_eq!(victims_of(&[m(900, 1, 900)], 100), [] as [u32; 0]);
     }
 
     #[test]

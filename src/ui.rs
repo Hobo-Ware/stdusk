@@ -1476,7 +1476,7 @@ mod tests {
         );
         // No false positives in plain text.
         let row: Vec<char> = "plain text - no = pairs".chars().collect();
-        assert!(ligature_spans(&row).is_empty());
+        assert_eq!(ligature_spans(&row), []);
     }
 
     #[test]
@@ -2381,7 +2381,7 @@ mod tests {
         let ctx = egui::Context::default();
         hotkey_frame(&ctx, vec![], &unbound);
         let out = hotkey_frame(&ctx, press(), &unbound);
-        assert!(out.actions.is_empty());
+        assert_eq!(out.actions, []);
         assert_eq!(out.keys, "\u{2da}".as_bytes(), "unbound Alt+K keeps its composed text");
     }
 
