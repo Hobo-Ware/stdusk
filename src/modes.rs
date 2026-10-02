@@ -117,7 +117,7 @@ mod tests {
         let mut sc = ThemeReportScanner::new();
         let long = [b"\x1b[?".as_slice(), &[b'1'; 200]].concat();
         assert_eq!(sc.feed(&long), None);
-        assert!(sc.carry.is_empty());
+        assert_eq!(sc.carry, [] as [u8; 0]);
     }
 
     #[test]

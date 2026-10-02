@@ -883,8 +883,8 @@ mod tests {
         assert_eq!(decode_screen(back.screen.as_ref()), dump);
         // Absent (a predecessor too old to send one) and garbage both mean "no replay", never an
         // aborted handoff - losing the old screen is cosmetic, refusing the restart is not.
-        assert!(decode_screen(None).is_empty());
-        assert!(decode_screen(Some(&"not base64 !!".to_owned())).is_empty());
+        assert_eq!(decode_screen(None), [] as [u8; 0]);
+        assert_eq!(decode_screen(Some(&"not base64 !!".to_owned())), [] as [u8; 0]);
         assert_eq!(encode_screen(&[]), None, "a blank screen is sent as nothing at all");
     }
 

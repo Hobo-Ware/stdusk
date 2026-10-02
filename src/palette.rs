@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn filter_drops_non_matches() {
-        assert!(filter_commands("zzzz", &[], &[]).is_empty());
+        assert_eq!(filter_commands("zzzz", &[], &[]), []);
     }
 
     #[test]

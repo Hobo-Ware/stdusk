@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(c.appearance.theme, "one-half-dark");
         assert_eq!(c.appearance.opacity, 0.85);
         assert_eq!(c.appearance.tab_width, "fixed");
-        assert!(c.appearance.font.is_empty()); // "" = bundled default
+        assert_eq!(c.appearance.font, ""); // "" = bundled default
         assert_eq!(c.appearance.line_padding, 0.0);
         assert_eq!(c.quake.hotkey, "Ctrl+Grave");
         assert_eq!(c.quake.mode, "dropdown"); // preserves the pre-mode quake behavior
