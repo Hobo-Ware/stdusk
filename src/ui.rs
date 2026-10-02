@@ -622,7 +622,12 @@ pub(crate) fn apply_theme(ctx: &egui::Context) {
         w.bg_stroke = egui::Stroke::new(1.0, colors::border());
     }
     v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, colors::dim());
-    ctx.set_visuals(v);
+    // egui keeps one style per OS theme and `set_visuals` only writes the ACTIVE one. When the OS
+    // appearance differs from the configured scheme, the other style stayed at egui's defaults and
+    // popups/menus painted light. Write both and pin the active theme to the scheme's polarity.
+    ctx.set_visuals_of(egui::Theme::Dark, v.clone());
+    ctx.set_visuals_of(egui::Theme::Light, v);
+    ctx.set_theme(if colors::is_dark() { egui::Theme::Dark } else { egui::Theme::Light });
 }
 
 /// The one toast for everything startup has to say: one line per message, in order, shown as
@@ -1362,6 +1367,17 @@ mod tests {
 
     fn mods(ctrl: bool, alt: bool, command: bool) -> Modifiers {
         Modifiers { alt, ctrl, shift: false, mac_cmd: command, command }
+    }
+
+    #[test]
+    fn theme_visuals_apply_whatever_the_os_theme_is() {
+        let ctx = egui::Context::default();
+        apply_theme(&ctx);
+        let want = colors::elevated();
+        for os in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.set_theme(os);
+            assert_eq!(ctx.global_style().visuals.window_fill, want, "style for {os:?}");
+        }
     }
 
     #[test]

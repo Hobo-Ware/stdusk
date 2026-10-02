@@ -537,6 +537,11 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   itself always arrived. `raw_byte_reporter` now logs to a temp file, which also stops the
   never-sent-`^L` test from passing by accident. Production has the same race only until the
   predecessor exits after the ACK (see `request_redraw`).
+- egui keeps one `Style` per OS theme, and `Context::set_visuals` writes only the ACTIVE one. With
+  egui's theme following the OS, a configured scheme of the other polarity left the inactive style on
+  egui defaults, so popups and menus (the repo switcher) painted a white `window_fill`. `apply_theme`
+  now writes both styles and pins the egui theme to the scheme's polarity. Test:
+  `theme_visuals_apply_whatever_the_os_theme_is`. Never call `set_visuals` alone.
 
 ## Decisions log
 - Splits (M8) + scrollback search (M7) are v1 must-haves (user).
