@@ -1513,10 +1513,7 @@ impl eframe::App for Stdusk {
         self.quit_confirm_window(&ctx);
         self.palette_window(&ctx);
 
-        // OSC 52: a shell "copy" request (from the focused pane) -> the system clipboard.
-        if let Some(text) =
-            self.tabs.get(self.active).and_then(|t| t.focused_term().take_clipboard())
-        {
+        if let Some(text) = tabs::take_clipboard_request(&self.tabs) {
             ctx.copy_text(text);
         }
 

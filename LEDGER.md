@@ -179,6 +179,9 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   when `TermMode::BRACKETED_PASTE` is set.
 - **OSC 52**: reader decodes base64 (`base64` crate) → `TabState.clipboard`; UI takes it →
   `ctx.copy_text()`. Copy-FROM-selection (Cmd+C) is M6.5.
+  Requests are drained from EVERY pane of every tab (`tabs::take_clipboard_request`), not just
+  the active tab's focused pane: Claude Code fullscreen owns the mouse and copies via OSC 52, so
+  a copy made right before a tab switch used to sit unapplied and the next paste got stale text.
 - **Selection + Cmd+C copy deferred to M6.5** - needs mouse drag tracking + alacritty `Selection`
   + highlight rendering + cell hit-testing. Real work, kept out of M6 to stay shippable.
 - **Scrollbar** (user ask): right-edge draggable thumb, shown when `history_size>0`; position
