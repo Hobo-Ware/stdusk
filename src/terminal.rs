@@ -2710,11 +2710,16 @@ mod tests {
         // echoing it the cursor sits at column 6, so the DSR reply is exactly `ESC[1;6R`.
         let script = "stty raw -echo; printf '\\033[c'; head -c 5 | tr '\\033' 'E'; \
                       printf '\\033[6n'; head -c 6 | tr '\\033' 'E'; sleep 5";
-        let got = spawn_and_poll(script, |t| {
+        let term = e2e_term(script);
+        let got = poll_term(&term, |t| {
             let text = grid_text(t);
             (text.contains("E[?6c") && text.contains("E[1;6R")).then_some(())
         });
-        assert!(got.is_some(), "DA1 + DSR replies must reach the app");
+        assert!(
+            got.is_some(),
+            "DA1 + DSR replies must reach the app; grid: {:?}",
+            grid_text(&term)
+        );
     }
 
     #[test]
