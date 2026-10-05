@@ -1,10 +1,10 @@
-//! Pending-update detection: has the .app bundle on disk been replaced under the running process?
-//!
-//! Deliberately NOT a network update checker. `brew reinstall --cask` (or a manual .app swap)
-//! replaces the bundle while we keep executing the old inode, so comparing the compiled-in version
-//! against the bundle's `Info.plist` answers the only question the UI needs: would restarting
-//! actually change version? No network, no permissions, no entitlements.
+//! Update plumbing: pending-update detection (bundle on disk differs from the running version),
+//! the GitHub release check, and the Homebrew upgrade that installs it.
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+use anyhow::{Context, bail};
 
 /// Version the running binary was built as.
 pub(crate) const RUNNING: &str = env!("CARGO_PKG_VERSION");
@@ -55,9 +55,118 @@ pub(crate) fn pending_for_running_exe() -> Option<String> {
     pending(&std::env::current_exe().ok()?)
 }
 
+const REPO: &str = "Hobo-Ware/stdusk";
+const CASK: &str = "hobo-ware/tap/stdusk";
+const TAG_PREFIX: &str = "stdusk-";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Release {
+    pub(crate) version: String,
+    pub(crate) url: String,
+}
+
+fn parse_version(text: &str) -> Option<Vec<u64>> {
+    let core = text.trim().trim_start_matches('v').split(['-', '+']).next()?;
+    core.split('.').map(|part| part.parse().ok()).collect()
+}
+
+pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
+    let (Some(a), Some(b)) = (parse_version(latest), parse_version(current)) else {
+        return false;
+    };
+    let len = a.len().max(b.len());
+    let pad = |v: &[u64]| (0..len).map(|i| v.get(i).copied().unwrap_or(0)).collect::<Vec<_>>();
+    pad(&a) > pad(&b)
+}
+
+fn version_from_release_url(url: &str) -> Option<String> {
+    let tag = url.rsplit_once("/releases/tag/")?.1.split(['?', '#']).next()?;
+    let version = tag.strip_prefix(TAG_PREFIX).unwrap_or(tag).trim_start_matches('v');
+    parse_version(version).is_some().then(|| version.to_owned())
+}
+
+/// The newest release, read from the redirect on `/releases/latest`: no API token, no rate limit.
+pub(crate) fn latest_release() -> anyhow::Result<Release> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .user_agent("stdusk")
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let response = agent.get(&format!("https://github.com/{REPO}/releases/latest")).call()?;
+    let location =
+        response.headers().get("location").and_then(|l| l.to_str().ok()).with_context(|| {
+            format!("GitHub answered {} without a release link", response.status())
+        })?;
+    let version = version_from_release_url(location).context("the latest release has no tag")?;
+    Ok(Release { version, url: location.to_owned() })
+}
+
+fn brew() -> Option<PathBuf> {
+    ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists())
+}
+
+pub(crate) fn installed_with_brew() -> bool {
+    ["/opt/homebrew/Caskroom/stdusk", "/usr/local/Caskroom/stdusk"]
+        .iter()
+        .any(|p| Path::new(p).exists())
+}
+
+pub(crate) fn brew_upgrade() -> anyhow::Result<()> {
+    let brew = brew().context("Homebrew is not installed")?;
+    let tap = Command::new(&brew).args(["--repository", "hobo-ware/tap"]).output()?;
+    let tap_dir = String::from_utf8_lossy(&tap.stdout).trim().to_owned();
+    if tap.status.success() && Path::new(&tap_dir).exists() {
+        let _ = Command::new("git").args(["-C", &tap_dir, "pull", "--quiet", "--ff-only"]).output();
+    }
+    let out = Command::new(&brew)
+        .args(["upgrade", "--cask", CASK])
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+        .env("HOMEBREW_NO_INSTALL_CLEANUP", "1")
+        .output()?;
+    if !out.status.success() {
+        bail!("brew upgrade failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versions_compare_numerically() {
+        let cases = [
+            ("1.10.0", "1.9.3", true),
+            ("v2.0.0", "1.99.99", true),
+            ("1.9", "1.8.9", true),
+            ("1.8.0", "1.8.0", false),
+            ("1.7.5", "1.8.0", false),
+            ("1.8.0-beta.1", "1.8.0", false),
+            ("garbage", "1.8.0", false),
+        ];
+        for (latest, current, want) in cases {
+            assert_eq!(is_newer(latest, current), want, "{latest} vs {current}");
+        }
+    }
+
+    #[test]
+    fn the_release_redirect_names_the_version() {
+        let cases = [
+            ("https://github.com/Hobo-Ware/stdusk/releases/tag/stdusk-v1.8.0", Some("1.8.0")),
+            ("https://github.com/Hobo-Ware/stdusk/releases/tag/v1.8.1?x=1", Some("1.8.1")),
+            ("https://github.com/Hobo-Ware/stdusk/releases/tag/nightly", None),
+            ("https://github.com/Hobo-Ware/stdusk/releases", None),
+            ("https://github.com/login", None),
+        ];
+        for (url, want) in cases {
+            assert_eq!(version_from_release_url(url).as_deref(), want, "url {url}");
+        }
+    }
 
     #[test]
     fn reads_the_short_version_from_a_real_bundle_plist() {

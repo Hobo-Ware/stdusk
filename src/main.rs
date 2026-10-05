@@ -46,6 +46,7 @@ mod themes;
 mod tray;
 mod ui;
 mod update;
+mod updater;
 mod widgets;
 mod workspace;
 use config::Config;
@@ -126,6 +127,7 @@ struct Stdusk {
     screenshot: Option<String>,      // --screenshot PATH: demo tabs, capture, exit
     pending_update: Option<String>, // version installed on disk when it differs from the running one
     next_update_check: f64,         // egui time of the next throttled bundle-version check
+    updater: updater::Updater,      // GitHub release check + brew install, ticked each frame
     restart_on_quit: bool,          // relaunch the bundle after this quit (Restart / update flow)
     /// The final snapshot is saved: later saves must not overwrite its agent records.
     session_frozen: bool,
@@ -468,6 +470,7 @@ impl Stdusk {
             // then re-checked on the slow tick below.
             pending_update: update::pending_for_running_exe(),
             next_update_check: 0.0,
+            updater: updater::Updater::new(cc.egui_ctx.clone()),
             restart_on_quit: false,
             session_frozen: false,
             ctx: cc.egui_ctx.clone(),
@@ -1082,6 +1085,9 @@ impl eframe::App for Stdusk {
         // stat + small read, so a slow tick is plenty - never per frame.
         if self.screenshot.is_none() {
             let now = ctx.input(|i| i.time);
+            if self.updater.tick(self.cfg.updates.check, self.cfg.updates.auto_install) {
+                self.next_update_check = 0.0;
+            }
             if now >= self.next_update_check {
                 self.next_update_check = now + 60.0;
                 let found = update::pending_for_running_exe();
