@@ -9,6 +9,8 @@ use eframe::egui;
 
 use crate::colors::{self, Theme};
 use crate::ui::{self, icons};
+use crate::update;
+use crate::updater::{Status, Updater};
 use crate::{Stdusk, config, sync, tabs, terminal, themes};
 
 /// Left nav width (outer, incl. margins).
@@ -1980,7 +1982,13 @@ fn session_section(
 }
 
 /// Returns true when the user asked to restart (a pending update, or just a plain restart).
-fn about_section(ui: &mut egui::Ui, pending: Option<&str>, keeps_shells: bool) -> bool {
+fn about_section(
+    ui: &mut egui::Ui,
+    cfg: &mut config::Config,
+    updater: &mut Updater,
+    pending: Option<&str>,
+    keeps_shells: bool,
+) -> bool {
     title(ui, "About");
     ui.label(egui::RichText::new("stdusk").size(26.0).strong().color(colors::fg()));
     ui.label(
@@ -2026,7 +2034,62 @@ fn about_section(ui: &mut egui::Ui, pending: Option<&str>, keeps_shells: bool) -
     {
         let _ = std::process::Command::new("open").arg(dir).spawn();
     }
+    updates_block(ui, cfg, updater);
     restart
+}
+
+fn update_status_line(status: &Status) -> String {
+    let running = update::RUNNING;
+    match status {
+        Status::Idle => format!("stdusk {running}"),
+        Status::Checking => "Checking for updates...".into(),
+        Status::UpToDate => format!("stdusk {running} is the latest version"),
+        Status::Available(r) => format!("stdusk {} is available (you have {running})", r.version),
+        Status::Installing(r) => format!("Installing stdusk {}...", r.version),
+        Status::Installed(r) => format!("stdusk {} is installed. Restart to use it.", r.version),
+        Status::Failed(e) => format!("Update check failed: {e}"),
+    }
+}
+
+fn updates_block(ui: &mut egui::Ui, cfg: &mut config::Config, updater: &mut Updater) {
+    let brew = update::installed_with_brew();
+    subheading(ui, "Updates");
+    rows(ui, |ui| {
+        row(ui, "Status", &update_status_line(&updater.status), |ui| {
+            ui.horizontal(|ui| {
+                if crate::widgets::action_button(ui, "Check now", false).clicked() {
+                    updater.check_now();
+                }
+                let Status::Available(release) = &updater.status else { return };
+                let label = if brew {
+                    format!("Update to {}", release.version)
+                } else {
+                    "View release".into()
+                };
+                if crate::widgets::action_button(ui, &label, true).clicked() {
+                    if brew {
+                        let release = release.clone();
+                        updater.install(release);
+                    } else {
+                        let _ = std::process::Command::new("open").arg(&release.url).spawn();
+                    }
+                }
+            });
+        });
+        row(ui, "Check automatically", "Look for a new release every hour", |ui| {
+            crate::widgets::toggle_switch(ui, &mut cfg.updates.check);
+        });
+        let hint = if brew {
+            "Uses brew upgrade. Restart when it's done."
+        } else {
+            "Needs stdusk installed with Homebrew."
+        };
+        row_full(ui, "Install in the background", "", hint, |ui| {
+            ui.add_enabled_ui(brew, |ui| {
+                crate::widgets::toggle_switch(ui, &mut cfg.updates.auto_install);
+            });
+        });
+    });
 }
 
 // ---- the view ----
@@ -2414,6 +2477,8 @@ impl Stdusk {
                                         Section::About => {
                                             restart_req = about_section(
                                                 ui,
+                                                &mut self.cfg,
+                                                &mut self.updater,
                                                 self.pending_update.as_deref(),
                                                 crate::handoff::available(),
                                             );
@@ -3035,5 +3100,36 @@ mod tests {
         // offers no login item, so nothing reads or writes the OS login items here.
         assert_eq!(cfg.session.resume_agents, config::ResumeAgents::Auto);
         assert!(st.login_item.is_none() && st.login_error.is_none());
+    }
+
+    #[test]
+    fn about_section_renders_every_update_status() {
+        let ctx = egui::Context::default();
+        let mut cfg = config::Config::default();
+        let mut updater = Updater::new(ctx.clone());
+        let release = update::Release { version: "999.0.0".into(), url: String::new() };
+        for status in [
+            Status::Idle,
+            Status::Checking,
+            Status::UpToDate,
+            Status::Available(release.clone()),
+            Status::Installing(release.clone()),
+            Status::Installed(release),
+            Status::Failed("offline".into()),
+        ] {
+            updater.status = status;
+            run_frame(&ctx, vec![], |ui| {
+                let restart = about_section(ui, &mut cfg, &mut updater, None, false);
+                assert!(!restart);
+            });
+        }
+        assert!(cfg.updates.check && !cfg.updates.auto_install, "rendering never flips a toggle");
+    }
+
+    #[test]
+    fn update_status_names_the_new_version() {
+        let release = update::Release { version: "999.0.0".into(), url: String::new() };
+        assert!(update_status_line(&Status::Available(release)).contains("999.0.0"));
+        assert!(update_status_line(&Status::Failed("offline".into())).contains("offline"));
     }
 }

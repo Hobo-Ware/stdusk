@@ -1409,12 +1409,16 @@ impl Stdusk {
                         // A pending update adds a passive dot on the gear (Settings > About spells
                         // it out). Deliberately not a toast or modal - a terminal must never nag
                         // over a running session.
-                        let gear_tip = match &self.pending_update {
-                            Some(v) => format!("Settings - update to {v} ready"),
-                            None => ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings),
+                        let offered = self.updater.offered().map(|r| r.version.as_str());
+                        let gear_tip = match (&self.pending_update, offered) {
+                            (Some(v), _) => format!("Settings - update to {v} ready"),
+                            (None, Some(v)) => format!("Settings - {v} is available"),
+                            (None, None) => {
+                                ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings)
+                            }
                         };
                         let gear = crate::widgets::icon_toggle(ui, icons::GEAR, false, &gear_tip);
-                        if self.pending_update.is_some() {
+                        if self.pending_update.is_some() || offered.is_some() {
                             ui.painter().circle_filled(
                                 ui::update_dot_center(gear.rect),
                                 ui::UPDATE_DOT_R,

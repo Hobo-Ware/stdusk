@@ -13,6 +13,7 @@ pub(crate) struct Config {
     pub(crate) terminal: Terminal,
     pub(crate) session: Session,
     pub(crate) sync: Sync,
+    pub(crate) updates: Updates,
     pub(crate) hotkeys: Hotkeys,
     pub(crate) profiles: Vec<Profile>,
     /// A `--screenshot` run. Never read from or written to the file. The demo panes track no
@@ -28,6 +29,21 @@ pub(crate) struct Config {
 pub(crate) struct Sync {
     pub(crate) repo: String, // e.g. "git@github.com:you/stdusk-settings.git"; empty = off
     pub(crate) auto: bool,   // pull on launch + push after every settings Save
+}
+
+/// Release checks (`[updates]`). `auto_install` only applies to a Homebrew install, and only ever
+/// swaps the bundle on disk; the running app keeps going until the user restarts it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub(crate) struct Updates {
+    pub(crate) check: bool,
+    pub(crate) auto_install: bool,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self { check: true, auto_install: false }
+    }
 }
 
 /// App hotkey remapping (`[hotkeys]`): action -> chord string ("Cmd+Shift+K"). A struct with

@@ -2599,6 +2599,17 @@ This section holds the state only.
 - README and site copy already describe the intended behavior. The meta-plan now specifies
   foreground ownership and Codex workspace selection. No GUI or reboot acceptance was repeated.
 
+## Self-update (unreleased)
+- Ported from kelp's updater. `updater.rs` checks GitHub's `/releases/latest` redirect 5 s after
+  launch, hourly, and on window focus; `update.rs` holds the version compare and `brew upgrade`.
+  Settings > About shows status, Check now, Update to X, and two toggles (`[updates] check`,
+  `auto_install`). The gear dot also lights for an available release.
+- `auto_install` defaults OFF: the app's own `brew upgrade` skips the `~/.zshrc` re-sign wrapper,
+  so releases land ad-hoc signed and macOS re-asks for privacy grants. Flip the default once
+  notarized releases ship.
+- Verified: unit tests, clippy, fmt, and the real redirect (`stdusk-v1.8.0`). Not yet verified:
+  a live install from the running app.
+
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
   Keep the unsaved-changes dialog open and report the error when writing config fails.

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 alacritty_terminal = "0.26.0"
+anyhow = "1.0.104" # update check + brew upgrade: several error sources under one `?`
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] } # get_image() for clipboard image paste
 base64 = "0.22.1"
 block2 = "0.6" # NSEvent local monitor block (Cmd+V image-paste hook on macOS)
@@ -26,6 +27,7 @@ serde_json = "1.0.151"
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 toml = "1.1.3"
 tray-icon = "0.24.1"
+ureq = "3.4.2" # update check: one redirect read from github.com/<repo>/releases/latest
 winit = "0.30" # macOS activation policy (accessory app) via eframe's event_loop_builder hook
 
 [dev-dependencies]
