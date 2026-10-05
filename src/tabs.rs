@@ -146,6 +146,14 @@ pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) 
     Tab { group, repo_probed_cwd: cwd, ..tab_with_root(pane::Pane::leaf(term)) }
 }
 
+/// The newest OSC 52 copy request from any pane in any tab, draining them all.
+pub(crate) fn take_clipboard_request(tabs: &[Tab]) -> Option<String> {
+    tabs.iter()
+        .flat_map(|t| t.root().leaves())
+        .filter_map(PtyTerm::take_clipboard)
+        .fold(None, |_, text| Some(text))
+}
+
 /// Apply a saved tab's presentation to a rebuilt one: the persisted rename, color and pin. Shared
 /// by the restore and the handoff-adopt paths so a field added to `SavedTab` cannot silently go
 /// missing from one of them.
@@ -1975,6 +1983,23 @@ mod tests {
         );
         let want = b"codex resume 0c2cbc96-1111-4222-8333-444455556666\r".to_vec();
         assert_eq!(opts.agent_tracking.and_then(|a| a.pending_input), Some(want));
+    }
+
+    #[test]
+    fn real_pty_copy_from_a_background_tab_reaches_the_clipboard() {
+        let spawn = |script: &str| {
+            let opts = crate::test_support::spawn_opts("/bin/sh", &["-c", script]);
+            tab_with_root(pane::Pane::leaf(PtyTerm::spawn(20, 5, egui::Context::default(), &opts)))
+        };
+        let tabs = [spawn("exec cat >/dev/null"), spawn("printf '\\033]52;c;aGk=\\a'; exec cat")];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut got = None;
+        while got.is_none() && std::time::Instant::now() < deadline {
+            got = take_clipboard_request(&tabs);
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert_eq!(got.as_deref(), Some("hi"));
+        assert_eq!(take_clipboard_request(&tabs), None, "a request is applied once");
     }
 
     #[test]
