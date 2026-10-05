@@ -177,6 +177,12 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   Cursor is `Option` now - `None` while scrolled into history (hidden).
 - **Paste**: egui emits `Event::Paste(String)` on Cmd+V; `term.paste()` wraps in `\x1b[200~..\x1b[201~`
   when `TermMode::BRACKETED_PASTE` is set.
+- **Pty writes are queued** (`PtyWriter`): keys, pastes, query replies and redraw nudges go
+  through one mpsc queue drained by a writer thread, in order. Before this, `write_all` ran on
+  the UI thread under a mutex the reader thread also took for query replies: a ~9 KB paste into
+  a busy app froze the window ~1.5s, with a possible deadlock if a query arrived mid-write.
+  Measured fact: macOS drops tty input past 8192 bytes in CANONICAL (cooked) mode when the
+  reader isn't reading - kernel behavior, every terminal hits it; raw-mode apps get every byte.
 - **OSC 52**: reader decodes base64 (`base64` crate) → `TabState.clipboard`; UI takes it →
   `ctx.copy_text()`. Copy-FROM-selection (Cmd+C) is M6.5.
   Requests are drained from EVERY pane of every tab (`tabs::take_clipboard_request`), not just

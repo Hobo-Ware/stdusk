@@ -3,7 +3,7 @@
 //! render, resizes, scrolls, and writes keystrokes/paste back to the pty.
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -366,8 +366,8 @@ fn resolve_cwd(
 
 pub(crate) struct PtyTerm {
     term: Arc<FairMutex<Term<EventProxy>>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>, // shared with the reader thread (query replies)
-    pty: Pty,                                  // owns the master fd; resize goes through it
+    writer: PtyWriter,
+    pty: Pty, // owns the master fd; resize goes through it
     state: Arc<Mutex<TabState>>,
     cols: usize,
     rows: usize,
@@ -448,6 +448,30 @@ impl Pty {
     }
 }
 
+/// The pty's input side. Every write (keys, pastes, query replies) queues here and one thread
+/// drains the queue in order, so a program that is slow to read blocks that thread instead of the
+/// UI, and the reader thread never waits on the UI to answer a query.
+#[derive(Clone)]
+struct PtyWriter(mpsc::Sender<Vec<u8>>);
+
+impl PtyWriter {
+    fn spawn(mut w: Box<dyn Write + Send>) -> Self {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        thread::spawn(move || {
+            for bytes in rx {
+                if w.write_all(&bytes).and_then(|()| w.flush()).is_err() {
+                    return;
+                }
+            }
+        });
+        Self(tx)
+    }
+
+    fn write(&self, bytes: &[u8]) {
+        let _ = self.0.send(bytes.to_vec());
+    }
+}
+
 /// Everything the reader thread owns. Bundled because it is built from two very different places:
 /// a fresh spawn (with a `Child` to reap) and an ADOPTED pty handed over by a predecessor process
 /// (no child - we are not its parent, so EOF is the only exit signal we get).
@@ -455,7 +479,7 @@ struct ReaderCtx {
     reader: Box<dyn Read + Send>,
     term: Arc<FairMutex<Term<EventProxy>>>,
     state: Arc<Mutex<TabState>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    writer: PtyWriter,
     replies: Arc<Mutex<Vec<Reply>>>,
     ctx: egui::Context,
     detect_progress: bool,
@@ -628,12 +652,10 @@ fn spawn_reader(c: ReaderCtx) {
                     // heal, a Ctrl-L asks the shell to repaint the prompt it may have
                     // drawn on the (now abandoned) alt grid.
                     if !reply.is_empty() || healed_alt {
-                        let mut w = writer_reader.lock().unwrap();
-                        let _ = w.write_all(&reply);
+                        writer_reader.write(&reply);
                         if healed_alt {
-                            let _ = w.write_all(b"\x0c");
+                            writer_reader.write(b"\x0c");
                         }
-                        let _ = w.flush();
                     }
                     // A startup child can emit prompt marks too. Keep its input untouched.
                     if prompt_started
@@ -642,9 +664,7 @@ fn spawn_reader(c: ReaderCtx) {
                             .is_some_and(|(fd, pid)| foreground_pgid(fd.as_fd()) == Some(*pid))
                         && let Some(bytes) = pending.take()
                     {
-                        let mut w = writer_reader.lock().unwrap();
-                        let _ = w.write_all(&bytes);
-                        let _ = w.flush();
+                        writer_reader.write(&bytes);
                     }
                     // Defer (don't paint per read): coalesce the burst so a clear+redraw
                     // lands atomically before the UI snapshots. See REPAINT_COALESCE_WINDOW.
@@ -732,7 +752,7 @@ impl PtyTerm {
 
         let reader = pair.master.try_clone_reader().expect("reader");
         // Shared with the reader thread, which writes query answers back to the pty.
-        let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("writer")));
+        let writer = PtyWriter::spawn(pair.master.take_writer().expect("writer"));
 
         let state = Arc::new(Mutex::new(TabState::default()));
         let replies = Arc::new(Mutex::new(Vec::new()));
@@ -812,8 +832,7 @@ impl PtyTerm {
         // Separate dups for the reader thread and the writer: both sides of the same pty master,
         // independently owned, exactly like `try_clone_reader` + `take_writer` give us on a spawn.
         let reader = std::fs::File::from(fd.try_clone()?);
-        let writer: Box<dyn Write + Send> = Box::new(std::fs::File::from(fd.try_clone()?));
-        let writer = Arc::new(Mutex::new(writer));
+        let writer = PtyWriter::spawn(Box::new(std::fs::File::from(fd.try_clone()?)));
 
         // Seed the cwd AND the OSC title from the handover instead of waiting for the shell to
         // re-emit them: it re-sends OSC 7 only at its next prompt and an app re-sends its title only
@@ -926,11 +945,8 @@ impl PtyTerm {
                     return;
                 }
                 nudge_winsize(fd.as_fd(), cols, rows);
-                if allow_ctrl_l(alt_screen, running, attempt, replayed)
-                    && let Ok(mut w) = writer.lock()
-                {
-                    let _ = w.write_all(b"\x0c");
-                    let _ = w.flush();
+                if allow_ctrl_l(alt_screen, running, attempt, replayed) {
+                    writer.write(b"\x0c");
                 }
                 ctx.request_repaint();
             }
@@ -1103,10 +1119,7 @@ impl PtyTerm {
     /// Write to the pty for stdusk itself (the fallback that types a resume command). Unlike
     /// [`PtyTerm::send`], it says nothing about the user's own input.
     fn write_input(&self, bytes: &[u8]) {
-        if let Ok(mut w) = self.writer.lock() {
-            let _ = w.write_all(bytes);
-            let _ = w.flush();
-        }
+        self.writer.write(bytes);
     }
 
     pub(crate) fn notice(&self) -> Option<PaneNotice> {
@@ -1126,9 +1139,7 @@ impl PtyTerm {
     pub(crate) fn paste(&mut self, text: &str) {
         let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
         if bracketed {
-            self.send(b"\x1b[200~");
-            self.send(text.as_bytes());
-            self.send(b"\x1b[201~");
+            self.send(&[b"\x1b[200~", text.as_bytes(), b"\x1b[201~"].concat());
         } else {
             self.send(text.as_bytes());
         }
@@ -1722,6 +1733,25 @@ mod tests {
     fn spawn_and_poll<T>(script: &str, check: impl Fn(&PtyTerm) -> Option<T>) -> Option<T> {
         let term = e2e_term(script);
         poll_term(&term, check)
+    }
+
+    #[test]
+    fn paste_into_a_busy_program_returns_at_once_and_delivers_every_byte() {
+        let fixture = crate::test_support::ShellFixture::new("paste");
+        let out = fixture.base.join("pasted");
+        let text = "- a line of a big markdown paste\r".repeat(300);
+        let script =
+            format!("stty raw -echo; sleep 2; head -c {} > '{}'", text.len(), out.display());
+        let mut term = e2e_term(&script);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        let started = std::time::Instant::now();
+        term.paste(&text);
+        let blocked = started.elapsed();
+
+        assert!(blocked < std::time::Duration::from_millis(200), "paste blocked for {blocked:?}");
+        let got = poll_term(&term, |_| std::fs::read(&out).ok().filter(|b| b.len() == text.len()));
+        assert_eq!(got.as_deref(), Some(text.as_bytes()));
     }
 
     #[test]
