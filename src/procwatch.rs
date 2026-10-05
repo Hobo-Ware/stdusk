@@ -1312,7 +1312,8 @@ mod tests {
                 as u64;
         let t = now_ms + 300;
         let id = format!("{:08x}-{:04x}-7000-8000-{:012x}", t >> 16, t & 0xffff, 1);
-        let day = home.join("sessions/2026/09/30");
+        let today = std::process::Command::new("date").args(["-u", "+%Y/%m/%d"]).output().unwrap();
+        let day = home.join("sessions").join(String::from_utf8(today.stdout).unwrap().trim());
         std::fs::create_dir_all(&day).unwrap();
         // The cwd goes in as the shell would say it: through the symlink /var -> /private/var.
         let line = format!(
