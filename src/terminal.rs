@@ -2258,8 +2258,9 @@ mod tests {
         // OSC 133 at all. The tty is asked instead, and the output-based bail-out backs it up.
         let heir = adopt_from(&mut donor, false, None, false);
         std::thread::sleep(std::time::Duration::from_millis(2600)); // past every retry
+        let repainted = poll_term(&heir, |t| grid_text(t).contains("WORK").then_some(()));
         let seen = grid_text(&heir);
-        assert!(seen.contains("WORK"), "a producing pane repaints itself, got {seen:?}");
+        assert!(repainted.is_some(), "a producing pane repaints itself, got {seen:?}");
         assert!(!seen.contains("^L"), "a running command must never be sent ^L, got {seen:?}");
         drop(heir);
         reap_probe(&donor);
