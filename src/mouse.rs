@@ -93,6 +93,31 @@ pub(crate) fn wheel_report_lines(lines: i32) -> i32 {
     lines.clamp(-MAX_REPORTS, MAX_REPORTS)
 }
 
+/// Raw wheel lines for mouse reports; egui's `smooth_scroll_delta` spreads one notch over ~12 frames.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct WheelAccumulator {
+    carry: f32,
+}
+
+impl WheelAccumulator {
+    pub(crate) fn lines(&mut self, events: &[egui::Event], cell_h: f32, page_rows: usize) -> i32 {
+        for event in events {
+            let egui::Event::MouseWheel { unit, delta, phase, .. } = event else { continue };
+            if *phase == egui::TouchPhase::Start {
+                self.carry = 0.0;
+            }
+            self.carry += match unit {
+                egui::MouseWheelUnit::Line => delta.y,
+                egui::MouseWheelUnit::Point => delta.y / cell_h,
+                egui::MouseWheelUnit::Page => delta.y * page_rows as f32,
+            };
+        }
+        let whole = self.carry.trunc();
+        self.carry -= whole;
+        whole as i32
+    }
+}
+
 /// A pane's grid in screen space, for mapping pointer positions to 0-based viewport cells.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GridGeom {
@@ -196,8 +221,8 @@ mod tests {
     use eframe::egui;
 
     use super::{
-        GridGeom, MouseReporting, PointerTracker, drag_autoscroll_lines, pointer_reports,
-        sgr_mouse, wheel_button, wheel_report_lines, wheel_sgr,
+        GridGeom, MouseReporting, PointerTracker, WheelAccumulator, drag_autoscroll_lines,
+        pointer_reports, sgr_mouse, wheel_button, wheel_report_lines, wheel_sgr,
     };
 
     fn grid() -> GridGeom {
@@ -341,6 +366,60 @@ mod tests {
         assert_eq!(wheel_report_lines(40), 3); // big accelerated delta -> small burst
         assert_eq!(wheel_report_lines(-40), -3);
         assert_eq!(wheel_report_lines(0), 0); // no delta -> no report
+    }
+
+    fn wheel(unit: egui::MouseWheelUnit, dy: f32) -> egui::Event {
+        egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn one_wheel_notch_is_one_report_however_many_frames_follow() {
+        let mut acc = WheelAccumulator::default();
+        let frames = [
+            acc.lines(&[wheel(egui::MouseWheelUnit::Line, 1.0)], 20.0, 24),
+            acc.lines(&[], 20.0, 24),
+            acc.lines(&[egui::Event::PointerGone], 20.0, 24),
+        ];
+        assert_eq!(frames, [1, 0, 0]);
+        assert_eq!(acc.lines(&[wheel(egui::MouseWheelUnit::Line, -1.0)], 20.0, 24), -1);
+    }
+
+    #[test]
+    fn trackpad_points_report_once_per_cell_height_and_carry_the_rest() {
+        let mut acc = WheelAccumulator::default();
+        let step = [wheel(egui::MouseWheelUnit::Point, 5.0)];
+        let frames: Vec<i32> = (0..8).map(|_| acc.lines(&step, 20.0, 24)).collect();
+        assert_eq!(frames, [0, 0, 0, 1, 0, 0, 0, 1]);
+        let back = [wheel(egui::MouseWheelUnit::Point, -45.0)];
+        assert_eq!(acc.lines(&back, 20.0, 24), -2);
+    }
+
+    #[test]
+    fn a_new_trackpad_gesture_drops_the_last_gestures_leftover() {
+        let mut acc = WheelAccumulator::default();
+        assert_eq!(acc.lines(&[wheel(egui::MouseWheelUnit::Point, 19.0)], 20.0, 24), 0);
+        let start = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::Vec2::ZERO,
+            phase: egui::TouchPhase::Start,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let next_swipe = [start, wheel(egui::MouseWheelUnit::Point, 5.0)];
+        assert_eq!(acc.lines(&next_swipe, 20.0, 24), 0);
+    }
+
+    #[test]
+    fn wheel_events_in_one_frame_sum_and_pages_scale_by_rows() {
+        let mut acc = WheelAccumulator::default();
+        let burst =
+            [wheel(egui::MouseWheelUnit::Line, 1.0), wheel(egui::MouseWheelUnit::Line, 2.0)];
+        assert_eq!(acc.lines(&burst, 20.0, 24), 3);
+        assert_eq!(acc.lines(&[wheel(egui::MouseWheelUnit::Page, -1.0)], 20.0, 24), -24);
     }
 
     #[test]

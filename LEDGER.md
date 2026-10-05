@@ -404,6 +404,12 @@ wanted by "agent support" was *ambient awareness of AI CLIs running in a tab*. C
   `wheel_report_lines(lines)` = `lines.clamp(-3, 3)` so a normal notch passes through but an
   accelerated frame caps to a physical-wheel-sized burst. Do NOT clamp the local `term.scroll`
   path or alt-scroll (arrows) - those feel right as-is. Pure test: `wheel_report_lines_*`.
+- **Wheel reports must come from RAW `MouseWheel` events, not `smooth_scroll_delta`.** egui
+  spreads one notch (40pt) over ~12 frames (`wheel_state.rs` `after_events`), and the old
+  "round, floor to 1" per frame sent one report per frame, so one notch scrolled Claude Code's
+  fullscreen UI ~12 lines whatever its scroll speed. `mouse::WheelAccumulator` sums raw events per
+  pane: one report per `Line`, one per cell height of `Point` travel, fraction carried. Local
+  scroll and alt-scroll still use the smoothed delta. Tests: `one_wheel_notch_is_one_report_*`.
 - **Design system in `ui.rs`**: surfaces/inputs/buttons come from shared primitives -
   `overlay_frame()`, `text_field()`, `action_button()`, `icon_button`/`icon_toggle`,
   `color_swatch`, `style_menu`. Never hand-roll `Frame`/`TextEdit`/`Button` styling; two call

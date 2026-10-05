@@ -324,7 +324,12 @@ impl Stdusk {
                                 // Clamp the report count: unlike local scroll (which alacritty
                                 // caps to available history), the app has no backstop, so an
                                 // accelerated frame of many lines would over-scroll its TUI.
-                                let reports = crate::mouse::wheel_report_lines(lines);
+                                let id = egui::Id::new(("wheel_accumulator", path));
+                                let mut wheel: crate::mouse::WheelAccumulator =
+                                    ui.data(|d| d.get_temp(id)).unwrap_or_default();
+                                let raw_lines = wheel.lines(&pointer_events, ch, rows);
+                                ui.data_mut(|d| d.insert_temp(id, wheel));
+                                let reports = crate::mouse::wheel_report_lines(raw_lines);
                                 term.send(&crate::mouse::wheel_sgr(reports, col, row));
                             } else if mr.alternate_scroll && term.is_alt_screen() {
                                 // Alt-screen app without real mouse reporting (less/pager): wheel
