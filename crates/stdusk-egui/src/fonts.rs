@@ -1,7 +1,7 @@
 //! Font resolution + the egui font set. Turns an `appearance.font` FAMILY name into raw file
-//! bytes via the system font source (core-text on macOS), picking the closest-to-regular and
-//! closest-to-bold faces by NAME, and assembles the full `FontDefinitions` (icons + user font +
-//! emoji/symbol fallbacks). Shared by startup and the settings live-apply so they can't drift.
+//! bytes via the system font source (core-text on macOS, fontconfig on Linux), picking the
+//! closest-to-regular and closest-to-bold faces by NAME, and assembles the full
+//! `FontDefinitions` (icons + user font + emoji/symbol fallbacks). Shared by startup and the settings live-apply so they can't drift.
 
 /// egui font-family name for the terminal's real bold face (registered by `build_fonts` only
 /// when the user's font family resolves a bold sibling - the bundled default has none).
@@ -157,12 +157,14 @@ pub fn build_fonts(
             keys.push("noto-emoji".to_owned());
         }
     }
-    // Broad monochrome fallbacks (macOS) for arrows / box-drawing / powerline / misc symbols
-    // the bundled fonts miss - appended as lowest priority so the primary fonts win. Loaded
-    // best-effort; absent files (other OSes) are simply skipped.
+    // Broad monochrome fallbacks (macOS, Debian/Ubuntu Linux) for arrows / box-drawing /
+    // powerline / misc symbols the bundled fonts miss - appended as lowest priority so the
+    // primary fonts win. Loaded best-effort; absent files (other OSes) are simply skipped.
     for (name, path) in [
         ("sys-unicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
         ("sys-symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
+        ("sys-dejavu", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
+        ("sys-noto-symbols", "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf"),
     ] {
         if let Ok(bytes) = std::fs::read(path) {
             fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(bytes).into());

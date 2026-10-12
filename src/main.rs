@@ -669,7 +669,8 @@ impl Stdusk {
 /// which PARKS eframe's run loop - `ui()` stops ticking and the summon hotkey can never bring it
 /// back (broke twice: 1.3.0 orderOut, 1.3.2 fully-offscreen-park). The on-screen sliver is
 /// load-bearing for the run loop; alpha=0 (a compositor property, NOT occlusion) hides it visually
-/// while the window keeps drawing. Restore alpha to 1 on show.
+/// while the window keeps drawing. Restore alpha to 1 on show. Off macOS none of that applies
+/// (no App Nap): hiding really unmaps the window (`Visible(false)`).
 ///
 /// Screen choice: `follow_cursor` drops the window on the screen under the mouse. Otherwise (and
 /// when hiding) it keeps the screen it is on, so the sliver always parks on a live screen. With no
@@ -692,6 +693,8 @@ pub(crate) fn apply_visibility(
     let zoom = ctx.zoom_factor();
     let to_cmd = |p: egui::Pos2| ui::unzoom(p.to_vec2(), zoom).to_pos2();
     if visible {
+        #[cfg(not(target_os = "macos"))]
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         let size = screen.map(|s| ui::unzoom(s.size(), zoom)).or(mon);
         if let Some(m) = size {
             let (w, h) = ui::quake_shown_size(m.x, m.y, height_pct);
@@ -701,12 +704,17 @@ pub(crate) fn apply_visibility(
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(origin));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     } else {
-        // Park just off the bottom edge - keeps a sliver on-screen so the run loop stays warm.
-        let pos = screen.map_or_else(
-            || egui::pos2(0.0, mon.map_or(2000.0, |m| ui::quake_hidden_y(m.y))),
-            |s| to_cmd(ui::quake_hidden_pos(s)),
-        );
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        #[cfg(target_os = "macos")]
+        {
+            // Park just off the bottom edge - keeps a sliver on-screen so the run loop stays warm.
+            let pos = screen.map_or_else(
+                || egui::pos2(0.0, mon.map_or(2000.0, |m| ui::quake_hidden_y(m.y))),
+                |s| to_cmd(ui::quake_hidden_pos(s)),
+            );
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        }
+        #[cfg(not(target_os = "macos"))]
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 }
 
@@ -1070,7 +1078,7 @@ impl eframe::App for Stdusk {
 
         // Pending-update poll: has the .app bundle been replaced under us (brew reinstall)? A
         // stat + small read, so a slow tick is plenty - never per frame.
-        if self.screenshot.is_none() {
+        if self.screenshot.is_none() && update::SUPPORTED {
             let now = ctx.input(|i| i.time);
             if self.updater.tick(self.cfg.updates.check, self.cfg.updates.auto_install) {
                 self.next_update_check = 0.0;

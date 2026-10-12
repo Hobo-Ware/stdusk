@@ -302,15 +302,17 @@ pub(crate) fn install_cmd_v_image_monitor(ctx: egui::Context, paste_req: Arc<Ato
     std::mem::forget(block);
 }
 
-/// Post a desktop notification (macOS `osascript`); `body` is the visible line. Shared by
-/// notify-when-done and notify-on-activity so the osascript plumbing can't drift.
+/// Post a desktop notification (macOS `osascript`, Linux `notify-send`); `body` is the visible
+/// line. Shared by notify-when-done and notify-on-activity so the plumbing can't drift.
 pub(crate) fn notify(body: &str) {
     #[cfg(target_os = "macos")]
     {
         let script = format!("display notification {body:?} with title \"stdusk\"");
         let _ = std::process::Command::new("osascript").args(["-e", &script]).spawn();
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("notify-send").args(["stdusk", body]).spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let _ = body;
 }
 

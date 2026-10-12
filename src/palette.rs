@@ -322,7 +322,7 @@ impl Stdusk {
             }
             PaletteCmd::OpenConfig => {
                 if let Some(p) = config::ensure_and_path() {
-                    let _ = std::process::Command::new("open").arg(p).spawn();
+                    let _ = std::process::Command::new(stdusk_core::links::OPENER).arg(p).spawn();
                 }
             }
             PaletteCmd::Quit => self.begin_quit(ctx),
