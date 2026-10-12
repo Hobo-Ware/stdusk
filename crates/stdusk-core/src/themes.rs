@@ -48,7 +48,7 @@ pub fn all_schemes() -> &'static [(String, Theme)] {
 
 /// Look up a non-built-in scheme by normalized name (lowercase, spaces/underscores -> '-').
 /// Rare (theme switch only), so parse on hit - no cache.
-pub(crate) fn lookup(name: &str) -> Option<Theme> {
+pub fn lookup(name: &str) -> Option<Theme> {
     user_scheme(name)
         .or_else(|| SCHEMES.iter().find(|(n, _)| *n == name).and_then(|(_, src)| parse_xrdb(src)))
 }
