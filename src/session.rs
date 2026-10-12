@@ -4,6 +4,8 @@
 use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
+pub(crate) use stdusk_core::session::SavedAgent;
+
 // No `Eq`: `window` carries f32 geometry. Only `PartialEq` is needed (skip-identical-write guard).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub(crate) struct SavedSession {
@@ -79,27 +81,6 @@ pub(crate) enum SavedPane {
     },
 }
 
-/// The Claude Code or Codex session a pane ran. Holds a plain string id: it is validated when the
-/// record is used (`agents::SessionId::parse`), never trusted from the file.
-///
-/// Downgrade note: a session file with an `agent` key fails to load in stdusk 1.8.0 and older
-/// (toml rejects unknown keys inside an enum variant), and a live update handoff to such a build
-/// aborts. Newer builds load older files.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct SavedAgent {
-    pub(crate) kind: crate::agents::AgentKind,
-    pub(crate) session: String,
-    pub(crate) cwd: String,
-    /// The transcript file (a Codex rollout). Absent for a Claude registry record.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) transcript: Option<String>,
-    /// The record was kept only because the agent died of a crash signal (which statuses count is
-    /// `agent_track::CRASH_SIGNALS`). This is a crash hint: restore types its resume command
-    /// without Enter. Absent means a normal record.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) crashed: bool,
-}
-
 /// Serializable mirror of `pane::SplitDir` (kept local so `pane.rs` needn't derive serde).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum SavedSplitDir {
@@ -107,20 +88,20 @@ pub(crate) enum SavedSplitDir {
     Column,
 }
 
-impl From<crate::pane::SplitDir> for SavedSplitDir {
-    fn from(d: crate::pane::SplitDir) -> Self {
+impl From<stdusk_core::pane::SplitDir> for SavedSplitDir {
+    fn from(d: stdusk_core::pane::SplitDir) -> Self {
         match d {
-            crate::pane::SplitDir::Row => SavedSplitDir::Row,
-            crate::pane::SplitDir::Column => SavedSplitDir::Column,
+            stdusk_core::pane::SplitDir::Row => SavedSplitDir::Row,
+            stdusk_core::pane::SplitDir::Column => SavedSplitDir::Column,
         }
     }
 }
 
-impl From<SavedSplitDir> for crate::pane::SplitDir {
+impl From<SavedSplitDir> for stdusk_core::pane::SplitDir {
     fn from(d: SavedSplitDir) -> Self {
         match d {
-            SavedSplitDir::Row => crate::pane::SplitDir::Row,
-            SavedSplitDir::Column => crate::pane::SplitDir::Column,
+            SavedSplitDir::Row => stdusk_core::pane::SplitDir::Row,
+            SavedSplitDir::Column => stdusk_core::pane::SplitDir::Column,
         }
     }
 }
@@ -129,12 +110,12 @@ impl SavedPane {
     /// Build a saved tree from a live pane tree, extracting each leaf's persisted fields via `leaf`
     /// (which returns a `SavedPane::Leaf`). Pure + generic so it round-trips in tests with `T`=cwd.
     pub(crate) fn from_tree<T>(
-        tree: &crate::pane::Pane<T>,
+        tree: &stdusk_core::pane::Pane<T>,
         leaf: &impl Fn(&T) -> SavedPane,
     ) -> SavedPane {
         match tree {
-            crate::pane::Pane::Leaf(t) => leaf(t),
-            crate::pane::Pane::Split { dir, ratio, a, b } => SavedPane::Split {
+            stdusk_core::pane::Pane::Leaf(t) => leaf(t),
+            stdusk_core::pane::Pane::Split { dir, ratio, a, b } => SavedPane::Split {
                 dir: (*dir).into(),
                 ratio: *ratio,
                 a: Box::new(Self::from_tree(a, leaf)),
@@ -155,10 +136,10 @@ impl SavedPane {
     /// Rebuild a live pane tree, constructing each leaf's payload from its saved `Leaf` node via
     /// `make`. The recursion order (A then B) matches `Pane::leaf_paths`, so a rebuilt tree's
     /// `leaf_paths()` lines up 1:1 with the saved tree's leaves left-to-right.
-    pub(crate) fn rebuild<T>(&self, make: &impl Fn(&SavedPane) -> T) -> crate::pane::Pane<T> {
+    pub(crate) fn rebuild<T>(&self, make: &impl Fn(&SavedPane) -> T) -> stdusk_core::pane::Pane<T> {
         match self {
-            SavedPane::Leaf { .. } => crate::pane::Pane::Leaf(make(self)),
-            SavedPane::Split { dir, ratio, a, b } => crate::pane::Pane::Split {
+            SavedPane::Leaf { .. } => stdusk_core::pane::Pane::Leaf(make(self)),
+            SavedPane::Split { dir, ratio, a, b } => stdusk_core::pane::Pane::Split {
                 dir: (*dir).into(),
                 ratio: *ratio,
                 a: Box::new(a.rebuild(make)),
@@ -239,7 +220,7 @@ pub(crate) fn remove_stale_temp_files() {
     let Some(dir) = path().and_then(|p| p.parent().map(std::path::Path::to_path_buf)) else {
         return;
     };
-    remove_dead_temp_files(&dir, crate::procwatch::process_alive);
+    remove_dead_temp_files(&dir, stdusk_core::procwatch::process_alive);
 }
 
 fn write_session_file(s: &SavedSession) {
@@ -394,7 +375,7 @@ mod tests {
 
     #[test]
     fn pane_tree_round_trips_through_toml() {
-        use crate::pane::{Pane, SplitDir};
+        use stdusk_core::pane::{Pane, SplitDir};
         // A horizontal (Row) split of two cwds, like a user's left/right terminal panes.
         let tree = Pane::Split {
             dir: SplitDir::Row,
@@ -416,23 +397,23 @@ mod tests {
             SavedPane::Split { .. } => unreachable!(),
         });
         assert_eq!(rebuilt.leaf_count(), 2);
-        assert_eq!(rebuilt.leaf_at(&[crate::pane::Side::A]), Some(&"/proj/left".to_owned()));
-        assert_eq!(rebuilt.leaf_at(&[crate::pane::Side::B]), Some(&"/proj/right".to_owned()));
+        assert_eq!(rebuilt.leaf_at(&[stdusk_core::pane::Side::A]), Some(&"/proj/left".to_owned()));
+        assert_eq!(rebuilt.leaf_at(&[stdusk_core::pane::Side::B]), Some(&"/proj/right".to_owned()));
     }
 
     #[test]
     fn nested_pane_tree_rebuilds_leaves_in_order() {
-        use crate::pane::Pane;
+        use stdusk_core::pane::Pane;
         // Row split, then split B into a column: three leaves left-to-right (a, b, c).
         let (tree, _) = Pane::leaf("a".to_owned()).split(
             &[],
-            crate::pane::SplitDir::Row,
+            stdusk_core::pane::SplitDir::Row,
             "b".to_owned(),
             false,
         );
         let (tree, _) = tree.split(
-            &[crate::pane::Side::B],
-            crate::pane::SplitDir::Column,
+            &[stdusk_core::pane::Side::B],
+            stdusk_core::pane::SplitDir::Column,
             "c".to_owned(),
             false,
         );
@@ -464,7 +445,7 @@ mod tests {
 
     const SID: &str = "0c2cbc96-1111-4222-8333-444455556666";
 
-    fn agent_leaf(kind: crate::agents::AgentKind, cwd: &str) -> SavedPane {
+    fn agent_leaf(kind: stdusk_core::agents::AgentKind, cwd: &str) -> SavedPane {
         SavedPane::Leaf {
             cwd: Some(cwd.into()),
             agent: Some(SavedAgent {
@@ -479,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_leaf_with_an_agent_round_trips_for_both_agents() {
-        use crate::agents::AgentKind::{Claude, Codex};
+        use stdusk_core::agents::AgentKind::{Claude, Codex};
         let pane = SavedPane::Split {
             dir: SavedSplitDir::Row,
             ratio: 0.5,
@@ -511,7 +492,7 @@ mod tests {
         };
         assert_eq!(
             (a.kind, a.session.as_str(), a.cwd.as_str()),
-            (crate::agents::AgentKind::Codex, SID, "/w")
+            (stdusk_core::agents::AgentKind::Codex, SID, "/w")
         );
     }
 
@@ -691,7 +672,7 @@ mod tests {
     #[test]
     fn the_crashed_mark_is_written_only_when_set_and_an_absent_mark_means_normal() {
         let agent = |crashed| SavedAgent {
-            kind: crate::agents::AgentKind::Claude,
+            kind: stdusk_core::agents::AgentKind::Claude,
             session: SID.into(),
             cwd: "/w".into(),
             transcript: None,

@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::config::Profile;
+use crate::shell::ShellProfile;
 use crate::terminal::SpawnOpts;
 
-pub(crate) fn spawn_opts(shell: &str, args: &[&str]) -> SpawnOpts {
+pub fn spawn_opts(shell: &str, args: &[&str]) -> SpawnOpts {
     SpawnOpts {
         detect_progress: false,
         shell_integration: false,
@@ -17,25 +17,23 @@ pub(crate) fn spawn_opts(shell: &str, args: &[&str]) -> SpawnOpts {
         bold_bright: false,
         agent_tracking: None,
         cwd: None,
-        profile: Some(Profile {
-            name: "test".into(),
+        profile: Some(ShellProfile {
             shell: Some(shell.into()),
             args: args.iter().map(|arg| (*arg).into()).collect(),
             cwd: None,
             env: BTreeMap::new(),
-            color: None,
         }),
     }
 }
 
-pub(crate) struct ShellFixture {
-    pub(crate) base: PathBuf,
-    pub(crate) home: PathBuf,
-    pub(crate) bridge: PathBuf,
+pub struct ShellFixture {
+    pub base: PathBuf,
+    pub home: PathBuf,
+    pub bridge: PathBuf,
 }
 
 impl ShellFixture {
-    pub(crate) fn new(tag: &str) -> Self {
+    pub fn new(tag: &str) -> Self {
         static CALLS: AtomicUsize = AtomicUsize::new(0);
         let base = loop {
             let call = CALLS.fetch_add(1, Ordering::Relaxed);
@@ -52,7 +50,7 @@ impl ShellFixture {
         Self { bridge: base.join("bridge"), base, home }
     }
 
-    pub(crate) fn opts(&self, shell: &str, args: &[&str]) -> SpawnOpts {
+    pub fn opts(&self, shell: &str, args: &[&str]) -> SpawnOpts {
         let mut opts = spawn_opts(shell, args);
         opts.scrollback_lines = 100;
         opts.cwd = Some(self.home.to_string_lossy().into_owned());
@@ -63,7 +61,7 @@ impl ShellFixture {
         opts
     }
 
-    pub(crate) fn zsh_opts(&self) -> SpawnOpts {
+    pub fn zsh_opts(&self) -> SpawnOpts {
         crate::shell::write_files(&self.bridge, false).unwrap();
         let mut opts = self.opts("/bin/zsh", &[]);
         opts.profile.as_mut().unwrap().env.extend([
@@ -73,7 +71,7 @@ impl ShellFixture {
         opts
     }
 
-    pub(crate) fn bash_opts(&self) -> SpawnOpts {
+    pub fn bash_opts(&self) -> SpawnOpts {
         crate::shell::write_files(&self.bridge, false).unwrap();
         // Match the non-login --rcfile launch used by shell::configure.
         let script =

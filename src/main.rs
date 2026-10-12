@@ -9,55 +9,34 @@ use eframe::egui;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
-mod agent_codex;
-mod agent_codex_scan;
-mod agent_pane;
-mod agent_restore;
-mod agent_track;
-mod agents;
-mod colors;
+use stdusk_core::{agent_restore, agents, colors, pane, procwatch, search, terminal, themes};
+
 mod config;
 mod finder;
-mod fonts;
 mod handoff;
 mod instance;
 mod keys;
-mod links;
 mod macos;
-mod modes;
-mod mouse;
-mod osc;
 mod palette;
-mod pane;
-mod procwatch;
-mod progress;
 mod repo;
-mod screen;
-mod search;
 mod session;
 mod settings;
-mod shell;
 mod sync;
 mod tabs;
-mod terminal;
-#[cfg(test)]
-mod test_support;
-mod themes;
 mod tray;
 mod ui;
 mod update;
 mod updater;
-mod widgets;
 mod workspace;
 use config::Config;
 use finder::Search;
-use fonts::{build_fonts, resolve_bold_font, resolve_font};
 use macos::{
     app_is_active, center_window_buttons, cursor_screen, notify, notify_done, primary_screen,
     set_dock_icon, set_space_behavior, set_unified_titlebar, set_window_alpha, window_screen,
 };
+use stdusk_core::terminal::PtyTerm;
+use stdusk_egui::fonts::{build_fonts, resolve_bold_font, resolve_font};
 use tabs::{Tab, TabAction, spawn_opts, spawn_tab};
-use terminal::PtyTerm;
 use ui::{apply_theme, auto_title, draw_toast, tint, toast_alpha};
 
 const COLS: usize = 80;
@@ -282,7 +261,12 @@ impl Stdusk {
             // the per-pane accent border (and the dropped unfocused fade) is capturable.
             if std::env::var("STDUSK_SHOT_BROADCAST").is_ok() {
                 let tab = &mut tabs[active];
-                let new = PtyTerm::spawn(COLS, ROWS, cc.egui_ctx.clone(), &spawn_opts(&cfg, None));
+                let new = PtyTerm::spawn(
+                    COLS,
+                    ROWS,
+                    stdusk_egui::repaint_handle(&cc.egui_ctx),
+                    &spawn_opts(&cfg, None),
+                );
                 let root = tab.root.take().expect("root");
                 let (root, focus) = root.split(&tab.focused, pane::SplitDir::Row, new, false);
                 tab.root = Some(root);
@@ -413,7 +397,10 @@ impl Stdusk {
         let dock_shown = config::activation_is_regular(&cfg, true);
         let detect_clis = cfg.terminal.detect_clis && screenshot.is_none();
         let track_agents = tabs::resume_mode(&cfg).is_some();
-        let procs = procwatch::ProcScanner::spawn(cc.egui_ctx.clone(), detect_clis || track_agents);
+        let procs = procwatch::ProcScanner::spawn(
+            stdusk_egui::repaint_handle(&cc.egui_ctx),
+            detect_clis || track_agents,
+        );
         Self {
             tabs,
             active,
@@ -1408,7 +1395,12 @@ impl eframe::App for Stdusk {
         }
         if let Some(dir) = kb_split {
             let cwd = self.tabs[self.active].focused_term().cwd();
-            let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(&self.cfg, cwd));
+            let new = PtyTerm::spawn(
+                COLS,
+                ROWS,
+                stdusk_egui::repaint_handle(&ctx),
+                &spawn_opts(&self.cfg, cwd),
+            );
             let tab = &mut self.tabs[self.active];
             let root = tab.root.take().expect("root");
             let (root, focus) = root.split(&tab.focused, dir, new, false);

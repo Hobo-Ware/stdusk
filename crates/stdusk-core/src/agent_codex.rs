@@ -38,27 +38,27 @@ const FIRST_THREAD_WINDOW_MS: u64 = 2_000;
 
 /// One Codex thread that has a rollout file (so it can be resumed).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Thread {
-    pub(crate) id: SessionId,
+pub struct Thread {
+    pub id: SessionId,
     /// The directory from the rollout's first line, symlinks resolved as far as they still exist.
-    pub(crate) cwd: String,
+    pub cwd: String,
     /// From the UUIDv7 id.
-    pub(crate) time_ms: u64,
-    pub(crate) rollout: String,
+    pub time_ms: u64,
+    pub rollout: String,
 }
 
 /// One live Codex process that may hold a thread: a TUI, or another command that is not a service
 /// (`codex sandbox`, `codex agents`). Each one is a rival for the threads in its cwd, which is the
 /// safe side. A `codex exec` run is not one (see [`is_exec`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CodexProc {
-    pub(crate) pid: u32,
+pub struct CodexProc {
+    pub pid: u32,
     /// Whole seconds. The OS gives no finer start time.
-    pub(crate) start_secs: u64,
+    pub start_secs: u64,
     /// `None` when the OS would not say.
-    pub(crate) cwd: Option<String>,
+    pub cwd: Option<String>,
     /// The id after `resume` in its command line: its thread, and exact.
-    pub(crate) resumes: Option<SessionId>,
+    pub resumes: Option<SessionId>,
 }
 
 /// A Codex process that at least one scan saw and that is not live now. The shared daemon writes the
@@ -66,15 +66,15 @@ pub(crate) struct CodexProc {
 /// process lived can still show up. Until it does, the process stays a rival for it. A process
 /// that started and ended between two scans is never seen, so it is never a rival.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Gone {
-    pub(crate) proc: CodexProc,
+pub struct Gone {
+    pub proc: CodexProc,
     /// The time of the first scan that missed it. A thread made after this is not its thread.
-    pub(crate) ended_ms: u64,
+    pub ended_ms: u64,
 }
 
 /// Who owns one thread.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Verdict {
+pub enum Verdict {
     Owner(u32),
     /// More than one TUI could own it, so nobody gets it.
     Ambiguous,
@@ -89,7 +89,7 @@ fn start_ms(tui: &CodexProc) -> u64 {
 }
 
 /// True when `a` and `b` are one process: the same pid and the same start time.
-pub(crate) fn same_process(a: &CodexProc, b: &CodexProc) -> bool {
+pub fn same_process(a: &CodexProc, b: &CodexProc) -> bool {
     a.pid == b.pid && a.start_secs == b.start_secs
 }
 
@@ -107,7 +107,7 @@ pub(crate) fn same_process(a: &CodexProc, b: &CodexProc) -> bool {
 ///    it is skipped.
 ///
 /// Each thread has one verdict, so one thread never goes to two panes.
-pub(crate) fn judge(thread: &Thread, procs: &[CodexProc], gone: &[Gone]) -> Verdict {
+pub fn judge(thread: &Thread, procs: &[CodexProc], gone: &[Gone]) -> Verdict {
     let alive = procs.iter().map(|p| (p, true));
     let left = gone
         .iter()
@@ -135,11 +135,7 @@ pub(crate) fn judge(thread: &Thread, procs: &[CodexProc], gone: &[Gone]) -> Verd
 
 /// True when the live processes with no known cwd are why a thread is in doubt: the same thread
 /// is not in doubt among the others. A later scan may read their cwd, so this doubt is not final.
-pub(crate) fn blind_rival_causes_doubt(
-    thread: &Thread,
-    procs: &[CodexProc],
-    gone: &[Gone],
-) -> bool {
+pub fn blind_rival_causes_doubt(thread: &Thread, procs: &[CodexProc], gone: &[Gone]) -> bool {
     let sighted: Vec<CodexProc> = procs.iter().filter(|p| p.cwd.is_some()).cloned().collect();
     // Skip the gone entries that a blind live process explains, as `judge` would with all of them.
     let gone: Vec<Gone> =
@@ -151,7 +147,7 @@ pub(crate) fn blind_rival_causes_doubt(
 /// process takes a thread of `gone` only if it started by `ended_ms` and its cwd is the same or
 /// unknown. The list `procs` must not be empty, or the answer is no: a TUI that starts later may
 /// still count. The floored start time can be up to a second early, so `gone` is kept for a second.
-pub(crate) fn rivals_no_live_process(gone: &Gone, procs: &[CodexProc], now_ms: u64) -> bool {
+pub fn rivals_no_live_process(gone: &Gone, procs: &[CodexProc], now_ms: u64) -> bool {
     let cwd_may_match = |p: &CodexProc| match (&p.cwd, &gone.proc.cwd) {
         (Some(a), Some(b)) => a == b,
         _ => true,
@@ -163,7 +159,7 @@ pub(crate) fn rivals_no_live_process(gone: &Gone, procs: &[CodexProc], now_ms: u
 
 /// `$CODEX_HOME`, else `~/.codex`, from stdusk's own environment. A pane's own environment is not
 /// visible, so a pane that runs Codex with another `CODEX_HOME` is not tracked.
-pub(crate) fn codex_home() -> PathBuf {
+pub fn codex_home() -> PathBuf {
     let home = || std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join(".codex");
     std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()).map_or_else(home, PathBuf::from)
 }
@@ -171,13 +167,13 @@ pub(crate) fn codex_home() -> PathBuf {
 /// The id in `resume <id>`. Only the word right before the id counts, so `codex fork <id>`, which
 /// makes a thread of its own, is not a resume. `codex resume --last` and the `codex resume` picker
 /// name no id, so they count as fresh TUIs: they get no id for the old thread they open.
-pub(crate) fn resume_id(cmd: &[String]) -> Option<SessionId> {
+pub fn resume_id(cmd: &[String]) -> Option<SessionId> {
     cmd.windows(2).find(|w| w[0] == "resume").and_then(|w| SessionId::parse(&w[1]))
 }
 
 /// Codex keeps its OS cwd when `--cd` selects another workspace. Relative paths are based on
 /// that OS cwd, and arguments after `--` are prompt text.
-pub(crate) fn working_dir(cmd: &[String], process_cwd: Option<&str>) -> Option<PathBuf> {
+pub fn working_dir(cmd: &[String], process_cwd: Option<&str>) -> Option<PathBuf> {
     let mut args = cmd.iter().skip(1);
     let mut selected = None;
     while let Some(arg) = args.next() {
@@ -209,26 +205,26 @@ pub(crate) fn working_dir(cmd: &[String], process_cwd: Option<&str>) -> Option<P
 /// `resume`: a whole word, after the program name, so a global flag before it (`-c a=b exec`) does
 /// not hide it. A prompt that is exactly `exec` or `e` would also match, which is far less likely
 /// than the runs this removes from the rivals.
-pub(crate) fn is_exec(cmd: &[String]) -> bool {
+pub fn is_exec(cmd: &[String]) -> bool {
     cmd.iter().skip(1).any(|arg| arg == "exec" || arg == "e")
 }
 
 /// Shared by the tests of this file and of `agent_codex_scan`.
 #[cfg(test)]
-pub(crate) mod fixtures {
+pub mod fixtures {
     use super::*;
 
     /// A base time in seconds, and helpers for ids and TUIs relative to it.
-    pub(crate) const T0: u64 = 1_790_761_600;
+    pub const T0: u64 = 1_790_761_600;
 
     /// A v7 id created `ms` after `T0`, with `n` to tell two of them apart.
-    pub(crate) fn id_at(ms: u64, n: u64) -> SessionId {
+    pub fn id_at(ms: u64, n: u64) -> SessionId {
         let t = T0 * 1000 + ms;
         let text = format!("{:08x}-{:04x}-7{:03x}-8000-{:012x}", t >> 16, t & 0xffff, n, n);
         SessionId::parse(&text).expect("built as a canonical id")
     }
 
-    pub(crate) fn thread(ms: u64, n: u64, cwd: &str) -> Thread {
+    pub fn thread(ms: u64, n: u64, cwd: &str) -> Thread {
         Thread {
             id: id_at(ms, n),
             cwd: cwd.into(),
@@ -238,19 +234,19 @@ pub(crate) mod fixtures {
     }
 
     /// A TUI that started `secs` after `T0`.
-    pub(crate) fn tui(pid: u32, secs: u64, cwd: &str) -> CodexProc {
+    pub fn tui(pid: u32, secs: u64, cwd: &str) -> CodexProc {
         CodexProc { pid, start_secs: T0 + secs, cwd: Some(cwd.into()), resumes: None }
     }
 
-    pub(crate) fn resumed(pid: u32, secs: u64, cwd: &str) -> CodexProc {
+    pub fn resumed(pid: u32, secs: u64, cwd: &str) -> CodexProc {
         CodexProc { resumes: Some(id_at(0, 99)), ..tui(pid, secs, cwd) }
     }
 
-    pub(crate) fn blind(pid: u32, secs: u64) -> CodexProc {
+    pub fn blind(pid: u32, secs: u64) -> CodexProc {
         CodexProc { cwd: None, ..tui(pid, secs, "") }
     }
 
-    pub(crate) const W: &str = "/work/a";
+    pub const W: &str = "/work/a";
 }
 
 #[cfg(test)]

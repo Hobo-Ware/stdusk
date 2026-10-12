@@ -3,7 +3,7 @@
 //! plus any user files in
 //! ~/.config/stdusk/schemes/. User files shadow the embedded pack.
 use crate::colors::Theme;
-use eframe::egui::Color32;
+use ecolor::Color32;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -18,7 +18,7 @@ fn dedup_key(name: &str) -> String {
 /// Every browsable scheme (4 built-ins + the embedded pack), parsed once and cached so the
 /// settings scheme list can draw palette previews every frame without re-parsing. Sorted by
 /// normalized name; built-ins shadow same-`dedup_key` pack entries (no duplicate rows).
-pub(crate) fn all_schemes() -> &'static [(String, Theme)] {
+pub fn all_schemes() -> &'static [(String, Theme)] {
     static ALL: LazyLock<Vec<(String, Theme)>> = LazyLock::new(|| {
         let mut v: Vec<(String, Theme)> = vec![
             ("dracula".into(), crate::colors::dracula()),
@@ -48,7 +48,7 @@ pub(crate) fn all_schemes() -> &'static [(String, Theme)] {
 
 /// Look up a non-built-in scheme by normalized name (lowercase, spaces/underscores -> '-').
 /// Rare (theme switch only), so parse on hit - no cache.
-pub(crate) fn lookup(name: &str) -> Option<Theme> {
+pub fn lookup(name: &str) -> Option<Theme> {
     user_scheme(name)
         .or_else(|| SCHEMES.iter().find(|(n, _)| *n == name).and_then(|(_, src)| parse_xrdb(src)))
 }

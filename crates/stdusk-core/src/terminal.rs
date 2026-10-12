@@ -15,7 +15,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Handler, NamedPrivateMode, Processor, Rgb};
 use base64::Engine;
-use eframe::egui::Color32;
+use ecolor::Color32;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::agent_pane::{AgentPane, AgentSetup, Fallback, PendingInput};
@@ -26,10 +26,12 @@ use crate::colors;
 use crate::mouse::MouseReporting;
 use crate::osc::{OscEvent, OscScanner, ShellEvent};
 use crate::progress::{Progress, ProgressScanner};
+use crate::repaint::Repaint;
+use crate::shell::ShellProfile;
 
 /// Last-command state from OSC 133 shell integration, shown as the tab's left-edge indicator.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub(crate) enum CmdState {
+pub enum CmdState {
     #[default]
     Idle, // no command run / cancelled (no indicator)
     Running,
@@ -40,7 +42,7 @@ pub(crate) enum CmdState {
 /// Map an OSC 133 exit code to a tab state. A signal termination (128+n, e.g. 130 = Ctrl+C /
 /// SIGINT, 143 = SIGTERM) means the user cancelled - that's not an error, so clear the indicator
 /// instead of flagging red.
-pub(crate) fn cmd_from_exit(code: Option<i32>) -> CmdState {
+pub fn cmd_from_exit(code: Option<i32>) -> CmdState {
     match code.unwrap_or(0) {
         0 => CmdState::Ok,
         129..=159 => CmdState::Idle,
@@ -50,20 +52,20 @@ pub(crate) fn cmd_from_exit(code: Option<i32>) -> CmdState {
 
 /// The dead shell's exit report, set once by the reader thread when the pty EOFs.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ExitInfo {
-    pub(crate) code: i32,
-    pub(crate) uptime_secs: f32, // spawn -> exit; feeds the crash-loop guard
+pub struct ExitInfo {
+    pub code: i32,
+    pub uptime_secs: f32, // spawn -> exit; feeds the crash-loop guard
 }
 
 /// `terminal.on_exit` parsed: what happens to a pane when its shell exits.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum OnExit {
+pub enum OnExit {
     Close,
     Keep,
     Restart,
 }
 
-pub(crate) fn on_exit_mode(s: &str) -> OnExit {
+pub fn on_exit_mode(s: &str) -> OnExit {
     match s.to_ascii_lowercase().as_str() {
         "keep" => OnExit::Keep,
         "restart" => OnExit::Restart,
@@ -72,7 +74,7 @@ pub(crate) fn on_exit_mode(s: &str) -> OnExit {
 }
 
 /// An exit within this many seconds of spawn counts as a crash (restart-mode loop guard).
-pub(crate) const RAPID_EXIT_SECS: f32 = 2.0;
+pub const RAPID_EXIT_SECS: f32 = 2.0;
 
 /// Coalesce output-driven repaints: the reader `read()`s the pty in tiny pieces (the macOS pty
 /// hands back <=1KB chunks, so a TUI's single-write clear+redraw frame arrives as ~28 reads in
@@ -80,16 +82,33 @@ pub(crate) const RAPID_EXIT_SECS: f32 = 2.0;
 /// mid-burst (blank right after the ESC[2J clear, or half-repainted) - the arrow-key nav flicker.
 /// Deferring the repaint by a sub-frame window collapses the whole burst into one paint of the
 /// settled grid; a long stream still paints every window (progressive, not stalled).
+/// Longest OSC title carried over the wire, in CHARS (never bytes - splitting a code point would
+/// make the string unencodable). A window title is a tab label; anything past this is either
+/// decoration or an app misbehaving, and a tab shows an ellipsized slice of it anyway.
+pub const MAX_TITLE_CHARS: usize = 512;
+
+/// An OSC title fit to travel and to display: empty or whitespace-only means "no title" (the same
+/// reading `ui::auto_title` gives it), and a hostile length is truncated rather than dropped, so a
+/// long-but-legitimate title still names its tab. Applied on BOTH sides - the receiving side treats
+/// the wire as untrusted.
+pub fn clamp_title(title: Option<String>) -> Option<String> {
+    let t = title?;
+    if t.trim().is_empty() {
+        return None;
+    }
+    Some(t.chars().take(MAX_TITLE_CHARS).collect())
+}
+
 const REPAINT_COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(4);
 
 /// How long the frame that sent a keystroke waits for its echo before painting. Without it that
 /// frame presents the pre-echo grid and the echo frame queues 1-3 vsyncs behind it (see LEDGER).
 /// Shells echo in ~0.1-1.5 ms; only keys with no output at all pay the full bound.
-pub(crate) const ECHO_WAIT: std::time::Duration = std::time::Duration::from_millis(2);
+pub const ECHO_WAIT: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// What the UI applies to an exited pane.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum ExitAction {
+pub enum ExitAction {
     ClosePane,
     Keep,
     Restart,
@@ -98,7 +117,7 @@ pub(crate) enum ExitAction {
 /// Decide the action for an exited pane. `rapid_exits` counts consecutive deaths within
 /// `RAPID_EXIT_SECS` of spawn; a restart-mode shell that dies rapidly twice in a row is
 /// crash-looping, so it falls back to Keep instead of respawning forever.
-pub(crate) fn exit_action(mode: OnExit, uptime_secs: f32, rapid_exits: u32) -> ExitAction {
+pub fn exit_action(mode: OnExit, uptime_secs: f32, rapid_exits: u32) -> ExitAction {
     match mode {
         OnExit::Close => ExitAction::ClosePane,
         OnExit::Keep => ExitAction::Keep,
@@ -119,20 +138,20 @@ pub(crate) fn exit_action(mode: OnExit, uptime_secs: f32, rapid_exits: u32) -> E
 /// registered; independent of the `bold_bright` color treatment. `dim` is SGR 2 (faint): the
 /// renderer blends the text toward the background, which is how TUIs draw hint/ghost text.
 #[allow(clippy::struct_excessive_bools)] // independent SGR attributes, not a mode
-pub(crate) struct CellSnap {
-    pub(crate) c: char,
-    pub(crate) fg: Color32,
-    pub(crate) bg: Option<Color32>,
-    pub(crate) selected: bool,
-    pub(crate) wide: bool,
-    pub(crate) bold: bool,
-    pub(crate) dim: bool,
+pub struct CellSnap {
+    pub c: char,
+    pub fg: Color32,
+    pub bg: Option<Color32>,
+    pub selected: bool,
+    pub wide: bool,
+    pub bold: bool,
+    pub dim: bool,
 }
 
 /// Map a grid cell's char + flags to what the renderer draws: spacer cells (the second column
 /// of a wide char, incl. the leading spacer before a line-wrapped one) emit no glyph ('\0');
 /// a `WIDE_CHAR` cell keeps its glyph and is marked wide so it can span two cells.
-pub(crate) fn snap_glyph(c: char, flags: Flags) -> (char, bool) {
+pub fn snap_glyph(c: char, flags: Flags) -> (char, bool) {
     if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
         ('\0', false)
     } else {
@@ -141,38 +160,38 @@ pub(crate) fn snap_glyph(c: char, flags: Flags) -> (char, bool) {
 }
 
 /// A frame's worth of visible grid, ready to paint.
-pub(crate) struct GridSnap {
-    pub(crate) cols: usize,
-    pub(crate) rows: usize,
-    pub(crate) cells: Vec<CellSnap>,           // row-major, rows*cols
-    pub(crate) cursor: Option<(usize, usize)>, // (row, col); None while scrolled into history
-    pub(crate) top_line: i32, // buffer line of viewport row 0 (for mouse->grid mapping)
+pub struct GridSnap {
+    pub cols: usize,
+    pub rows: usize,
+    pub cells: Vec<CellSnap>,           // row-major, rows*cols
+    pub cursor: Option<(usize, usize)>, // (row, col); None while scrolled into history
+    pub top_line: i32,                  // buffer line of viewport row 0 (for mouse->grid mapping)
 }
 
 /// Per-tab observable state, written by the reader thread, read by the UI.
 #[allow(clippy::struct_excessive_bools)] // independent per-pane flags, not a mode
 #[derive(Default)]
-pub(crate) struct TabState {
-    pub(crate) progress: Progress,
-    pub(crate) cwd: Option<String>,
-    pub(crate) clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
-    pub(crate) cmd: CmdState,             // OSC 133 last-command state (tab dot)
-    pub(crate) bell: bool,                // BEL rung since last consumed (drives the visual flash)
-    pub(crate) activity: bool,            // output since last consumed (notify-on-activity)
+pub struct TabState {
+    pub progress: Progress,
+    pub cwd: Option<String>,
+    pub clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
+    pub cmd: CmdState,             // OSC 133 last-command state (tab dot)
+    pub bell: bool,                // BEL rung since last consumed (drives the visual flash)
+    pub activity: bool,            // output since last consumed (notify-on-activity)
     /// Any pty output at all since this `PtyTerm` was built - never cleared, unlike `activity`.
     /// The adopt redraw nudger's stop condition: an adopted pane starts with an empty grid, and
     /// this is what says the shell has actually painted something into it.
-    pub(crate) saw_output: bool,
+    pub saw_output: bool,
     /// Output chunks applied to the grid so far (never reset). Typed input waits on it for the echo.
-    pub(crate) output_gen: u64,
+    pub output_gen: u64,
     /// The first status stdusk's own shell hook reported (OSC 133 `D` with the own mark) since the
     /// UI last took one. Only the first after the agent decides its record, so later ones are not
     /// kept.
-    pub(crate) first_status: Option<Status>,
-    pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
-    pub(crate) exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
-    pub(crate) title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
-    pub(crate) theme_reports: bool,
+    pub first_status: Option<Status>,
+    pub done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
+    pub exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
+    pub title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
+    pub theme_reports: bool,
 }
 
 /// Grid sizing. History (scrollback) comes from `Config::scrolling_history`, not here.
@@ -249,17 +268,17 @@ impl EventListener for EventProxy {
 /// Everything a terminal spawn needs from the user config (one bag instead of a positional list).
 #[allow(clippy::struct_excessive_bools)] // independent config toggles, not a mode
 #[derive(Clone)]
-pub(crate) struct SpawnOpts {
-    pub(crate) detect_progress: bool,
-    pub(crate) shell_integration: bool,
-    pub(crate) autosuggestions: bool,
-    pub(crate) scrollback_lines: usize,
-    pub(crate) word_separators: String,
-    pub(crate) bold_bright: bool,
-    pub(crate) cwd: Option<String>,
-    pub(crate) profile: Option<crate::config::Profile>, // launch profile overrides (shell/args/cwd/env)
+pub struct SpawnOpts {
+    pub detect_progress: bool,
+    pub shell_integration: bool,
+    pub autosuggestions: bool,
+    pub scrollback_lines: usize,
+    pub word_separators: String,
+    pub bold_bright: bool,
+    pub cwd: Option<String>,
+    pub profile: Option<ShellProfile>, // launch profile overrides (shell/args/cwd/env)
     /// Agent-resume wiring for this pane. `None` = the pane tracks no agent session.
-    pub(crate) agent_tracking: Option<AgentSetup>,
+    pub agent_tracking: Option<AgentSetup>,
 }
 
 /// When an adopted pane re-asks for a repaint, counting from adoption. The first ask is immediate;
@@ -351,20 +370,17 @@ fn set_winsize(fd: std::os::fd::BorrowedFd<'_>, cols: usize, rows: usize) {
 }
 
 /// Shell for a spawn: profile override first, then $SHELL, then /bin/zsh.
-fn resolve_shell(profile: Option<&crate::config::Profile>, env_shell: Option<String>) -> String {
+fn resolve_shell(profile: Option<&ShellProfile>, env_shell: Option<String>) -> String {
     profile.and_then(|p| p.shell.clone()).or(env_shell).unwrap_or_else(|| "/bin/zsh".into())
 }
 
 /// Working-dir candidate (tilde-expanded): the profile's cwd wins over the caller's.
 /// `is_dir` validation stays at the spawn site.
-fn resolve_cwd(
-    profile: Option<&crate::config::Profile>,
-    fallback: Option<String>,
-) -> Option<String> {
-    profile.and_then(|p| p.cwd.clone()).or(fallback).map(|d| crate::config::expand_tilde(&d))
+fn resolve_cwd(profile: Option<&ShellProfile>, fallback: Option<String>) -> Option<String> {
+    profile.and_then(|p| p.cwd.clone()).or(fallback).map(|d| crate::shell::expand_tilde(&d))
 }
 
-pub(crate) struct PtyTerm {
+pub struct PtyTerm {
     term: Arc<FairMutex<Term<EventProxy>>>,
     writer: PtyWriter,
     pty: Pty, // owns the master fd; resize goes through it
@@ -395,33 +411,33 @@ pub(crate) struct PtyTerm {
 /// A live pty handed over by a predecessor stdusk, plus everything a freshly built `Term` cannot
 /// deduce about it. Bundled rather than passed as seven arguments, and because every field is
 /// untrusted wire data the caller has already clamped.
-pub(crate) struct Adopted {
-    pub(crate) fd: std::os::fd::OwnedFd,
-    pub(crate) cols: usize,
-    pub(crate) rows: usize,
+pub struct Adopted {
+    pub fd: std::os::fd::OwnedFd,
+    pub cols: usize,
+    pub rows: usize,
     /// Process GROUP to kill later: we are not the shell's parent, so we cannot look it up.
-    pub(crate) pgid: Option<u32>,
+    pub pgid: Option<u32>,
     /// How long the shell had already been running, so the crash-loop guard doesn't read a
     /// long-lived shell as freshly spawned.
-    pub(crate) alive: std::time::Duration,
+    pub alive: std::time::Duration,
     /// Was a full-screen app (vim / less / claude) holding the ALT screen at handover? Decides how
     /// the pane is asked to repaint - see [`PtyTerm::request_redraw`]. Our own `Term` starts blank
     /// and has parsed nothing, so this can only come from the predecessor.
-    pub(crate) alt_screen: bool,
+    pub alt_screen: bool,
     /// Was a command RUNNING at handover (OSC 133), rather than the shell sitting at its prompt?
     /// `None` = nobody knows - a predecessor too old to send it, or a shell that emits no OSC 133 at
     /// all. See [`allow_ctrl_l`]: the answer decides whether the pane may be sent a `^L`.
-    pub(crate) cmd_running: Option<bool>,
+    pub cmd_running: Option<bool>,
     /// The donor's screen as ANSI (see `screen`), replayed into our fresh grid so the pane shows what
     /// was already there. Empty when the predecessor sent none - a 1.6.2 build, or a blank pane.
-    pub(crate) replay: Vec<u8>,
+    pub replay: Vec<u8>,
     /// The live OSC 0/2 window title, if the app had set one. Like `cwd` this cannot be re-derived:
     /// the app re-emits its title only when something changes, so without it a Claude/vim pane falls
     /// back to its cwd basename for the rest of the session.
-    pub(crate) title_osc: Option<String>,
+    pub title_osc: Option<String>,
     /// Had the app enabled theme reports (mode 2031)? It enables them once at startup, so an adopted
     /// pane that forgot would never be told about a theme change again.
-    pub(crate) theme_reports: bool,
+    pub theme_reports: bool,
 }
 
 /// How this pane's pty master is owned. A spawned pane keeps `portable_pty`'s master (its proven
@@ -481,7 +497,7 @@ struct ReaderCtx {
     state: Arc<Mutex<TabState>>,
     writer: PtyWriter,
     replies: Arc<Mutex<Vec<Reply>>>,
-    ctx: egui::Context,
+    repaint: Repaint,
     detect_progress: bool,
     /// `None` for an adopted pty: a non-child cannot be `wait()`ed, so its exit code is unknown
     /// (-1, the value a failed wait already yields) and EOF is the only signal that it died.
@@ -505,7 +521,7 @@ fn spawn_reader(c: ReaderCtx) {
         state: state_reader,
         writer: writer_reader,
         replies,
-        ctx,
+        repaint,
         detect_progress,
         mut child,
         uptime_base,
@@ -668,7 +684,7 @@ fn spawn_reader(c: ReaderCtx) {
                     }
                     // Defer (don't paint per read): coalesce the burst so a clear+redraw
                     // lands atomically before the UI snapshots. See REPAINT_COALESCE_WINDOW.
-                    ctx.request_repaint_after(REPAINT_COALESCE_WINDOW);
+                    repaint.after(REPAINT_COALESCE_WINDOW);
                 }
             }
         }
@@ -677,7 +693,7 @@ fn spawn_reader(c: ReaderCtx) {
         let code = child.as_mut().map_or(-1, |ch| ch.wait().map_or(-1, |st| st.exit_code() as i32));
         state_reader.lock().unwrap().exited =
             Some(ExitInfo { code, uptime_secs: (uptime_base + spawned.elapsed()).as_secs_f32() });
-        ctx.request_repaint();
+        repaint.now();
     });
 }
 
@@ -692,7 +708,7 @@ fn new_term(dims: &Dims, opts: &SpawnOpts, events: EventProxy) -> Arc<FairMutex<
 }
 
 impl PtyTerm {
-    pub(crate) fn spawn(cols: usize, rows: usize, ctx: egui::Context, opts: &SpawnOpts) -> Self {
+    pub fn spawn(cols: usize, rows: usize, repaint: Repaint, opts: &SpawnOpts) -> Self {
         let SpawnOpts {
             detect_progress,
             shell_integration,
@@ -772,7 +788,7 @@ impl PtyTerm {
             state: state.clone(),
             writer: writer.clone(),
             replies,
-            ctx,
+            repaint,
             detect_progress,
             child: Some(child),
             uptime_base: std::time::Duration::ZERO,
@@ -811,11 +827,7 @@ impl PtyTerm {
     /// reader thread is still alive it competes for output and whatever it wins is LOST to us, so
     /// the handover must be the last thing the predecessor does before exiting - and why the redraw
     /// request is repeated until output actually lands here.
-    pub(crate) fn adopt(
-        ctx: egui::Context,
-        handover: Adopted,
-        opts: &SpawnOpts,
-    ) -> std::io::Result<Self> {
+    pub fn adopt(repaint: Repaint, handover: Adopted, opts: &SpawnOpts) -> std::io::Result<Self> {
         let Adopted {
             fd,
             cols,
@@ -828,7 +840,7 @@ impl PtyTerm {
             title_osc,
             theme_reports,
         } = handover;
-        let redraw_ctx = ctx.clone(); // the reader thread takes `ctx`; the nudger needs one too
+        let redraw_repaint = repaint.clone(); // the reader thread takes `repaint`; the nudger needs one too
         // Separate dups for the reader thread and the writer: both sides of the same pty master,
         // independently owned, exactly like `try_clone_reader` + `take_writer` give us on a spawn.
         let reader = std::fs::File::from(fd.try_clone()?);
@@ -871,7 +883,7 @@ impl PtyTerm {
             state: state.clone(),
             writer: writer.clone(),
             replies,
-            ctx,
+            repaint,
             detect_progress: opts.detect_progress,
             child: None, // not our child: EOF is the only exit signal, code stays unknown
             uptime_base: alive,
@@ -898,7 +910,7 @@ impl PtyTerm {
             agent: opts.agent_tracking.as_ref().map(|_| AgentPane::adopted()),
             notice: None,
         };
-        me.request_redraw(alt_screen, cmd_running, !replay.is_empty(), redraw_ctx);
+        me.request_redraw(alt_screen, cmd_running, !replay.is_empty(), redraw_repaint);
         Ok(me)
     }
 
@@ -923,7 +935,7 @@ impl PtyTerm {
         alt_screen: bool,
         cmd_running: Option<bool>,
         replayed: bool,
-        ctx: egui::Context,
+        repaint: Repaint,
     ) {
         let (state, writer) = (self.state.clone(), self.writer.clone());
         let Some(fd) = self.pty.as_fd().and_then(|fd| fd.try_clone_to_owned().ok()) else {
@@ -948,19 +960,19 @@ impl PtyTerm {
                 if allow_ctrl_l(alt_screen, running, attempt, replayed) {
                     writer.write(b"\x0c");
                 }
-                ctx.request_repaint();
+                repaint.now();
             }
         });
     }
 
     /// The record to save for this pane.
-    pub(crate) fn agent_saved(&self) -> Option<crate::session::SavedAgent> {
+    pub fn agent_saved(&self) -> Option<crate::session::SavedAgent> {
         self.agent.as_ref()?.saved()
     }
 
     /// Advance this pane's record by one scan result, taken at `taken`, and the status the shell
     /// reported since the last one.
-    pub(crate) fn step_agent(&mut self, seen: Seen, taken: std::time::Instant) {
+    pub fn step_agent(&mut self, seen: Seen, taken: std::time::Instant) {
         let status = self.take_status();
         if let Some(agent) = &mut self.agent {
             agent.scan(status, seen, taken);
@@ -970,7 +982,7 @@ impl PtyTerm {
     /// Apply the status that no scan has seen yet. The egui frame in main.rs calls this, also
     /// before a final snapshot, so the saved record knows a crash within a frame of it. `true` if
     /// one came in.
-    pub(crate) fn apply_pending_status(&mut self) -> bool {
+    pub fn apply_pending_status(&mut self) -> bool {
         let Some(agent) = &mut self.agent else { return false };
         let status = self.state.lock().unwrap().first_status.take();
         agent.apply_status(status);
@@ -982,21 +994,21 @@ impl PtyTerm {
     }
 
     /// Hold a session that stdusk reopened until an agent binds to it (see `agent_track`).
-    pub(crate) fn restore_agent(&mut self, session: AgentSession, crash_hint: bool) {
+    pub fn restore_agent(&mut self, session: AgentSession, crash_hint: bool) {
         if let Some(agent) = &mut self.agent {
             agent.restore(session, crash_hint);
         }
     }
 
     /// Hold the session of a live handoff, whose agent keeps running (see `agent_track`).
-    pub(crate) fn adopt_agent(&mut self, session: AgentSession, crash_hint: bool) {
+    pub fn adopt_agent(&mut self, session: AgentSession, crash_hint: bool) {
         if let Some(agent) = &mut self.agent {
             agent.adopt(session, crash_hint);
         }
     }
 
     /// The fallback for a shell that marks no prompt (see [`AgentPane::fallback_input`]).
-    pub(crate) fn release_pending_after_wait(&mut self) {
+    pub fn release_pending_after_wait(&mut self) {
         let at_prompt = || {
             self.pty.as_fd().and_then(|fd| foreground_command(fd, self.shell_pid)) == Some(false)
         };
@@ -1017,20 +1029,20 @@ impl PtyTerm {
 
     /// How long this shell has been running, counting time under previous owners - what a further
     /// handoff must carry so the crash-loop guard never reads a long-lived shell as freshly spawned.
-    pub(crate) fn alive(&self) -> std::time::Duration {
+    pub fn alive(&self) -> std::time::Duration {
         self.uptime_base + self.started.elapsed()
     }
 
     /// The master fd to hand to a successor, and the process group it must inherit responsibility
     /// for. `None` when the fd cannot be borrowed (non-unix), which aborts the handoff for this pane.
-    pub(crate) fn handoff_fd(&self) -> Option<(std::os::fd::BorrowedFd<'_>, Option<u32>)> {
+    pub fn handoff_fd(&self) -> Option<(std::os::fd::BorrowedFd<'_>, Option<u32>)> {
         self.pty.as_fd().map(|fd| (fd, self.shell_pid))
     }
 
     /// Mark this pane as handed over: the successor owns the shell now, so `kill()` and `Drop` must
     /// NOT reap it. Without this the handoff is a silent no-op - the shells would be killed on our way
     /// out, milliseconds after the successor adopted them. Only ever called after a delivered ACK.
-    pub(crate) fn mark_handed_off(&mut self) {
+    pub fn mark_handed_off(&mut self) {
         self.owns_session = false;
     }
 
@@ -1039,19 +1051,19 @@ impl PtyTerm {
     /// that is the moment the predecessor stops guarding these shells. Before it, a drop (a panic
     /// during startup, a failed ack, the user quitting the new window) must leave them alone: they
     /// are still the predecessor's, and it is still up.
-    pub(crate) fn arm_teardown(&mut self) {
+    pub fn arm_teardown(&mut self) {
         self.owns_session = true;
     }
 
     /// PID of the tab's shell process - the root for CLI-awareness descendant scans.
-    pub(crate) fn shell_pid(&self) -> Option<u32> {
+    pub fn shell_pid(&self) -> Option<u32> {
         self.shell_pid
     }
 
     /// The tty's foreground process group. A job the shell starts leads its own group, so this is
     /// the pid of the foreground job's first process. It picks the agent that the user works in
     /// when two agents of one kind run in the pane (see `procwatch::nearest_agent`).
-    pub(crate) fn foreground_pgid(&self) -> Option<u32> {
+    pub fn foreground_pgid(&self) -> Option<u32> {
         foreground_pgid(self.pty.as_fd()?)
     }
 
@@ -1059,7 +1071,7 @@ impl PtyTerm {
     /// leaks as an orphan. See [`kill_pty_session`] for why the session, not just the process group.
     /// Idempotent (the `killed` guard) and safe on an already-dead session. No-op off unix, when the
     /// pid is unknown, or when this pane's session is not ours to reap.
-    pub(crate) fn kill(&mut self) {
+    pub fn kill(&mut self) {
         // Not ours to reap: either handed to a successor, or adopted and not yet confirmed as ours.
         // Reaping in the first case makes the handoff a silent no-op; in the second it kills shells
         // the predecessor is still guarding.
@@ -1073,11 +1085,11 @@ impl PtyTerm {
         }
     }
 
-    pub(crate) fn theme_reports(&self) -> bool {
+    pub fn theme_reports(&self) -> bool {
         self.state.lock().unwrap().theme_reports
     }
 
-    pub(crate) fn report_theme(&mut self, dark: bool) {
+    pub fn report_theme(&mut self, dark: bool) {
         if self.theme_reports() {
             // stdusk's own report, not the user's typing: it must keep the restore notice and the
             // queued resume command.
@@ -1086,14 +1098,14 @@ impl PtyTerm {
     }
 
     /// Pairs with [`Self::wait_for_output_after`]: read it before sending input.
-    pub(crate) fn output_gen(&self) -> u64 {
+    pub fn output_gen(&self) -> u64 {
         self.state.lock().unwrap().output_gen
     }
 
     /// Block (at most `max`) until the reader has applied output newer than `since`, so the frame
     /// that sent a keystroke paints its echo. The grid is advanced before `output_gen` moves, so on
     /// `true` the echo is already in the next `grid_snapshot`. `false` = no output within `max`.
-    pub(crate) fn wait_for_output_after(&self, since: u64, max: std::time::Duration) -> bool {
+    pub fn wait_for_output_after(&self, since: u64, max: std::time::Duration) -> bool {
         let start = std::time::Instant::now();
         loop {
             if self.output_gen() != since {
@@ -1108,7 +1120,7 @@ impl PtyTerm {
 
     /// Input from the user. It ends the restore notice, and it drops a queued resume command, which
     /// would garble a line the user is typing.
-    pub(crate) fn send(&mut self, bytes: &[u8]) {
+    pub fn send(&mut self, bytes: &[u8]) {
         if let Some(agent) = &self.agent {
             agent.discard_pending();
         }
@@ -1122,21 +1134,21 @@ impl PtyTerm {
         self.writer.write(bytes);
     }
 
-    pub(crate) fn notice(&self) -> Option<PaneNotice> {
+    pub fn notice(&self) -> Option<PaneNotice> {
         self.notice
     }
 
-    pub(crate) fn set_notice(&mut self, notice: PaneNotice) {
+    pub fn set_notice(&mut self, notice: PaneNotice) {
         self.notice = Some(notice);
     }
 
     /// The user clicked in the pane.
-    pub(crate) fn dismiss_notice(&mut self) {
+    pub fn dismiss_notice(&mut self) {
         self.notice = None;
     }
 
     /// Paste text, wrapped in bracketed-paste markers when the app enabled that mode.
-    pub(crate) fn paste(&mut self, text: &str) {
+    pub fn paste(&mut self, text: &str) {
         let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
         if bracketed {
             self.send(&[b"\x1b[200~", text.as_bytes(), b"\x1b[201~"].concat());
@@ -1146,7 +1158,7 @@ impl PtyTerm {
     }
 
     /// Resize the pty + terminal grid to a new cell geometry (no-op if unchanged).
-    pub(crate) fn resize(&mut self, cols: usize, rows: usize) {
+    pub fn resize(&mut self, cols: usize, rows: usize) {
         if (cols == self.cols && rows == self.rows) || cols == 0 || rows == 0 {
             return;
         }
@@ -1173,23 +1185,23 @@ impl PtyTerm {
         }
     }
 
-    pub(crate) fn scroll(&self, delta_lines: i32) {
+    pub fn scroll(&self, delta_lines: i32) {
         self.term.lock().scroll_display(Scroll::Delta(delta_lines));
     }
 
-    pub(crate) fn scroll_to_bottom(&self) {
+    pub fn scroll_to_bottom(&self) {
         self.term.lock().scroll_display(Scroll::Bottom);
     }
 
     /// (display_offset, history_size) - for drawing the scrollbar.
-    pub(crate) fn scroll_state(&self) -> (usize, usize) {
+    pub fn scroll_state(&self) -> (usize, usize) {
         let t = self.term.lock();
         let g = t.grid();
         (g.display_offset(), g.history_size())
     }
 
     /// Drop the scrollback history, keeping the visible screen (palette "Clear Scrollback").
-    pub(crate) fn clear_scrollback(&self) {
+    pub fn clear_scrollback(&self) {
         self.term.lock().grid_mut().clear_history();
     }
 
@@ -1199,7 +1211,7 @@ impl PtyTerm {
     /// which would undo the wipe. Refused (`false`) on the alt screen: `grid_mut()` is the
     /// ALT grid there - wiping vim's display and mailing it a `^L` (a literal insert in
     /// insert mode) helps nobody. The caller sends Ctrl-L only when this returns `true`.
-    pub(crate) fn clear_all(&self) -> bool {
+    pub fn clear_all(&self) -> bool {
         let mut t = self.term.lock();
         if t.mode().contains(TermMode::ALT_SCREEN) {
             return false;
@@ -1211,7 +1223,7 @@ impl PtyTerm {
     }
 
     /// Jump the viewport to an absolute history offset (0 = bottom/live).
-    pub(crate) fn scroll_to_offset(&self, target: usize) {
+    pub fn scroll_to_offset(&self, target: usize) {
         let cur = self.term.lock().grid().display_offset();
         let delta = target as i32 - cur as i32;
         if delta != 0 {
@@ -1219,60 +1231,60 @@ impl PtyTerm {
         }
     }
 
-    pub(crate) fn progress(&self) -> Progress {
+    pub fn progress(&self) -> Progress {
         self.state.lock().unwrap().progress
     }
 
-    pub(crate) fn cmd_state(&self) -> CmdState {
+    pub fn cmd_state(&self) -> CmdState {
         self.state.lock().unwrap().cmd
     }
 
     /// Take the pending bell (BEL rung since last call), for a one-shot visual flash.
-    pub(crate) fn take_bell(&self) -> bool {
+    pub fn take_bell(&self) -> bool {
         std::mem::take(&mut self.state.lock().unwrap().bell)
     }
 
     /// Take a pending "long command finished" notification (exit code), if any.
-    pub(crate) fn take_done_notify(&self) -> Option<i32> {
+    pub fn take_done_notify(&self) -> Option<i32> {
         self.state.lock().unwrap().done_notify.take()
     }
 
     /// Take the pending output-activity flag (any output since last call) - notify-on-activity.
-    pub(crate) fn take_activity(&self) -> bool {
+    pub fn take_activity(&self) -> bool {
         std::mem::take(&mut self.state.lock().unwrap().activity)
     }
 
-    pub(crate) fn cwd(&self) -> Option<String> {
+    pub fn cwd(&self) -> Option<String> {
         self.state.lock().unwrap().cwd.clone()
     }
 
     /// Exit report for a dead shell (pty EOF observed + reaped), if any. Stays set until the
     /// pane is respawned or closed - the egui frame in main.rs reads it to apply `on_exit`.
-    pub(crate) fn exited(&self) -> Option<ExitInfo> {
+    pub fn exited(&self) -> Option<ExitInfo> {
         self.state.lock().unwrap().exited
     }
 
     /// The shell's OSC 0/2 window title, if it set one (an empty title resets to None).
-    pub(crate) fn title_osc(&self) -> Option<String> {
+    pub fn title_osc(&self) -> Option<String> {
         self.state.lock().unwrap().title_osc.clone()
     }
 
     /// Consecutive rapid deaths so far (crash-loop guard); carried across in-place respawns.
-    pub(crate) fn rapid_exits(&self) -> u32 {
+    pub fn rapid_exits(&self) -> u32 {
         self.rapid_exits
     }
 
-    pub(crate) fn set_rapid_exits(&mut self, n: u32) {
+    pub fn set_rapid_exits(&mut self, n: u32) {
         self.rapid_exits = n;
     }
 
     /// Take a pending OSC 52 clipboard payload (set by the shell), if any.
-    pub(crate) fn take_clipboard(&self) -> Option<String> {
+    pub fn take_clipboard(&self) -> Option<String> {
         self.state.lock().unwrap().clipboard.take()
     }
 
     /// Snapshot the visible viewport (honoring scrollback offset) with colors + cursor.
-    pub(crate) fn grid_snapshot(&self) -> GridSnap {
+    pub fn grid_snapshot(&self) -> GridSnap {
         let theme = colors::theme();
         let term = self.term.lock();
         let selection = term.selection.as_ref().and_then(|s| s.to_range(&term));
@@ -1332,7 +1344,7 @@ impl PtyTerm {
     /// Reads the ACTIVE grid, so a pane on the alt screen dumps what the app has drawn there (and
     /// carries no history - the alt grid has none). Includes a bounded tail of scrollback so a loop
     /// that printed more than one screen still comes back with its context.
-    pub(crate) fn screen_dump(&self) -> Vec<u8> {
+    pub fn screen_dump(&self) -> Vec<u8> {
         let term = self.term.lock();
         let grid = term.grid();
         // Grid dimensions are authoritative (an app may have resized it via CSI 8).
@@ -1368,19 +1380,19 @@ impl PtyTerm {
 
     /// Whether the terminal is on the alternate screen (vim/less/...), e.g. to suppress the
     /// multiline-paste warning like Tabby does.
-    pub(crate) fn is_alt_screen(&self) -> bool {
+    pub fn is_alt_screen(&self) -> bool {
         self.term.lock().mode().contains(TermMode::ALT_SCREEN)
     }
 
     /// Whether the app enabled DECCKM (application cursor keys) - arrows/Home/End should then be
     /// sent as SS3 (`ESC O x`) rather than CSI (`ESC [ x`). Grab-copy-drop the lock.
-    pub(crate) fn app_cursor(&self) -> bool {
+    pub fn app_cursor(&self) -> bool {
         self.term.lock().mode().contains(TermMode::APP_CURSOR)
     }
 
     /// The mouse-reporting modes the app has enabled, snapshotted from the `Term`, so the UI can
     /// route wheel/pointer events to the pty instead of scrolling/selecting locally.
-    pub(crate) fn mouse_reporting(&self) -> MouseReporting {
+    pub fn mouse_reporting(&self) -> MouseReporting {
         let term = self.term.lock();
         let mode = term.mode();
         MouseReporting {
@@ -1393,14 +1405,14 @@ impl PtyTerm {
     }
 
     /// Begin a text selection anchored at a grid point (mapped from mouse coords).
-    pub(crate) fn start_selection(&self, line: i32, col: usize, right: bool) {
+    pub fn start_selection(&self, line: i32, col: usize, right: bool) {
         let point = Point::new(Line(line), Column(col));
         let side = if right { Side::Right } else { Side::Left };
         self.term.lock().selection = Some(Selection::new(SelectionType::Simple, point, side));
     }
 
     /// Extend the in-progress selection to a new grid point (drag).
-    pub(crate) fn update_selection(&self, line: i32, col: usize, right: bool) {
+    pub fn update_selection(&self, line: i32, col: usize, right: bool) {
         let point = Point::new(Line(line), Column(col));
         let side = if right { Side::Right } else { Side::Left };
         if let Some(sel) = self.term.lock().selection.as_mut() {
@@ -1409,24 +1421,24 @@ impl PtyTerm {
     }
 
     /// Select the word under a point (double-click), using alacritty's semantic rules.
-    pub(crate) fn select_word(&self, line: i32, col: usize) {
+    pub fn select_word(&self, line: i32, col: usize) {
         let point = Point::new(Line(line), Column(col));
         self.term.lock().selection =
             Some(Selection::new(SelectionType::Semantic, point, Side::Left));
     }
 
     /// Select the whole line under a point (triple-click).
-    pub(crate) fn select_line(&self, line: i32, col: usize) {
+    pub fn select_line(&self, line: i32, col: usize) {
         let point = Point::new(Line(line), Column(col));
         self.term.lock().selection = Some(Selection::new(SelectionType::Lines, point, Side::Left));
     }
 
-    pub(crate) fn clear_selection(&self) {
+    pub fn clear_selection(&self) {
         self.term.lock().selection = None;
     }
 
     /// Select the entire buffer (scrollback + screen), for Cmd+A then copy.
-    pub(crate) fn select_all(&self) {
+    pub fn select_all(&self) {
         let mut t = self.term.lock();
         let (top, bot, cols) = {
             let g = t.grid();
@@ -1440,23 +1452,23 @@ impl PtyTerm {
     }
 
     /// Visible row count (for page scrolling).
-    pub(crate) fn rows(&self) -> usize {
+    pub fn rows(&self) -> usize {
         self.rows
     }
 
     /// Visible column count (handed to a successor so an adopted pty keeps its geometry).
-    pub(crate) fn cols(&self) -> usize {
+    pub fn cols(&self) -> usize {
         self.cols
     }
 
     /// Selected text (for Cmd+C), or None when there's no non-empty selection.
-    pub(crate) fn selection_text(&self) -> Option<String> {
+    pub fn selection_text(&self) -> Option<String> {
         self.term.lock().selection_to_string().filter(|s| !s.is_empty())
     }
 
     /// Whole buffer (scrollback + screen) as `(alacritty Line, trailing-trimmed text)` pairs,
     /// top-to-bottom - the input to scrollback search.
-    pub(crate) fn buffer_lines(&self) -> Vec<(i32, String)> {
+    pub fn buffer_lines(&self) -> Vec<(i32, String)> {
         let term = self.term.lock();
         let grid = term.grid();
         // Grid dimensions are authoritative (an app may have resized it via CSI 8).
@@ -1475,7 +1487,7 @@ impl PtyTerm {
     }
 
     /// Highlight a search match by reusing the selection range (so `grid_snapshot` paints it).
-    pub(crate) fn highlight_match(&self, m: crate::search::Match) {
+    pub fn highlight_match(&self, m: crate::search::Match) {
         let start = Point::new(Line(m.line), Column(m.col));
         let end = Point::new(Line(m.line), Column(m.col + m.len.saturating_sub(1)));
         let mut sel = Selection::new(SelectionType::Simple, start, Side::Left);
@@ -1484,7 +1496,7 @@ impl PtyTerm {
     }
 
     /// Scroll the viewport so buffer `line` sits at the top (clamped to available history).
-    pub(crate) fn scroll_to_line(&self, line: i32) {
+    pub fn scroll_to_line(&self, line: i32) {
         let (_, history) = self.scroll_state();
         let target = (-line).clamp(0, history as i32) as usize;
         self.scroll_to_offset(target);
@@ -1574,7 +1586,7 @@ fn kill_pty_session(leader: i32) {
 /// fd left to reach that shell); leaving the tree running with no terminal and no owner is exactly the
 /// dangling-process bug this teardown path exists to prevent.
 /// `leader` is the pane's pgid off the wire, which is also its pty session id.
-pub(crate) fn reap_orphaned_session(leader: u32) {
+pub fn reap_orphaned_session(leader: u32) {
     #[cfg(unix)]
     kill_pty_session(leader as i32);
     #[cfg(not(unix))]
@@ -1584,13 +1596,13 @@ pub(crate) fn reap_orphaned_session(leader: u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CmdState, ECHO_WAIT, ExitAction, Flags, OnExit, PtyTerm, REPAINT_COALESCE_WINDOW,
+        CmdState, ECHO_WAIT, ExitAction, Flags, OnExit, PtyTerm, REPAINT_COALESCE_WINDOW, Repaint,
         SpawnOpts, cmd_from_exit, exit_action, on_exit_mode, resolve_cwd, resolve_shell,
         snap_glyph,
     };
     use crate::agent_track::Status;
-    use crate::config::Profile;
     use crate::mouse::wheel_sgr;
+    use crate::shell::ShellProfile;
 
     #[test]
     fn fresh_grid_honors_dimensions_history_and_word_separators() {
@@ -1637,14 +1649,12 @@ mod tests {
         assert_eq!(cmd_from_exit(Some(143)), CmdState::Idle); // SIGTERM
     }
 
-    fn profile(shell: Option<&str>, cwd: Option<&str>) -> Profile {
-        Profile {
-            name: "test".into(),
+    fn profile(shell: Option<&str>, cwd: Option<&str>) -> ShellProfile {
+        ShellProfile {
             shell: shell.map(Into::into),
             args: Vec::new(),
             cwd: cwd.map(Into::into),
             env: std::collections::BTreeMap::new(),
-            color: None,
         }
     }
 
@@ -1814,7 +1824,7 @@ mod tests {
     fn interactive_zsh() -> PtyTerm {
         let mut opts = crate::test_support::spawn_opts("/bin/zsh", &["-f"]);
         opts.scrollback_lines = 200;
-        PtyTerm::spawn(80, 24, egui::Context::default(), &opts)
+        PtyTerm::spawn(80, 24, Repaint::none(), &opts)
     }
 
     /// A shell line for a job that CANNOT be talked out of running: `trap ""` sets TERM/HUP to
@@ -2185,7 +2195,7 @@ mod tests {
         let mut opts = crate::test_support::spawn_opts("/bin/sh", &[]);
         opts.profile = None;
         PtyTerm::adopt(
-            egui::Context::default(),
+            Repaint::none(),
             super::Adopted {
                 fd: owned,
                 cols: donor.cols(),
@@ -2195,7 +2205,7 @@ mod tests {
                 alt_screen,
                 cmd_running,
                 replay: if replay { donor.screen_dump() } else { Vec::new() },
-                title_osc: crate::handoff::clamp_title(donor.title_osc()),
+                title_osc: crate::terminal::clamp_title(donor.title_osc()),
                 theme_reports: false,
             },
             &opts,
@@ -2302,7 +2312,7 @@ mod tests {
     /// positions or scrollback).
     fn e2e_term_sized(cols: usize, rows: usize, script: &str) -> PtyTerm {
         let opts = crate::test_support::spawn_opts("/bin/sh", &["-c", script]);
-        PtyTerm::spawn(cols, rows, egui::Context::default(), &opts)
+        PtyTerm::spawn(cols, rows, Repaint::none(), &opts)
     }
 
     /// Row-by-row text of a snapshot, trailing blanks trimmed.
@@ -2497,7 +2507,7 @@ mod tests {
         let heir = adopt_from(&mut donor, false, Some(true), true);
         let after = heir.grid_snapshot();
         let cells =
-            |snap: &super::GridSnap| -> Vec<(char, egui::Color32, Option<egui::Color32>, bool)> {
+            |snap: &super::GridSnap| -> Vec<(char, ecolor::Color32, Option<ecolor::Color32>, bool)> {
                 snap.cells[..12].iter().map(|c| (c.c, c.fg, c.bg, c.bold)).collect()
             };
         assert_eq!(cells(&after), cells(&before), "glyphs, colors and bold must all round-trip");
@@ -2544,7 +2554,7 @@ mod tests {
         let mut opts = crate::test_support::spawn_opts("/bin/sh", &[]);
         opts.profile = None;
         let heir = PtyTerm::adopt(
-            egui::Context::default(),
+            Repaint::none(),
             super::Adopted {
                 fd: owned,
                 cols: 20,
@@ -2969,7 +2979,7 @@ mod tests {
 
     fn pending_term(script: &str, input: &[u8], fallback: std::time::Duration) -> PtyTerm {
         let opts = pending_opts(script, Some(input), fallback);
-        PtyTerm::spawn(60, 5, egui::Context::default(), &opts)
+        PtyTerm::spawn(60, 5, Repaint::none(), &opts)
     }
 
     fn count_in(text: &str, needle: &str) -> usize {
@@ -3051,7 +3061,7 @@ mod tests {
             None,
             std::time::Duration::from_millis(100),
         );
-        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        let mut term = PtyTerm::spawn(60, 5, Repaint::none(), &opts);
         poll_term(&term, |t| grid_text(t).contains("QUIET").then_some(())).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(400));
         term.release_pending_after_wait();
@@ -3076,7 +3086,7 @@ mod tests {
             pending_input: Some(b"printf resumed > \"$HOME/resumed\"\r".to_vec()),
             fallback_delay: std::time::Duration::from_secs(60),
         });
-        let term = PtyTerm::spawn(120, 5, egui::Context::default(), &opts);
+        let term = PtyTerm::spawn(120, 5, Repaint::none(), &opts);
         poll_term(&term, |_| fixture.home.join("received").exists().then_some(()))
             .expect("startup child did not finish");
         assert_eq!(
@@ -3101,7 +3111,7 @@ mod tests {
             pending_input: Some(b"claude --resume 0c2cbc96-1111-4222-8333-444455556666".to_vec()),
             fallback_delay: std::time::Duration::from_secs(60),
         });
-        let term = PtyTerm::spawn(120, 5, egui::Context::default(), &opts);
+        let term = PtyTerm::spawn(120, 5, Repaint::none(), &opts);
         let shown = poll_term(&term, |t| {
             grid_text(t).contains("--resume 0c2cbc96-1111-4222-8333-444455556666").then_some(())
         });
@@ -3116,7 +3126,7 @@ mod tests {
         let fixture = crate::test_support::ShellFixture::new(tag);
         let mut opts = fixture.zsh_opts();
         opts.agent_tracking = Some(crate::agent_pane::AgentSetup::default());
-        let mut term = PtyTerm::spawn(100, 5, egui::Context::default(), &opts);
+        let mut term = PtyTerm::spawn(100, 5, Repaint::none(), &opts);
         // The first prompt is up once zsh has printed anything after its rc files ran.
         poll_term(&term, |t| (!grid_text(t).trim().is_empty()).then_some(())).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3214,7 +3224,7 @@ mod tests {
         let fixture = crate::test_support::ShellFixture::new("bashexit");
         std::fs::write(fixture.home.join(".bash_profile"), user_rc).unwrap();
         let opts = fixture.bash_opts();
-        let mut term = PtyTerm::spawn(100, 5, egui::Context::default(), &opts);
+        let mut term = PtyTerm::spawn(100, 5, Repaint::none(), &opts);
         poll_term(&term, |t| grid_text(t).contains('$').then_some(())).expect("no bash prompt");
         let settle = std::time::Duration::from_millis(400);
         std::thread::sleep(settle);
@@ -3245,7 +3255,7 @@ mod tests {
         // session as crashed, not as a normal record that would auto-run.
         use crate::agents::{AgentKind, AgentSession, Seen, SessionId};
         let opts = pending_opts("cat", None, std::time::Duration::from_secs(60));
-        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        let mut term = PtyTerm::spawn(60, 5, Repaint::none(), &opts);
         let session = AgentSession {
             kind: AgentKind::Claude,
             id: SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap(),
@@ -3276,7 +3286,7 @@ mod tests {
         let term = PtyTerm::spawn(
             60,
             5,
-            egui::Context::default(),
+            Repaint::none(),
             &pending_opts(script, None, std::time::Duration::from_secs(60)),
         );
         poll_term(&term, |t| grid_text(t).contains("READY").then_some(())).unwrap();
@@ -3299,7 +3309,7 @@ mod tests {
         std::fs::write(fixture.home.join(".zshrc"), FOREIGN_ZSH_D).unwrap();
         let mut opts = fixture.zsh_opts();
         opts.agent_tracking = Some(crate::agent_pane::AgentSetup::default());
-        let mut term = PtyTerm::spawn(100, 5, egui::Context::default(), &opts);
+        let mut term = PtyTerm::spawn(100, 5, Repaint::none(), &opts);
         let id = SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap();
         let session =
             AgentSession { kind: AgentKind::Codex, id, cwd: "/w".into(), transcript: None };
@@ -3339,7 +3349,7 @@ mod tests {
         let new_term = || {
             let script = "printf ARMED; while :; do read line; done";
             let opts = pending_opts(script, Some(b"cmd"), std::time::Duration::ZERO);
-            let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+            let mut term = PtyTerm::spawn(60, 5, Repaint::none(), &opts);
             term.set_notice(notice);
             poll_term(&term, |t| grid_text(t).contains("ARMED").then_some(())).unwrap();
             term
@@ -3360,53 +3370,6 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_notice_draws_each_frame_until_a_key_reaches_the_pane() {
-        // The frames run as the workspace runs them: read the keys, send them to the pane, and
-        // draw the pane's notice over the grid.
-        use crate::agent_restore::PaneNotice;
-        use crate::agents::AgentKind;
-        let opts = pending_opts("cat", None, std::time::Duration::from_secs(60));
-        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
-        term.set_notice(PaneNotice::CrashHint { kind: AgentKind::Codex });
-        let ctx = egui::Context::default();
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 400.0));
-        let frame = |term: &mut PtyTerm, events: Vec<egui::Event>| {
-            let raw = egui::RawInput {
-                screen_rect: Some(screen),
-                events,
-                focused: true,
-                ..Default::default()
-            };
-            let (mut drawn, mut keys) = (false, Vec::new());
-            let _ = ctx.run_ui(raw, |ui| {
-                keys = crate::ui::collect_input(ui, false, false, false);
-                if let Some(notice) = term.notice() {
-                    let text = crate::ui::pane_notice_text(notice);
-                    let pill = crate::ui::draw_pane_notice(ui, screen, &text);
-                    drawn = pill.width() > 0.0 && screen.contains_rect(pill);
-                }
-            });
-            if !keys.is_empty() {
-                term.send(&keys);
-            }
-            (drawn, keys)
-        };
-        assert_eq!(frame(&mut term, vec![]), (true, vec![]), "drawn on the first frame");
-        assert_eq!(frame(&mut term, vec![]), (true, vec![]), "and on every frame after");
-        let enter = egui::Event::Key {
-            key: egui::Key::Enter,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::default(),
-        };
-        let (drawn, keys) = frame(&mut term, vec![enter]);
-        assert_eq!(keys, b"\r", "the key still reaches the pty");
-        assert!(drawn, "the frame that sent the key drew before the pane changed");
-        assert!(!frame(&mut term, vec![]).0, "gone from the next frame on");
-    }
-
-    #[test]
     fn a_theme_report_is_stdusks_own_typing_and_keeps_the_notice_and_the_queued_command() {
         // An app that enabled DEC mode 2031 gets a report when the theme flips. That is no input
         // from the user, so it must not end the restore notice or drop the queued resume command.
@@ -3414,7 +3377,7 @@ mod tests {
         use crate::agents::AgentKind;
         let notice = PaneNotice::CrashHint { kind: AgentKind::Claude };
         let opts = pending_opts("cat", Some(b"queued"), std::time::Duration::from_secs(60));
-        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        let mut term = PtyTerm::spawn(60, 5, Repaint::none(), &opts);
         term.set_notice(notice);
         term.state.lock().unwrap().theme_reports = true;
         term.report_theme(true);
@@ -3425,7 +3388,7 @@ mod tests {
             "the queued command is still there"
         );
         // A key from the user still does both.
-        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        let mut term = PtyTerm::spawn(60, 5, Repaint::none(), &opts);
         term.set_notice(notice);
         term.send(b"x");
         assert_eq!(term.notice(), None);
@@ -3445,7 +3408,7 @@ mod tests {
             Some(b"never-typed"),
             std::time::Duration::ZERO,
         );
-        let mut term = PtyTerm::spawn(60, 5, egui::Context::default(), &opts);
+        let mut term = PtyTerm::spawn(60, 5, Repaint::none(), &opts);
         let id = SessionId::parse("0c2cbc96-1111-4222-8333-444455556666").unwrap();
         let session =
             AgentSession { kind: AgentKind::Codex, id, cwd: "/w".into(), transcript: None };
@@ -3496,7 +3459,7 @@ mod tests {
                 .env
                 .insert("PATH".into(), format!("{}:/usr/bin:/bin", bin.display()));
             opts.agent_tracking = Some(crate::agent_pane::AgentSetup::default());
-            let mut term = PtyTerm::spawn(80, 24, egui::Context::default(), &opts);
+            let mut term = PtyTerm::spawn(80, 24, Repaint::none(), &opts);
             let root = term.shell_pid().expect("the shell has a pid");
             let mut sys = sysinfo::System::new();
             let found = (0..200).find_map(|_| {

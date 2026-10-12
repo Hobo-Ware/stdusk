@@ -15,8 +15,29 @@ use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
 
+/// Per-spawn shell overrides: which shell, its extra arguments, a starting directory and extra
+/// environment. The app maps its own launch profiles onto this.
+#[derive(Debug, Clone, Default)]
+pub struct ShellProfile {
+    pub shell: Option<String>,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub env: std::collections::BTreeMap<String, String>,
+}
+
+/// Expand a leading `~` / `~/...` to `$HOME`. `~user` and paths without a leading `~` pass
+/// through unchanged.
+pub fn expand_tilde(path: &str) -> String {
+    match path.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            std::env::var("HOME").map_or_else(|_| path.to_string(), |home| format!("{home}{rest}"))
+        }
+        _ => path.to_string(),
+    }
+}
+
 /// POSIX single-quote a string: wrap in `'...'`, and render any embedded `'` as `'\''`.
-pub(crate) fn single_quote(s: &str) -> String {
+pub fn single_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for ch in s.chars() {
@@ -213,7 +234,7 @@ fn write_if_changed(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 /// Write the generated rc files.
-pub(crate) fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
+pub fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     write_if_changed(&dir.join(".zshenv"), ZSHENV)?;
     write_if_changed(&dir.join(".zprofile"), ZPROFILE)?;
@@ -237,7 +258,7 @@ pub(crate) fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> 
 /// fish-style history-suggestion plugin from our generated `.zshrc`.
 ///
 /// Returns whether the shell got the integration, so it will mark its prompts (OSC 133 `A`).
-pub(crate) fn configure(
+pub fn configure(
     cmd: &mut CommandBuilder,
     shell: &str,
     integration: bool,
@@ -345,7 +366,7 @@ mod tests {
         opts.scrollback_lines = 100;
         opts.cwd = Some(start.to_string_lossy().into_owned());
         opts.profile.as_mut().unwrap().env = env;
-        let term = PtyTerm::spawn(80, 24, eframe::egui::Context::default(), &opts);
+        let term = PtyTerm::spawn(80, 24, crate::repaint::Repaint::none(), &opts);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut cwd = None;
         while cwd.is_none() && std::time::Instant::now() < deadline {

@@ -10,7 +10,7 @@
 use crate::progress::Progress;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum OscEvent {
+pub enum OscEvent {
     Title(String), // OSC 0/2 window title; empty = reset
     Cwd(String),
     Clipboard(String),
@@ -21,11 +21,11 @@ pub(crate) enum OscEvent {
 /// The extra `D` parameter that only stdusk's own shell hooks print (`133;D;<code>;stdusk`).
 /// Other shell integrations (iTerm2's prints `133;D;$?` at every prompt) share the mark, so the
 /// agent record trusts only the ones that carry this word.
-pub(crate) const OWN_MARK: &str = "stdusk";
+pub const OWN_MARK: &str = "stdusk";
 
 /// OSC 133 shell-integration marks (FinalTerm / iTerm2 protocol). Feeds the tab exit-state dot.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ShellEvent {
+pub enum ShellEvent {
     PromptStart,  // 133;A
     CommandStart, // 133;C (command begins executing)
     /// 133;D[;exit_code[;stdusk]]. `own` is true when stdusk's own hook printed it.
@@ -35,16 +35,16 @@ pub(crate) enum ShellEvent {
     },
 }
 
-pub(crate) struct OscScanner {
+pub struct OscScanner {
     buf: Vec<u8>, // partial OSC carried across reads
 }
 
 impl OscScanner {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self { buf: Vec::new() }
     }
 
-    pub(crate) fn feed(&mut self, data: &[u8]) -> Vec<OscEvent> {
+    pub fn feed(&mut self, data: &[u8]) -> Vec<OscEvent> {
         let mut bytes = std::mem::take(&mut self.buf);
         bytes.extend_from_slice(data);
 
@@ -222,7 +222,7 @@ fn osc7_path(url: &[u8], local_host: &str) -> Option<String> {
 /// The encoding the shell hooks apply (see `shell.rs`): keep `[/._~A-Za-z0-9-]`, `%XX` every
 /// other byte. The tests here and in `shell.rs` share it as the oracle for the hook scripts.
 #[cfg(test)]
-pub(crate) fn hook_encode(path: &str) -> String {
+pub fn hook_encode(path: &str) -> String {
     path.bytes()
         .map(|b| match b {
             b'/' | b'.' | b'_' | b'~' | b'-' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' => {

@@ -4088,6 +4088,8 @@ dependencies = [
  "rustix 1.1.4",
  "serde",
  "serde_json",
+ "stdusk-core",
+ "stdusk-egui",
  "sysinfo",
  "toml 1.1.3+spec-1.1.0",
  "tray-icon",
@@ -4098,10 +4100,31 @@ dependencies = [
 [[package]]
 name = "stdusk-core"
 version = "1.9.1"
+dependencies = [
+ "alacritty_terminal",
+ "base64 0.22.1",
+ "ecolor",
+ "emath",
+ "libc",
+ "portable-pty",
+ "proptest",
+ "regex",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "toml 1.1.3+spec-1.1.0",
+]
 
 [[package]]
 name = "stdusk-egui"
 version = "1.9.1"
+dependencies = [
+ "egui",
+ "font-kit",
+ "resvg",
+ "stdusk-core",
+]
 
 [[package]]
 name = "strict-num"

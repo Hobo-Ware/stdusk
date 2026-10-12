@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum LinkKind {
+pub enum LinkKind {
     Url,
     Ip, // bare IPv4 literal (no scheme) - opened as http://<ip>
     Path,
@@ -14,10 +14,10 @@ pub(crate) enum LinkKind {
 
 /// A link span within one row, in character columns (one grid cell = one char).
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Link {
-    pub(crate) start: usize,
-    pub(crate) len: usize,
-    pub(crate) kind: LinkKind,
+pub struct Link {
+    pub start: usize,
+    pub len: usize,
+    pub kind: LinkKind,
 }
 
 fn url_re() -> &'static Regex {
@@ -42,7 +42,7 @@ const TRAILING: [char; 10] = [')', '.', ',', ';', ':', '!', '?', ']', '}', '\'']
 
 /// Find non-overlapping links in a single row of text, left to right. URLs win over paths where
 /// they overlap (a `file://` URL also matches the path regex).
-pub(crate) fn find_in_row(text: &str) -> Vec<Link> {
+pub fn find_in_row(text: &str) -> Vec<Link> {
     let n = text.chars().count();
     let mut taken = vec![false; n];
     let mut out: Vec<Link> = Vec::new();
@@ -79,18 +79,18 @@ pub(crate) fn find_in_row(text: &str) -> Vec<Link> {
 
 /// One row's slice of a link, in character columns.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct LinkSpan {
-    pub(crate) row: usize,
-    pub(crate) col: usize,
-    pub(crate) len: usize,
+pub struct LinkSpan {
+    pub row: usize,
+    pub col: usize,
+    pub len: usize,
 }
 
 /// The link under the pointer, joined back together across the rows it wraps over.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct HitLink {
-    pub(crate) kind: LinkKind,
-    pub(crate) text: String,
-    pub(crate) spans: Vec<LinkSpan>,
+pub struct HitLink {
+    pub kind: LinkKind,
+    pub text: String,
+    pub spans: Vec<LinkSpan>,
 }
 
 /// A row with a glyph in its last column runs on into the next row - either the terminal
@@ -114,7 +114,7 @@ struct Piece {
 /// Find the link at `(row, col)` of a visible grid, following the wrap in both directions so a
 /// path or URL broken over two rows is one link. `rows` holds every visible row, each padded to
 /// the full column count. Continuation rows contribute their text minus the leading indent.
-pub(crate) fn link_at(rows: &[String], row: usize, col: usize) -> Option<HitLink> {
+pub fn link_at(rows: &[String], row: usize, col: usize) -> Option<HitLink> {
     if row >= rows.len() || blank(&rows[row]) {
         return None;
     }
@@ -169,7 +169,7 @@ pub(crate) fn link_at(rows: &[String], row: usize, col: usize) -> Option<HitLink
 
 /// Resolve a clicked link to what should be handed to `open`: URLs pass through; paths are
 /// `~`-expanded and made absolute against `cwd`.
-pub(crate) fn resolve_target(text: &str, kind: LinkKind, cwd: Option<&str>, home: &str) -> String {
+pub fn resolve_target(text: &str, kind: LinkKind, cwd: Option<&str>, home: &str) -> String {
     match kind {
         LinkKind::Url => text.to_owned(),
         LinkKind::Ip => format!("http://{text}"),
@@ -193,7 +193,7 @@ pub(crate) fn resolve_target(text: &str, kind: LinkKind, cwd: Option<&str>, home
 
 /// Open a link via the system handler (`open` on macOS). URLs go straight through; paths are
 /// resolved against `cwd` + `$HOME` first.
-pub(crate) fn open(text: &str, kind: LinkKind, cwd: Option<&str>) {
+pub fn open(text: &str, kind: LinkKind, cwd: Option<&str>) {
     let home = std::env::var("HOME").unwrap_or_default();
     let target = resolve_target(text, kind, cwd, &home);
     let _ = std::process::Command::new("open").arg(target).spawn();

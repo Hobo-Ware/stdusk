@@ -3,27 +3,27 @@
 //! A leaf is addressed by a `path` of `Side`s from the root, which doubles as its identity
 //! (focus is a path). All structure ops here are pure and unit-tested with `T = u32`; the
 //! egui glue (rendering each leaf's rect, dragging splitters) lives in `main.rs`/`ui.rs`.
-use eframe::egui::{Pos2, Rect, pos2, vec2};
+use emath::{Pos2, Rect, pos2, vec2};
 
 /// Gap (px) between sibling panes, where the draggable splitter sits.
-pub(crate) const GUTTER: f32 = 6.0;
+pub const GUTTER: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Side {
+pub enum Side {
     A,
     B,
 }
 
 /// `Row` = children side by side (a vertical splitter); `Column` = stacked (horizontal splitter).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SplitDir {
+pub enum SplitDir {
     Row,
     Column,
 }
 
 /// A screen direction for keyboard pane navigation / resize.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Dir {
+pub enum Dir {
     Left,
     Right,
     Up,
@@ -33,7 +33,7 @@ pub(crate) enum Dir {
 /// The path of the pane nearest to `from` in direction `dir`, given a laid-out set of panes.
 /// Picks the closest pane whose center lies in that direction and whose cross-axis span overlaps
 /// `from` (so Left/Right stay on the same row band, Up/Down on the same column band).
-pub(crate) fn neighbor(layout: &[(Vec<Side>, Rect)], from: &[Side], dir: Dir) -> Option<Vec<Side>> {
+pub fn neighbor(layout: &[(Vec<Side>, Rect)], from: &[Side], dir: Dir) -> Option<Vec<Side>> {
     let cur = layout.iter().find(|(p, _)| p.as_slice() == from)?.1;
     let overlaps_y = |r: &Rect| r.top() < cur.bottom() && r.bottom() > cur.top();
     let overlaps_x = |r: &Rect| r.left() < cur.right() && r.right() > cur.left();
@@ -63,7 +63,7 @@ pub(crate) fn neighbor(layout: &[(Vec<Side>, Rect)], from: &[Side], dir: Dir) ->
     best.map(|(_, p)| p.clone())
 }
 
-pub(crate) enum Pane<T> {
+pub enum Pane<T> {
     Leaf(T),
     Split { dir: SplitDir, ratio: f32, a: Box<Pane<T>>, b: Box<Pane<T>> },
 }
@@ -74,11 +74,11 @@ fn prepend(side: Side, mut path: Vec<Side>) -> Vec<Side> {
 }
 
 impl<T> Pane<T> {
-    pub(crate) fn leaf(value: T) -> Self {
+    pub fn leaf(value: T) -> Self {
         Pane::Leaf(value)
     }
 
-    pub(crate) fn leaf_count(&self) -> usize {
+    pub fn leaf_count(&self) -> usize {
         match self {
             Pane::Leaf(_) => 1,
             Pane::Split { a, b, .. } => a.leaf_count() + b.leaf_count(),
@@ -86,7 +86,7 @@ impl<T> Pane<T> {
     }
 
     /// Every leaf value, left-to-right (for tab-wide aggregation like CLI-awareness badges).
-    pub(crate) fn leaves(&self) -> Vec<&T> {
+    pub fn leaves(&self) -> Vec<&T> {
         match self {
             Pane::Leaf(t) => vec![t],
             Pane::Split { a, b, .. } => {
@@ -98,7 +98,7 @@ impl<T> Pane<T> {
     }
 
     /// Every leaf value mutably, left-to-right (broadcast input writes to every pane).
-    pub(crate) fn leaves_mut(&mut self) -> Vec<&mut T> {
+    pub fn leaves_mut(&mut self) -> Vec<&mut T> {
         match self {
             Pane::Leaf(t) => vec![t],
             Pane::Split { a, b, .. } => {
@@ -111,7 +111,7 @@ impl<T> Pane<T> {
 
     /// Path of every leaf, left-to-right (parallel to `leaves`) - for whole-tree scans that
     /// must address a leaf afterwards (shell-exit handling).
-    pub(crate) fn leaf_paths(&self) -> Vec<Vec<Side>> {
+    pub fn leaf_paths(&self) -> Vec<Vec<Side>> {
         match self {
             Pane::Leaf(_) => vec![Vec::new()],
             Pane::Split { a, b, .. } => {
@@ -124,7 +124,7 @@ impl<T> Pane<T> {
     }
 
     /// Path to the first (all-`A`) leaf - the focus target after a collapse.
-    pub(crate) fn first_leaf_path(&self) -> Vec<Side> {
+    pub fn first_leaf_path(&self) -> Vec<Side> {
         let mut path = Vec::new();
         let mut cur = self;
         while let Pane::Split { a, .. } = cur {
@@ -162,14 +162,14 @@ impl<T> Pane<T> {
         Some(cur)
     }
 
-    pub(crate) fn leaf_at(&self, path: &[Side]) -> Option<&T> {
+    pub fn leaf_at(&self, path: &[Side]) -> Option<&T> {
         match self.at(path)? {
             Pane::Leaf(t) => Some(t),
             Pane::Split { .. } => None,
         }
     }
 
-    pub(crate) fn leaf_at_mut(&mut self, path: &[Side]) -> Option<&mut T> {
+    pub fn leaf_at_mut(&mut self, path: &[Side]) -> Option<&mut T> {
         match self.at_mut(path)? {
             Pane::Leaf(t) => Some(t),
             Pane::Split { .. } => None,
@@ -179,7 +179,7 @@ impl<T> Pane<T> {
     /// Split the leaf at `path` with `dir`. `new_first` places the new pane before the old
     /// (left/up) rather than after (right/down). Returns the rebuilt tree and the path to the
     /// new leaf (to focus), or `None` when `path` doesn't point at a leaf.
-    pub(crate) fn split(
+    pub fn split(
         self,
         path: &[Side],
         dir: SplitDir,
@@ -223,7 +223,7 @@ impl<T> Pane<T> {
 
     /// Close the leaf at `path`, collapsing its parent split into the sibling. Returns the new
     /// tree (`None` if the whole tree was that one leaf) and the path to focus next.
-    pub(crate) fn close(self, path: &[Side]) -> (Option<Pane<T>>, Option<Vec<Side>>) {
+    pub fn close(self, path: &[Side]) -> (Option<Pane<T>>, Option<Vec<Side>>) {
         match path.split_first() {
             None => (None, None), // closed the root leaf -> empty
             Some((&s, rest)) => match self {
@@ -265,7 +265,7 @@ impl<T> Pane<T> {
     }
 
     /// Clamp + set the ratio of the split node at `path` (no-op if it's not a split).
-    pub(crate) fn set_ratio(&mut self, path: &[Side], ratio: f32) {
+    pub fn set_ratio(&mut self, path: &[Side], ratio: f32) {
         if let Some(Pane::Split { ratio: r, .. }) = self.at_mut(path) {
             *r = ratio.clamp(0.05, 0.95);
         }
@@ -274,7 +274,7 @@ impl<T> Pane<T> {
     /// Grow/shrink the focused leaf along `want` by nudging the nearest matching ancestor split's
     /// ratio. `grow > 0` makes the focused pane larger regardless of which side it's on (the sign
     /// flips for a B-side child). Returns whether a matching split was found.
-    pub(crate) fn resize_focused(&mut self, focused: &[Side], want: SplitDir, grow: f32) -> bool {
+    pub fn resize_focused(&mut self, focused: &[Side], want: SplitDir, grow: f32) -> bool {
         for cut in (0..focused.len()).rev() {
             let side = focused[cut];
             if let Some(Pane::Split { dir, ratio, .. }) = self.at_mut(&focused[..cut])
@@ -289,7 +289,7 @@ impl<T> Pane<T> {
     }
 
     /// Every leaf's `(path, rect)` for the given area, accounting for split ratios + gutters.
-    pub(crate) fn layout(&self, area: Rect) -> Vec<(Vec<Side>, Rect)> {
+    pub fn layout(&self, area: Rect) -> Vec<(Vec<Side>, Rect)> {
         let mut out = Vec::new();
         let mut path = Vec::new();
         self.layout_into(area, &mut path, &mut out);
@@ -313,7 +313,7 @@ impl<T> Pane<T> {
 
     /// Leaf rects for a tiny tab glyph that previews the split layout - same structure as
     /// `layout` but in a unit square with a proportional gap, so the caller scales it to any box.
-    pub(crate) fn miniature(&self) -> Vec<Rect> {
+    pub fn miniature(&self) -> Vec<Rect> {
         let mut out = Vec::new();
         self.mini_into(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 1.0)), &mut out);
         out
@@ -334,7 +334,7 @@ impl<T> Pane<T> {
 
     /// Each split node's `(path, dir, handle_rect, parent_rect)` - the handle is the gutter the
     /// user drags; the parent rect maps a drag position back to a ratio.
-    pub(crate) fn splitters(&self, area: Rect) -> Vec<(Vec<Side>, SplitDir, Rect, Rect)> {
+    pub fn splitters(&self, area: Rect) -> Vec<(Vec<Side>, SplitDir, Rect, Rect)> {
         let mut out = Vec::new();
         let mut path = Vec::new();
         self.splitters_into(area, &mut path, &mut out);
@@ -401,7 +401,7 @@ fn gutter_rect(rect: Rect, dir: SplitDir, ratio: f32) -> Rect {
 }
 
 /// Map a pointer position on a splitter back to a ratio for its parent rect.
-pub(crate) fn ratio_from_pointer(parent: Rect, dir: SplitDir, pointer: Pos2) -> f32 {
+pub fn ratio_from_pointer(parent: Rect, dir: SplitDir, pointer: Pos2) -> f32 {
     let r = match dir {
         SplitDir::Row => (pointer.x - parent.min.x) / (parent.width() - GUTTER).max(1.0),
         SplitDir::Column => (pointer.y - parent.min.y) / (parent.height() - GUTTER).max(1.0),
