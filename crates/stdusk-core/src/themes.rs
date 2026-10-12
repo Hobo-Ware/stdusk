@@ -53,9 +53,9 @@ pub fn lookup(name: &str) -> Option<Theme> {
         .or_else(|| SCHEMES.iter().find(|(n, _)| *n == name).and_then(|(_, src)| parse_xrdb(src)))
 }
 
-/// Scan ~/.config/stdusk/schemes/ for a file whose stem normalizes to `name`.
+/// Scan the config dir's `schemes/` for a file whose stem normalizes to `name`.
 fn user_scheme(name: &str) -> Option<Theme> {
-    let dir = std::path::Path::new(&std::env::var_os("HOME")?).join(".config/stdusk/schemes");
+    let dir = crate::paths::config_dir()?.join("schemes");
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };

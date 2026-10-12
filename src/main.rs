@@ -1629,6 +1629,7 @@ fn main() -> eframe::Result<()> {
         {
             std::env::set_var("HOME", dir);
             std::env::set_var("XDG_RUNTIME_DIR", dir);
+            std::env::remove_var("XDG_CONFIG_HOME");
         }
     }
 

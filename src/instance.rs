@@ -63,12 +63,12 @@ pub(crate) fn decide_startup(socket_exists: bool, connect_ok: bool) -> Startup {
 }
 
 /// Fixed per-user socket path: `$XDG_RUNTIME_DIR/stdusk.sock` when set, else
-/// `~/.config/stdusk/instance.sock` (per-user by $HOME - avoids a world-writable /tmp path).
+/// `instance.sock` in the config dir (per-user - avoids a world-writable /tmp path).
 pub(crate) fn socket_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
         return Some(PathBuf::from(dir).join("stdusk.sock"));
     }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/stdusk/instance.sock"))
+    stdusk_core::paths::config_dir().map(|dir| dir.join("instance.sock"))
 }
 
 /// The outcome of trying to claim the single-instance lock.
