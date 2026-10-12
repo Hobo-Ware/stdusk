@@ -5,7 +5,6 @@
 //! The command plan is pure and unit-tested; execution runs on a background thread and
 //! reports back through a shared slot the UI polls each frame.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// Volatile files that must never leave the machine (session state, generated shell hooks).
@@ -53,13 +52,9 @@ pub(crate) fn plan(op: Op, repo: &str) -> Vec<Step> {
     steps
 }
 
-fn config_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config/stdusk"))
-}
-
 /// Run the plan in `~/.config/stdusk`. Blocking - call from `spawn`.
 fn run(op: Op, repo: &str) -> Result<(), String> {
-    let dir = config_dir().ok_or("no HOME")?;
+    let dir = stdusk_core::paths::config_dir().ok_or("no HOME")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // Keep machine-local files out of the repo before any `add -A`.
     std::fs::write(dir.join(".gitignore"), GITIGNORE).map_err(|e| e.to_string())?;

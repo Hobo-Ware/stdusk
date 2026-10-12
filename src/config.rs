@@ -391,8 +391,7 @@ impl Config {
 }
 
 fn config_path() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .map(|home| std::path::Path::new(&home).join(".config/stdusk/config.toml"))
+    stdusk_core::paths::config_dir().map(|dir| dir.join("config.toml"))
 }
 
 /// Serialize a config to TOML - the settings window's Save path. Pure; round-trips through

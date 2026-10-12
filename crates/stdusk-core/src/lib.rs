@@ -18,6 +18,7 @@ pub mod modes;
 pub mod mouse;
 pub mod osc;
 pub mod pane;
+pub mod paths;
 pub mod procwatch;
 pub mod progress;
 pub mod repaint;

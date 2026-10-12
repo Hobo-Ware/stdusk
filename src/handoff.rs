@@ -236,7 +236,7 @@ pub(crate) fn sock_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
         return Some(PathBuf::from(dir).join(name));
     }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/stdusk").join(name))
+    stdusk_core::paths::config_dir().map(|dir| dir.join(name))
 }
 
 /// Bind the handoff socket (creating its dir, clearing a stale file first).

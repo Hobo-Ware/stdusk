@@ -163,7 +163,7 @@ pub(crate) fn hex_to_color(s: &str) -> Option<Color32> {
 }
 
 fn path() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config/stdusk/session.toml"))
+    stdusk_core::paths::config_dir().map(|dir| dir.join("session.toml"))
 }
 
 /// Load the saved session, or an empty one when absent/corrupt (never fails the launch).
