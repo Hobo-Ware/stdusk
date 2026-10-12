@@ -191,12 +191,15 @@ pub(crate) fn resolve_target(text: &str, kind: LinkKind, cwd: Option<&str>, home
     }
 }
 
-/// Open a link via the system handler (`open` on macOS). URLs go straight through; paths are
+/// The system handler that opens a URL or a path: `open` on macOS, `xdg-open` elsewhere.
+pub const OPENER: &str = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+
+/// Open a link via the system handler ([`OPENER`]). URLs go straight through; paths are
 /// resolved against `cwd` + `$HOME` first.
 pub fn open(text: &str, kind: LinkKind, cwd: Option<&str>) {
     let home = std::env::var("HOME").unwrap_or_default();
     let target = resolve_target(text, kind, cwd, &home);
-    let _ = std::process::Command::new("open").arg(target).spawn();
+    let _ = std::process::Command::new(OPENER).arg(target).spawn();
 }
 
 #[cfg(test)]

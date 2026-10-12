@@ -6,6 +6,10 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 
+/// Whether this platform has an update path at all: the check and install both target the macOS
+/// Homebrew cask, so everywhere else the updater stays idle and its settings block is not shown.
+pub(crate) const SUPPORTED: bool = cfg!(target_os = "macos");
+
 /// Version the running binary was built as.
 pub(crate) const RUNNING: &str = env!("CARGO_PKG_VERSION");
 

@@ -1787,13 +1787,17 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
         });
     });
 
-    subheading(ui, "Focus & Dock");
+    let macos = cfg!(target_os = "macos");
+    subheading(ui, if macos { "Focus & Dock" } else { "Focus" });
     rows(ui, |ui| {
         row(ui, "Hide on focus loss", "Hide when another app takes focus", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
                 stdusk_egui::widgets::toggle_switch(ui, &mut q.hide_on_focus_loss);
             });
         });
+        if !macos {
+            return;
+        }
         row(
             ui,
             "Follow active desktop",
@@ -2029,7 +2033,7 @@ fn about_section(
         .clicked()
         && let Some(p) = config::ensure_and_path()
     {
-        let _ = std::process::Command::new("open").arg(p).spawn();
+        let _ = std::process::Command::new(stdusk_core::links::OPENER).arg(p).spawn();
     }
     ui.add_space(8.0);
     if link_row(ui, icons::FOLDER, "Open config folder", "Custom schemes live in schemes/")
@@ -2037,9 +2041,11 @@ fn about_section(
         && let Some(p) = config::ensure_and_path()
         && let Some(dir) = p.parent()
     {
-        let _ = std::process::Command::new("open").arg(dir).spawn();
+        let _ = std::process::Command::new(stdusk_core::links::OPENER).arg(dir).spawn();
     }
-    updates_block(ui, cfg, updater);
+    if update::SUPPORTED {
+        updates_block(ui, cfg, updater);
+    }
     restart
 }
 
@@ -2076,7 +2082,9 @@ fn updates_block(ui: &mut egui::Ui, cfg: &mut config::Config, updater: &mut Upda
                         let release = release.clone();
                         updater.install(release);
                     } else {
-                        let _ = std::process::Command::new("open").arg(&release.url).spawn();
+                        let _ = std::process::Command::new(stdusk_core::links::OPENER)
+                            .arg(&release.url)
+                            .spawn();
                     }
                 }
             });
