@@ -92,12 +92,14 @@ pub(crate) fn effective_opacity(
 /// a window with zero pixels on-screen (ordered out or parked fully off-screen) parks eframe's run
 /// loop, so the summon hotkey can never reshow it (broke 3x - see `apply_visibility`). Hidden ==
 /// parked with this sliver still visible + alpha 0, never fully off-screen. Extend cautiously.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) const QUAKE_HIDE_SLIVER: f32 = 2.0;
 
 /// The window's top-left y when hidden: parked so only `QUAKE_HIDE_SLIVER` points remain at the
 /// bottom edge. INVARIANT: strictly less than `monitor_h` (the window stays ON-SCREEN) and the
 /// visible sliver is exactly `QUAKE_HIDE_SLIVER` - the exact regression guard for the "hotkey can't
 /// reshow after hide" bug. Pure so the invariant is testable without a window.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn quake_hidden_y(monitor_h: f32) -> f32 {
     monitor_h - QUAKE_HIDE_SLIVER
 }
@@ -110,6 +112,7 @@ pub(crate) fn quake_shown_size(monitor_w: f32, monitor_h: f32, height_pct: f32) 
 
 /// Index of the screen whose frame holds `point`. Frames and point share one coordinate space
 /// (AppKit's: bottom-left origin, y up), so no conversion is needed to find the cursor's screen.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn screen_index_at(frames: &[egui::Rect], point: egui::Pos2) -> Option<usize> {
     // Half-open: `Rect::contains` includes `max`, so a point on a shared edge would match the
     // screen on the left instead of the one it is the first column of.
@@ -122,6 +125,7 @@ pub(crate) fn screen_index_at(frames: &[egui::Rect], point: egui::Pos2) -> Optio
 /// top-left-origin global space that `ViewportCommand::OuterPosition` uses. `primary_h` is the
 /// primary screen's height: the primary screen's top-left is then (0, 0) and screens above or
 /// below it get negative or larger y.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn cocoa_to_top_left(frame: egui::Rect, primary_h: f32) -> egui::Rect {
     let top = primary_h - frame.max.y;
     egui::Rect::from_min_size(egui::pos2(frame.min.x, top), frame.size())
@@ -137,6 +141,7 @@ pub(crate) fn unzoom(v: egui::Vec2, zoom: f32) -> egui::Vec2 {
 
 /// Top-left of the parked (hidden) quake window on `screen`: the window's left edge, with only
 /// `QUAKE_HIDE_SLIVER` points of it left on that screen. Per-screen twin of `quake_hidden_y`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn quake_hidden_pos(screen: egui::Rect) -> egui::Pos2 {
     egui::pos2(screen.min.x, screen.min.y + quake_hidden_y(screen.height()))
 }

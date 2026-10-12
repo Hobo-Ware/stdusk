@@ -191,10 +191,9 @@ pub fn build_fonts(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BOLD_FONT_FAMILY, bold_face_name_score, build_fonts, face_name_score, installed_families,
-        resolve_bold_font, resolve_font,
-    };
+    use super::{BOLD_FONT_FAMILY, bold_face_name_score, build_fonts, face_name_score};
+    #[cfg(target_os = "macos")]
+    use super::{installed_families, resolve_bold_font, resolve_font};
 
     // Font resolution hits the real system source - gate on macOS where Menlo always exists.
     #[test]
