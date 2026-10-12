@@ -82,6 +82,21 @@ facts (both cost multiple round-trips to relearn):
   window-height origin threw them off-screen (1.4.1). The tuned `DROP` is eyeball-confirmed
   live via `--state-dir`, not derived.
 
+## Linux
+
+- **Hide is a real unmap** (`ViewportCommand::Visible(false)`): App Nap is macOS-only, so the sliver
+  and alpha-0 tricks stay in the macOS arm of `apply_visibility`. Not yet verified live that the run
+  loop keeps ticking while unmapped; verify before relying on it.
+- **Global hotkey**: `global-hotkey` works on X11 only. Wayland has none, so `stdusk --toggle`
+  (socket command in `instance.rs`) is the path; the hotkey manager is optional, never `expect`ed.
+- **Modifiers**: egui sets `command` = Ctrl off macOS and folds Ctrl+C/X/V into `Event::Copy/Cut/
+  Paste`. Anything that encodes bytes or matches `[hotkeys]` goes through
+  `stdusk_egui::keys::terminal_modifiers`, and `Event::Copy/Cut` map back to ^C/^X.
+- **Paths**: `stdusk_core::paths::config_dir()` is the only place that decides the config dir;
+  `XDG_CONFIG_HOME` counts off macOS only.
+- **Tests**: `cfg!(target_os = "macos")` flips in a Mac-hosted "fake Linux" run are not Linux
+  proof; only the `check-linux` job is. Pty tests must not depend on fork timing or a bare-HOME zsh.
+
 ## Quick checklist
 
 - [ ] Quake hide uses the on-screen sliver + alpha=0, never `Visible(false)`/offscreen park.
