@@ -1,5 +1,21 @@
 //! Keyboard input encoding: egui key presses -> the bytes a pty expects (`key_to_bytes`,
 //! `ctrl_letter`) and Alt+wheel scroll bytes. Pure functions, unit-tested without a window.
+/// The modifiers as the pty encoder and the `[hotkeys]` matcher must see them. egui reports
+/// `command` as Ctrl off macOS, which would make every Ctrl chord look like a Cmd chord (Ctrl+F5
+/// would encode nothing, Ctrl+Left would send Ctrl-A), so there the Cmd flags are cleared and
+/// `ctrl` alone carries the Ctrl key. Unchanged on macOS, where `command` is the real Cmd key.
+pub fn terminal_modifiers(mods: egui::Modifiers) -> egui::Modifiers {
+    terminal_modifiers_for(mods, cfg!(target_os = "macos"))
+}
+
+fn terminal_modifiers_for(mut mods: egui::Modifiers, macos: bool) -> egui::Modifiers {
+    if !macos {
+        mods.command = false;
+        mods.mac_cmd = false;
+    }
+    mods
+}
+
 /// Bytes a key press sends to the pty, or `None` when the key is unmapped (plain text is
 /// handled separately via `Event::Text`). F-keys are encoded first (terminfo, any modifiers);
 /// then `Ctrl+letter` wins over the rest; then macOS natural-editing: `Option+←/→` word,
@@ -187,7 +203,7 @@ pub fn alt_scroll_bytes(lines: i32) -> Vec<u8> {
 mod tests {
     use egui::{Key, Modifiers};
 
-    use super::{alt_scroll_bytes, ctrl_letter, key_to_bytes};
+    use super::{alt_scroll_bytes, ctrl_letter, key_to_bytes, terminal_modifiers_for};
 
     fn mods(ctrl: bool, alt: bool, command: bool) -> Modifiers {
         Modifiers { alt, ctrl, shift: false, mac_cmd: command, command }
@@ -242,6 +258,17 @@ mod tests {
         // altIsMeta and DECCKM (arrow-only) must not change F-key bytes.
         assert_eq!(key_to_bytes(Key::F1, none, true, true), Some(b"\x1bOP".to_vec()));
         assert_eq!(key_to_bytes(Key::F10, alt, true, false), Some(b"\x1b[21;3~".to_vec()));
+    }
+
+    #[test]
+    fn terminal_modifiers_drop_egui_ctrl_as_command_off_macos_only() {
+        let linux_ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::default() };
+        let seen = terminal_modifiers_for(linux_ctrl, false);
+        assert!(seen.ctrl && !seen.command && !seen.mac_cmd);
+        assert_eq!(key_to_bytes(Key::F5, seen, false, false), Some(b"\x1b[15;5~".to_vec()));
+        assert_eq!(key_to_bytes(Key::F5, linux_ctrl, false, false), None);
+        let mac_cmd = mods(false, false, true);
+        assert_eq!(terminal_modifiers_for(mac_cmd, true), mac_cmd);
     }
 
     #[test]

@@ -278,7 +278,8 @@ pub(crate) fn matched_hotkeys(
             let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else {
                 return None;
             };
-            hotkey_action(hk, *key, *modifiers, g).map(|a| (a, (*key, *modifiers)))
+            let seen = stdusk_egui::keys::terminal_modifiers(*modifiers);
+            hotkey_action(hk, *key, seen, g).map(|a| (a, (*key, *modifiers)))
         })
         .collect()
 }
@@ -662,7 +663,6 @@ mod tests {
         // Ctrl or Cmd is held. The Text after such a chord is another key's, so it must stay.
         let alt = mods(false, true, false);
         let ctrl_alt = mods(true, true, false);
-        let cmd_alt = mods(false, true, true);
         let hk = Hotkeys {
             zoom_in: "Alt+F3".into(),
             zoom_out: "Alt+F14".into(),
@@ -670,12 +670,14 @@ mod tests {
             find: "Cmd+Alt+J".into(),
             ..Hotkeys::default()
         };
-        let cases = [
+        #[allow(unused_mut)]
+        let mut cases = vec![
             (Key::F3, alt, HotkeyAction::Zoom(1)),
             (Key::F14, alt, HotkeyAction::Zoom(-1)),
             (Key::X, ctrl_alt, HotkeyAction::Clear),
-            (Key::J, cmd_alt, HotkeyAction::Find),
         ];
+        #[cfg(target_os = "macos")]
+        cases.push((Key::J, mods(false, true, true), HotkeyAction::Find));
         for (key, m, want) in cases {
             let events = vec![key_ev(key, m), egui::Event::Text("z".into())];
             let (actions, left) = match_and_consume(events, &hk, open_guards());

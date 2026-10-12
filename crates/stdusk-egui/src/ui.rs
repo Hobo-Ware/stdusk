@@ -584,6 +584,35 @@ pub fn draw_tab(
     (tab_resp, close)
 }
 
+/// Off macOS egui-winit folds Ctrl+C / Ctrl+X into `Event::Copy` / `Event::Cut` and never emits the
+/// key press, so the terminal's ^C (SIGINT) and ^X would be lost. This recovers them: a plain
+/// Ctrl chord (no Shift - Ctrl+Shift+C is the copy chord) sends its control byte, unless the
+/// caller is turning that Ctrl+C into a copy of the selection (`intercept_ctrl_c`). Always `None`
+/// on macOS, where Cmd+C / Cmd+X are real clipboard commands and Ctrl+C arrives as a key.
+fn folded_ctrl_byte(
+    event: &egui::Event,
+    mods: egui::Modifiers,
+    intercept_ctrl_c: bool,
+) -> Option<u8> {
+    folded_ctrl_byte_for(event, mods, intercept_ctrl_c, cfg!(target_os = "macos"))
+}
+
+fn folded_ctrl_byte_for(
+    event: &egui::Event,
+    mods: egui::Modifiers,
+    intercept_ctrl_c: bool,
+    macos: bool,
+) -> Option<u8> {
+    if macos || !mods.ctrl || mods.shift {
+        return None;
+    }
+    match event {
+        egui::Event::Copy if !intercept_ctrl_c => Some(0x03),
+        egui::Event::Cut => Some(0x18),
+        _ => None,
+    }
+}
+
 /// Translate this frame's key/text events into bytes for the pty.
 pub fn collect_input(
     ui: &egui::Ui,
@@ -606,11 +635,15 @@ pub fn collect_input(
                     if intercept_ctrl_c && *key == egui::Key::C && modifiers.ctrl {
                         continue;
                     }
+                    let modifiers = crate::keys::terminal_modifiers(*modifiers);
                     if let Some(bytes) =
-                        crate::keys::key_to_bytes(*key, *modifiers, alt_is_meta, app_cursor)
+                        crate::keys::key_to_bytes(*key, modifiers, alt_is_meta, app_cursor)
                     {
                         out.extend_from_slice(&bytes);
                     }
+                }
+                egui::Event::Copy | egui::Event::Cut => {
+                    out.extend(folded_ctrl_byte(event, i.modifiers, intercept_ctrl_c));
                 }
                 _ => {}
             }
@@ -924,6 +957,20 @@ pub fn blink_on(time: f64) -> bool {
 mod tests {
     use super::*;
     use stdusk_core::repaint::Repaint;
+
+    #[test]
+    fn folded_copy_and_cut_recover_the_control_bytes_off_macos() {
+        let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
+        let ctrl_shift = egui::Modifiers { ctrl: true, shift: true, ..Default::default() };
+        let copy = egui::Event::Copy;
+        let cut = egui::Event::Cut;
+        assert_eq!(folded_ctrl_byte_for(&copy, ctrl, false, false), Some(0x03));
+        assert_eq!(folded_ctrl_byte_for(&cut, ctrl, false, false), Some(0x18));
+        assert_eq!(folded_ctrl_byte_for(&copy, ctrl, true, false), None, "selection copy wins");
+        assert_eq!(folded_ctrl_byte_for(&copy, ctrl_shift, false, false), None, "copy chord");
+        assert_eq!(folded_ctrl_byte_for(&copy, egui::Modifiers::NONE, false, false), None);
+        assert_eq!(folded_ctrl_byte_for(&copy, ctrl, false, true), None, "macOS has real Cmd+C");
+    }
 
     #[test]
     fn theme_visuals_apply_whatever_the_os_theme_is() {

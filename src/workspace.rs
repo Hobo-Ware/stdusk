@@ -175,7 +175,13 @@ impl Stdusk {
                 // has-selection check and a copy, which would swallow Ctrl-C without copying.
                 let sel_text = tab.focused_term().selection_text();
                 let has_selection = sel_text.is_some();
-                let ctrl_c = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::C));
+                let ctrl_c = ui.input(|i| {
+                    i.modifiers.ctrl
+                        && (i.key_pressed(egui::Key::C)
+                            || (cfg!(not(target_os = "macos"))
+                                && !i.modifiers.shift
+                                && i.events.iter().any(|e| matches!(e, egui::Event::Copy))))
+                });
                 let want_copy = ui
                     .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
                     || (ctrl_c && has_selection && !input_captured);
