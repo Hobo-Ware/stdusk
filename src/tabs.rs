@@ -229,7 +229,7 @@ fn adopt_saved_tree(
             alt_screen: meta.alt_screen,
             cmd_running: meta.cmd_running,
             replay: crate::handoff::decode_screen(meta.screen.as_ref()),
-            title_osc: crate::handoff::clamp_title(meta.title_osc.clone()),
+            title_osc: stdusk_core::terminal::clamp_title(meta.title_osc.clone()),
             theme_reports: meta.theme_reports,
         };
         let Ok(mut term) = PtyTerm::adopt(stdusk_egui::repaint_handle(ctx), handover, &opts) else {

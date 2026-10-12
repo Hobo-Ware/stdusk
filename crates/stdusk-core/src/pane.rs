@@ -6,7 +6,7 @@
 use emath::{Pos2, Rect, pos2, vec2};
 
 /// Gap (px) between sibling panes, where the draggable splitter sits.
-pub const GUTTER: f32 = 6.0;
+pub(crate) const GUTTER: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Side {

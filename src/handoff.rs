@@ -49,6 +49,7 @@ use rustix::net::{
 use serde::{Deserialize, Serialize};
 
 use crate::session::SavedSession;
+use stdusk_core::terminal::clamp_title;
 
 /// Cap on a single pane's metadata, so a corrupt or hostile length can't make us allocate wildly.
 /// Generous because the metadata now carries the pane's SCREEN (base64'd, itself capped by
@@ -568,23 +569,6 @@ fn pane_cwd(term: &stdusk_core::terminal::PtyTerm) -> Option<String> {
     term.cwd().or_else(|| term.shell_pid().and_then(stdusk_core::procwatch::process_cwd))
 }
 
-/// Longest OSC title carried over the wire, in CHARS (never bytes - splitting a code point would
-/// make the string unencodable). A window title is a tab label; anything past this is either
-/// decoration or an app misbehaving, and a tab shows an ellipsized slice of it anyway.
-const MAX_TITLE_CHARS: usize = 512;
-
-/// An OSC title fit to travel and to display: empty or whitespace-only means "no title" (the same
-/// reading `ui::auto_title` gives it), and a hostile length is truncated rather than dropped, so a
-/// long-but-legitimate title still names its tab. Applied on BOTH sides - the receiving side treats
-/// the wire as untrusted.
-pub(crate) fn clamp_title(title: Option<String>) -> Option<String> {
-    let t = title?;
-    if t.trim().is_empty() {
-        return None;
-    }
-    Some(t.chars().take(MAX_TITLE_CHARS).collect())
-}
-
 /// A pane's screen dump for the wire: base64, or `None` when there is nothing on screen.
 pub(crate) fn encode_screen(dump: &[u8]) -> Option<String> {
     use base64::Engine as _;
@@ -616,6 +600,7 @@ fn cmd_running(cmd: stdusk_core::terminal::CmdState) -> Option<bool> {
 mod tests {
     use std::io::{Read, Write};
     use std::os::fd::AsFd;
+    use stdusk_core::terminal::MAX_TITLE_CHARS;
 
     use super::*;
 

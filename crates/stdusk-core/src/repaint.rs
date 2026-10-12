@@ -15,11 +15,11 @@ impl Repaint {
         Self::new(|_| {})
     }
 
-    pub fn now(&self) {
+    pub(crate) fn now(&self) {
         (self.0)(Duration::ZERO);
     }
 
-    pub fn after(&self, delay: Duration) {
+    pub(crate) fn after(&self, delay: Duration) {
         (self.0)(delay);
     }
 }

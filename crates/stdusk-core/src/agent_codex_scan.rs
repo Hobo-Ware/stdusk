@@ -237,7 +237,7 @@ fn session_of(thread: &Thread) -> AgentSession {
 }
 
 impl CodexScanner {
-    pub fn new(home: PathBuf) -> Self {
+    pub(crate) fn new(home: PathBuf) -> Self {
         Self {
             home,
             threads: HashMap::new(),
@@ -253,7 +253,7 @@ impl CodexScanner {
 
     /// The Codex session of each live process, by pid. A process gets none when nothing is known
     /// or when the match is in doubt.
-    pub fn sessions(&mut self, procs: &[CodexProc]) -> HashMap<u32, AgentSession> {
+    pub(crate) fn sessions(&mut self, procs: &[CodexProc]) -> HashMap<u32, AgentSession> {
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
         self.sessions_at(procs, u64::try_from(now.as_millis()).unwrap_or(u64::MAX))
     }

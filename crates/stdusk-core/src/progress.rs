@@ -18,19 +18,19 @@ pub enum Progress {
 static PCT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(^|[^\d])(\d+(\.\d+)?)%([^\d]|$)").unwrap());
 
-pub struct ProgressScanner {
+pub(crate) struct ProgressScanner {
     enabled: bool,
     carry: String, // trailing digits carried so a % split across chunks still matches
 }
 
 impl ProgressScanner {
-    pub fn new(enabled: bool) -> Self {
+    pub(crate) fn new(enabled: bool) -> Self {
         Self { enabled, carry: String::new() }
     }
 
     /// One decision per chunk (Tabby semantics): a chunk with a valid percentage sets it,
     /// any other chunk clears to None. Suppressed while the alt-screen is active.
-    pub fn feed(&mut self, chunk: &str, alt_screen: bool) -> Progress {
+    pub(crate) fn feed(&mut self, chunk: &str, alt_screen: bool) -> Progress {
         if !self.enabled {
             self.carry.clear();
             return Progress::None;

@@ -8,8 +8,8 @@ use regex::RegexBuilder;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Match {
     pub line: i32,
-    pub col: usize,
-    pub len: usize,
+    pub(crate) col: usize,
+    pub(crate) len: usize,
 }
 
 /// Search modifiers, mirrored by the find-bar toggles (Tabby parity).

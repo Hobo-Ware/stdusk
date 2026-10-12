@@ -234,7 +234,7 @@ fn write_if_changed(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 /// Write the generated rc files.
-pub fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
+pub(crate) fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     write_if_changed(&dir.join(".zshenv"), ZSHENV)?;
     write_if_changed(&dir.join(".zprofile"), ZPROFILE)?;
@@ -258,7 +258,7 @@ pub fn write_files(dir: &Path, autosuggest: bool) -> std::io::Result<()> {
 /// fish-style history-suggestion plugin from our generated `.zshrc`.
 ///
 /// Returns whether the shell got the integration, so it will mark its prompts (OSC 133 `A`).
-pub fn configure(
+pub(crate) fn configure(
     cmd: &mut CommandBuilder,
     shell: &str,
     integration: bool,

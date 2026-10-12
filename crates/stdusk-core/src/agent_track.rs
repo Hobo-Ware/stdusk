@@ -58,9 +58,9 @@ const GONE_WAIT_SCANS: u8 = 3;
 
 /// One status the shell reported, and when the reader thread got it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Status {
-    pub code: i32,
-    pub at: Instant,
+pub(crate) struct Status {
+    pub(crate) code: i32,
+    pub(crate) at: Instant,
 }
 
 /// How a session ties to a running agent process.
@@ -124,18 +124,18 @@ struct Record {
 
 /// What a pane holds about its agent session.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Track(Option<Record>);
+pub(crate) struct Track(Option<Record>);
 
 impl Track {
     /// A track that starts from a session stdusk reopened. `crash_hint` says the record was kept
     /// after a crash, so its command is typed and not run.
-    pub fn restored(session: AgentSession, crash_hint: bool) -> Self {
+    pub(crate) fn restored(session: AgentSession, crash_hint: bool) -> Self {
         Self::with(session, Bind::Waiting { crash_hint })
     }
 
     /// A track that starts from the record of a live handoff. A crash hint has no live agent, so
     /// it stays a hint and drops at the first status, as a restored one does.
-    pub fn adopted(session: AgentSession, crash_hint: bool) -> Self {
+    pub(crate) fn adopted(session: AgentSession, crash_hint: bool) -> Self {
         let bind =
             if crash_hint { Bind::Waiting { crash_hint } } else { Bind::Adopted { missed: 0 } };
         Self::with(session, bind)
@@ -151,7 +151,7 @@ impl Track {
 
     /// The record to save, with its crash mark. A record that is gone is not saved: without a
     /// crash status it is on its way out.
-    pub fn saved(&self) -> Option<SavedAgent> {
+    pub(crate) fn saved(&self) -> Option<SavedAgent> {
         let record = self.visible()?;
         Some(record.session.to_saved(record.bind.kept_by_crash()))
     }
@@ -162,13 +162,13 @@ impl Track {
 
     /// One scan taken at `taken`: the status the shell reported since the last one comes first, so
     /// a crash is known before the scan that finds the agent gone.
-    pub fn scan(self, status: Option<Status>, seen: Seen, taken: Instant) -> Self {
+    pub(crate) fn scan(self, status: Option<Status>, seen: Seen, taken: Instant) -> Self {
         self.status(status).seen(seen, taken)
     }
 
     /// Apply a status alone. The final snapshot before quit uses this, so a crash status that no
     /// scan has seen yet is still saved.
-    pub fn status(self, status: Option<Status>) -> Self {
+    pub(crate) fn status(self, status: Option<Status>) -> Self {
         match status {
             Some(status) => self.command_ended(status),
             None => self,

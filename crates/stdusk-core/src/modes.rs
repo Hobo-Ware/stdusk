@@ -7,17 +7,17 @@ const THEME_REPORTS: &[u8] = b"2031";
 /// Longest `CSI ? params` prefix carried between reads; anything longer isn't a mode toggle we track.
 const MAX_CARRY: usize = 64;
 
-pub struct ThemeReportScanner {
+pub(crate) struct ThemeReportScanner {
     carry: Vec<u8>,
 }
 
 impl ThemeReportScanner {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { carry: Vec::new() }
     }
 
     /// The last set (`true`) or reset (`false`) of mode 2031 in this chunk, if any.
-    pub fn feed(&mut self, data: &[u8]) -> Option<bool> {
+    pub(crate) fn feed(&mut self, data: &[u8]) -> Option<bool> {
         let mut bytes = std::mem::take(&mut self.carry);
         bytes.extend_from_slice(data);
         let mut last = None;
@@ -73,7 +73,7 @@ fn parse_private_mode(seq: &[u8]) -> Parsed<'_> {
 }
 
 /// The report for the current theme: `CSI ? 997 ; 1 n` when dark, `; 2 n` when light.
-pub fn theme_report(dark: bool) -> &'static [u8] {
+pub(crate) fn theme_report(dark: bool) -> &'static [u8] {
     if dark { b"\x1b[?997;1n" } else { b"\x1b[?997;2n" }
 }
 

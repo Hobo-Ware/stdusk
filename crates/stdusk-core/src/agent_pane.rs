@@ -38,7 +38,7 @@ pub struct AgentSetup {
 ///   only if the shell itself holds the tty, and drops it otherwise.
 /// - Any input from the user drops it (`PtyTerm::send`), so it never lands in a line being typed.
 #[derive(Clone, Default)]
-pub struct PendingInput(Arc<Mutex<Option<Vec<u8>>>>);
+pub(crate) struct PendingInput(Arc<Mutex<Option<Vec<u8>>>>);
 
 impl PendingInput {
     fn new(bytes: Option<Vec<u8>>) -> Self {
@@ -46,7 +46,7 @@ impl PendingInput {
     }
 
     /// Take the input out of the queue, to type it or to drop it.
-    pub fn take(&self) -> Option<Vec<u8>> {
+    pub(crate) fn take(&self) -> Option<Vec<u8>> {
         // grab-copy-drop: the guard ends with this statement, before the caller writes anything.
         self.0.lock().unwrap().take()
     }
@@ -54,7 +54,7 @@ impl PendingInput {
 
 /// What the fallback did with the queued input.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Fallback {
+pub(crate) enum Fallback {
     /// The shell holds the tty: type these bytes.
     Type(Vec<u8>),
     /// Something else holds the tty: the input is gone and was not typed.
@@ -62,7 +62,7 @@ pub enum Fallback {
 }
 
 /// The agent state of one pane whose agents are tracked.
-pub struct AgentPane {
+pub(crate) struct AgentPane {
     /// The agent session this pane runs, as the ~1 Hz scan last saw it.
     track: Track,
     pending: PendingInput,
@@ -72,7 +72,7 @@ pub struct AgentPane {
 
 impl AgentPane {
     /// A pane that spawns its shell.
-    pub fn new(setup: AgentSetup) -> Self {
+    pub(crate) fn new(setup: AgentSetup) -> Self {
         Self {
             track: Track::default(),
             pending: PendingInput::new(setup.pending_input),
@@ -81,13 +81,13 @@ impl AgentPane {
     }
 
     /// A pane that adopts a live shell. It resumes nothing, because the agent already runs.
-    pub fn adopted() -> Self {
+    pub(crate) fn adopted() -> Self {
         Self { track: Track::default(), pending: PendingInput::default(), fallback_at: None }
     }
 
     /// Say whether the shell marks its prompts. If it does, it releases the input itself and the
     /// fallback is not needed.
-    pub fn shell_marks_prompts(mut self, marks: bool) -> Self {
+    pub(crate) fn shell_marks_prompts(mut self, marks: bool) -> Self {
         if marks {
             self.fallback_at = None;
         }
@@ -95,39 +95,39 @@ impl AgentPane {
     }
 
     /// The queue that the reader thread drains at the first prompt mark.
-    pub fn pending(&self) -> PendingInput {
+    pub(crate) fn pending(&self) -> PendingInput {
         self.pending.clone()
     }
 
     /// The user sent input first: drop the queued command, so it never lands in a line being typed.
-    pub fn discard_pending(&self) {
+    pub(crate) fn discard_pending(&self) {
         self.pending.take();
     }
 
     /// The record to save.
-    pub fn saved(&self) -> Option<SavedAgent> {
+    pub(crate) fn saved(&self) -> Option<SavedAgent> {
         self.track.saved()
     }
 
     /// Advance the record by one scan, taken at `taken`, and the status the shell reported before it.
-    pub fn scan(&mut self, status: Option<Status>, seen: Seen, taken: Instant) {
+    pub(crate) fn scan(&mut self, status: Option<Status>, seen: Seen, taken: Instant) {
         self.track = std::mem::take(&mut self.track).scan(status, seen, taken);
     }
 
     /// Apply a status without a scan (every frame, and the final snapshot before quit).
-    pub fn apply_status(&mut self, status: Option<Status>) {
+    pub(crate) fn apply_status(&mut self, status: Option<Status>) {
         self.track = std::mem::take(&mut self.track).status(status);
     }
 
     /// Hold a session that stdusk reopened until an agent binds to it. `crash_hint` marks a
     /// session kept after a crash.
-    pub fn restore(&mut self, session: AgentSession, crash_hint: bool) {
+    pub(crate) fn restore(&mut self, session: AgentSession, crash_hint: bool) {
         self.track = Track::restored(session, crash_hint);
     }
 
     /// Hold the session of a live handoff, whose agent keeps running. `crash_hint` says the record
     /// was kept after a crash, so no agent runs.
-    pub fn adopt(&mut self, session: AgentSession, crash_hint: bool) {
+    pub(crate) fn adopt(&mut self, session: AgentSession, crash_hint: bool) {
         self.track = Track::adopted(session, crash_hint);
     }
 
@@ -135,7 +135,7 @@ impl AgentPane {
     /// queued input if `at_prompt` says the shell itself holds the tty. Anything else on the
     /// tty (an editor, `ssh`, a blocked rc script) would receive the command, so the input is
     /// dropped instead. `None`: the wait is not over, or no input was queued.
-    pub fn fallback_input(&mut self, at_prompt: impl FnOnce() -> bool) -> Option<Fallback> {
+    pub(crate) fn fallback_input(&mut self, at_prompt: impl FnOnce() -> bool) -> Option<Fallback> {
         if Instant::now() < self.fallback_at? {
             return None;
         }
