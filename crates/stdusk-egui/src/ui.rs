@@ -51,7 +51,7 @@ pub fn ellipsize(s: &str, max: usize) -> (String, bool) {
 
 /// Map a pointer offset from the grid origin to a grid point: (buffer line, column, right-half).
 /// `top_line` is the buffer line of viewport row 0 (negative while scrolled into history).
-pub(crate) fn pos_to_cell(
+pub fn pos_to_cell(
     rel_x: f32,
     rel_y: f32,
     cw: f32,
