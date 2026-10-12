@@ -223,9 +223,14 @@ pub fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
 /// The name of a process. macOS sysinfo sets the name once and keeps it across `exec`, so a scan
 /// that caught a fork before its exec would call a `claude` process "zsh" for its whole life. The
 /// scan thread re-reads the exe path each time (see [`scan_refresh_kind`]), and its file name is
-/// the true name there. Linux re-reads the name each time, and its exe path has symlinks resolved,
-/// so its name is right as it is.
+/// the true name there. Linux sysinfo also sets the name only when it first sees the process, and
+/// its exe path has symlinks resolved (`sh` -> `dash`, a `claude` launcher -> a version folder), so
+/// there the kernel's current `comm` is read instead.
 fn proc_name(p: &sysinfo::Process) -> String {
+    #[cfg(target_os = "linux")]
+    if let Ok(comm) = std::fs::read_to_string(format!("/proc/{}/comm", p.pid())) {
+        return comm.trim_end().to_owned();
+    }
     let exe_name =
         p.exe().and_then(std::path::Path::file_name).filter(|_| cfg!(target_os = "macos"));
     exe_name.unwrap_or_else(|| p.name()).to_string_lossy().into_owned()
