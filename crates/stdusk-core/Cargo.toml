@@ -1,0 +1,9 @@
+[package]
+name = "stdusk-core"
+version = "1.9.1"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]

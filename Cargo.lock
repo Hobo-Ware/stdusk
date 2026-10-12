@@ -4096,6 +4096,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "stdusk-core"
+version = "1.9.1"
+
+[[package]]
+name = "stdusk-egui"
+version = "1.9.1"
+
+[[package]]
 name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
