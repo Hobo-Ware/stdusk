@@ -26,7 +26,7 @@ drop-down, theming, tab management) plus a first-party AI agent Tabby lacks.
 ## Module layout
 
 Modules below that hold no egui code (`terminal`, `osc`, `progress`, `modes`, `screen`, `search`,
-`links`, `shell`, `pane`, `colors`, `themes`, `procwatch`, the `agent*` files, `test_support`) live in
+`links`, `shell`, `pane`, `colors`, `themes`, `paths`, `procwatch`, the `agent*` files, `test_support`) live in
 `crates/stdusk-core/src/`. The egui renderers and widgets (`fonts`, `widgets`, `mouse`, `key_to_bytes`,
 `render_grid`, `collect_input`, `draw_tab`) live in `crates/stdusk-egui/src/`. Their one-line
 descriptions stay in the tree below.
@@ -112,7 +112,12 @@ PNG so UI changes are self-verified without a user round-trip. See `ui.md`.
 ## Platform
 
 macOS is the primary target (quake hide trick, Carbon hotkey, natural-editing keybinds
-are macOS-tuned). Keep Linux/Windows paths compiling but don't block on their polish.
+are macOS-tuned). Linux builds and passes CI (`check-linux`); the macOS job stays the required
+check. macOS-only code lives in `src/macos.rs` (stubs elsewhere) and macOS-only crates under
+`[target.'cfg(target_os = "macos")'.dependencies]`. A Linux change must keep the macOS path
+byte-for-byte as it was: gate with `cfg`, never edit the macOS arm. Linux has no tray, login
+item, self-update or default app shortcuts yet; `stdusk --toggle` replaces the global hotkey
+where none exists (Wayland). Windows is not built.
 
 ## Quick checklist
 

@@ -637,6 +637,34 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `magick compare -metric PSNR` = 120 dB (identical). Not moved yet: `AppPaths`, the restart handoff
   and the quake/macOS window glue (still app-only).
 
+## Linux support (2026-10-12, unreleased)
+- The workspace builds, lints and passes its tests on Ubuntu: the `check-linux` CI job (fmt, clippy
+  `-D warnings`, tests) runs beside the macOS `check` job, which keeps its name as the required check.
+  apt packages it needs: `libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+  libfontconfig1-dev libfreetype6-dev zsh`. Ubuntu's global zshrc runs `compinit`, which prompts on
+  an unattended runner, so the job sets `skip_global_compinit=1` in `/etc/zsh/zshenv`.
+- macOS-only crates (objc2 family, block2, winit, tray-icon) sit under a macOS target table. The tray
+  is macOS only: tray-icon needs a GTK loop on Linux. `macos.rs` keeps its no-op stubs.
+- Linux behavior: quake hide unmaps the window (no App Nap there); links and config files use
+  `xdg-open` (`links::OPENER`); notifications use `notify-send`; `XDG_CONFIG_HOME` is honored through
+  `stdusk_core::paths::config_dir()` (macOS always uses `~/.config/stdusk`; `--state-dir` clears the
+  variable); the Homebrew updater and the Dock/Space/menu-bar settings rows are hidden.
+- `stdusk --toggle` sends `toggle` over the single-instance socket so a compositor keybind can
+  show/hide the window on Wayland, where no global hotkey exists. A failed hotkey manager is no longer
+  a startup panic.
+- Input: egui reports Ctrl as `command` off macOS and folds Ctrl+C / Ctrl+X into copy/cut events.
+  `terminal_modifiers` clears the Cmd flags there and a plain Ctrl+C / Ctrl+X without a selection
+  sends ^C / ^X. Linux sysinfo never refreshes a process name after exec, so `procwatch` reads
+  `/proc/<pid>/comm`.
+- macOS unchanged: 610 tests before, 614 after (4 new, none removed); `--screenshot` before vs
+  after `magick compare -metric PSNR` = 120 dB (identical).
+- NOT verified live (no Linux machine): quake show/hide via `Visible(false)` (does the loop keep
+  ticking while unmapped on X11/Wayland), the X11 global hotkey, `--toggle` against a real session,
+  fontconfig font picking. CI proves build, lint and tests only.
+- Left: Linux default shortcuts (the `Cmd+...` defaults cannot fire; egui has no Super key), tray
+  icon (GTK thread), login item (XDG autostart), self-update, Wayland top-edge placement (needs
+  layer-shell), packaging (AppImage/.deb).
+
 ## 1.6.0 (shipped, branch merged to main) - Restart keeps the shells running
 - **Session handoff is complete** (phases 1-4). Restart no longer kills anything from a bundle: the
   predecessor binds a unix socket, `open -n -a <bundle> --args --adopt <sock>`, sends a TOML header
