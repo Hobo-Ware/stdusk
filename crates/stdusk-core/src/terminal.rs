@@ -1991,8 +1991,10 @@ mod tests {
     fn real_pty_kill_terminates_the_process_group() {
         // The shell backgrounds a long sleep in its OWN process group (non-interactive `sh -c`
         // runs jobs in-group). kill() must take the WHOLE group down, not just the shell.
-        let mut term = e2e_term("sleep 300 & sleep 60");
+        let mut term = e2e_term("sleep 300 & echo forked; sleep 60");
         let pid = poll_term(&term, PtyTerm::shell_pid).expect("no shell pid") as i32;
+        poll_term(&term, |t| grid_text(t).contains("forked").then_some(()))
+            .expect("the shell never forked the background sleep");
         // SAFETY: signal 0 only probes existence. The group is alive right after spawn.
         assert_eq!(unsafe { libc::killpg(pid, 0) }, 0, "group must be alive before kill()");
         term.kill();
@@ -3451,6 +3453,8 @@ mod tests {
                 std::fs::create_dir_all(d).unwrap();
             }
             std::os::unix::fs::symlink("/bin/sleep", bin.join("claude")).unwrap();
+            // An empty .zshrc keeps zsh's first-run wizard (Debian and Ubuntu) from waiting on input.
+            std::fs::write(fixture.home.join(".zshrc"), "").unwrap();
             // `; true` keeps the shell from exec-ing into the agent.
             let mut opts = fixture.opts(&shell, &["-c", "claude 30; true"]);
             opts.profile
