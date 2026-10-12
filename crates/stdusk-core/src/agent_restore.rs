@@ -75,9 +75,9 @@ pub enum PaneNotice {
 
 /// A saved session that did not resume, named by its directory for the toast.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Skip {
-    pub label: String,
-    pub reason: SkipReason,
+pub(crate) struct Skip {
+    pub(crate) label: String,
+    pub(crate) reason: SkipReason,
 }
 
 /// A saved session that restore reopens.
@@ -98,7 +98,7 @@ impl Resume {
 
     /// How to reopen: a crash hint is typed without Enter whatever the setting says, because a
     /// status of 137 cannot prove an out-of-memory kill (the user's own `kill -9` looks the same).
-    pub fn mode(&self) -> ResumeMode {
+    pub(crate) fn mode(&self) -> ResumeMode {
         if self.crash_hint { ResumeMode::Prefill } else { self.setting }
     }
 

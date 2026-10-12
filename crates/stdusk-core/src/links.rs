@@ -14,10 +14,10 @@ pub enum LinkKind {
 
 /// A link span within one row, in character columns (one grid cell = one char).
 #[derive(Clone, Debug, PartialEq)]
-pub struct Link {
-    pub start: usize,
-    pub len: usize,
-    pub kind: LinkKind,
+pub(crate) struct Link {
+    pub(crate) start: usize,
+    pub(crate) len: usize,
+    pub(crate) kind: LinkKind,
 }
 
 fn url_re() -> &'static Regex {
@@ -42,7 +42,7 @@ const TRAILING: [char; 10] = [')', '.', ',', ';', ':', '!', '?', ']', '}', '\'']
 
 /// Find non-overlapping links in a single row of text, left to right. URLs win over paths where
 /// they overlap (a `file://` URL also matches the path regex).
-pub fn find_in_row(text: &str) -> Vec<Link> {
+pub(crate) fn find_in_row(text: &str) -> Vec<Link> {
     let n = text.chars().count();
     let mut taken = vec![false; n];
     let mut out: Vec<Link> = Vec::new();
@@ -169,7 +169,7 @@ pub fn link_at(rows: &[String], row: usize, col: usize) -> Option<HitLink> {
 
 /// Resolve a clicked link to what should be handed to `open`: URLs pass through; paths are
 /// `~`-expanded and made absolute against `cwd`.
-pub fn resolve_target(text: &str, kind: LinkKind, cwd: Option<&str>, home: &str) -> String {
+pub(crate) fn resolve_target(text: &str, kind: LinkKind, cwd: Option<&str>, home: &str) -> String {
     match kind {
         LinkKind::Url => text.to_owned(),
         LinkKind::Ip => format!("http://{text}"),

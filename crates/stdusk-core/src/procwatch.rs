@@ -68,17 +68,17 @@ impl Cli {
 
 /// A minimal process record - the pure `detect` works on these so it needs no sysinfo in tests.
 pub struct Proc {
-    pub pid: u32,
-    pub parent: Option<u32>,
-    pub name: String,
-    pub cmd: Vec<String>,
+    pub(crate) pid: u32,
+    pub(crate) parent: Option<u32>,
+    pub(crate) name: String,
+    pub(crate) cmd: Vec<String>,
     /// Process start, seconds since the epoch. A session record older than this is stale.
-    pub start_time: u64,
+    pub(crate) start_time: u64,
     /// Where the process runs. Only the Codex processes get one (see [`codex_sessions`]), because
     /// the read costs a system call each.
-    pub cwd: Option<String>,
+    pub(crate) cwd: Option<String>,
     /// The user of the process. Only the Codex processes get one, like `cwd`.
-    pub uid: Option<sysinfo::Uid>,
+    pub(crate) uid: Option<sysinfo::Uid>,
 }
 
 /// The highest-priority known CLI running among the descendants of `root` (the tab's shell), or
@@ -248,7 +248,7 @@ fn scan_refresh_kind() -> sysinfo::ProcessRefreshKind {
 /// named for the agent. A node/bun/deno install runs a script, and that script must be either in
 /// the agent's package (`@openai/codex`, `@anthropic-ai/claude-code`) or a launcher named for the
 /// agent in a `bin` directory. A repo or folder that is merely named `codex` does not count.
-pub fn agent_kind(name: &str, cmd: &[String]) -> Option<AgentKind> {
+pub(crate) fn agent_kind(name: &str, cmd: &[String]) -> Option<AgentKind> {
     // A version or help query runs no session, and a scan that catches one under the pane's
     // shell must not read it as the pane's agent.
     if cmd.iter().skip(1).any(|arg| matches!(arg.as_str(), "--version" | "-V" | "--help" | "-h")) {
@@ -286,7 +286,7 @@ pub fn agent_kind(name: &str, cmd: &[String]) -> Option<AgentKind> {
 /// tool of the outer agent starts is deeper, so it never counts. At one depth the agent in the
 /// tty's foreground group (`foreground`, see `PtyTerm::foreground_pgid`) wins, so a stopped job
 /// does not hide the agent the user works in. Otherwise the lowest pid wins.
-pub fn nearest_agent(
+pub(crate) fn nearest_agent(
     procs: &[Proc],
     root: u32,
     foreground: Option<u32>,
@@ -320,7 +320,7 @@ pub fn nearest_agent(
 #[derive(Default)]
 pub struct AgentFiles {
     /// Claude registry files by pid, raw (the parser checks them against the process).
-    pub registry: std::collections::HashMap<u32, String>,
+    pub(crate) registry: std::collections::HashMap<u32, String>,
     /// The Codex session of each Codex process, by pid (see [`agent_codex`]).
     pub codex: std::collections::HashMap<u32, AgentSession>,
 }
@@ -376,7 +376,7 @@ fn is_codex_service(cmd: &[String]) -> bool {
 /// The live Codex processes that may hold a thread. That is every Codex process on the machine and
 /// not only the ones under a pane, because a TUI in another terminal makes threads in the same
 /// daemon. Not the daemon, and not the native child of a launcher (the launcher stands for it).
-pub fn codex_tuis(procs: &[Proc]) -> Vec<&Proc> {
+pub(crate) fn codex_tuis(procs: &[Proc]) -> Vec<&Proc> {
     let by_pid: std::collections::HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
     let is_codex = |p: &Proc| agent_kind(&p.name, &p.cmd) == Some(AgentKind::Codex);
     procs
@@ -451,7 +451,7 @@ fn read_small(path: &std::path::Path) -> Option<String> {
 
 /// Read the Claude registry file of each Claude process in `procs`. Runs on the scan thread. An
 /// unreadable or invalid file is just absent.
-pub fn read_agent_files(procs: &[Proc], claude_home: &std::path::Path) -> AgentFiles {
+pub(crate) fn read_agent_files(procs: &[Proc], claude_home: &std::path::Path) -> AgentFiles {
     let mut files = AgentFiles::default();
     for p in procs.iter().filter(|p| agent_kind(&p.name, &p.cmd) == Some(AgentKind::Claude)) {
         if let Some(text) = read_small(&claude_home.join(format!("sessions/{}.json", p.pid))) {
@@ -583,7 +583,7 @@ struct Member {
 ///
 /// Costs one process-table refresh plus a `getsid` per process (macOS sysinfo answers `session_id`
 /// with a live syscall), so this is teardown-only - never a per-frame path.
-pub fn pty_victims(leader: u32) -> Vec<u32> {
+pub(crate) fn pty_victims(leader: u32) -> Vec<u32> {
     let mut sys = sysinfo::System::new();
     sys.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::All,

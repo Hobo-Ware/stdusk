@@ -9,7 +9,7 @@ use stdusk_core::terminal::{CmdState, GridSnap, PtyTerm};
 /// Phosphor icon codepoints (font vendored in assets/Phosphor.ttf, MIT).
 pub mod icons {
     pub const PLUS: &str = "\u{E3D4}";
-    pub const MINUS: &str = "\u{E32A}";
+    pub(crate) const MINUS: &str = "\u{E32A}";
     pub const X: &str = "\u{E4F6}";
     pub const GEAR: &str = "\u{E270}";
     pub const APP_WINDOW: &str = "\u{E5DA}";
@@ -29,7 +29,7 @@ pub mod icons {
     pub const ARROW_SQUARE_OUT: &str = "\u{E5DE}"; // open-externally rows
     pub const FOLDER: &str = "\u{E24A}"; // open config folder
     pub const CHECK: &str = "\u{E182}"; // active scheme mark
-    pub const PUSH_PIN: &str = "\u{E3E2}"; // pinned-tab marker
+    pub(crate) const PUSH_PIN: &str = "\u{E3E2}"; // pinned-tab marker
     // 0.5.0 (all cmap-verified against the vendored font; codepoints from the official CSS).
     pub const IDENTIFICATION_BADGE: &str = "\u{E6F6}"; // Profiles section
     pub const KEYBOARD: &str = "\u{E2D8}"; // Hotkeys section
@@ -51,7 +51,7 @@ pub fn ellipsize(s: &str, max: usize) -> (String, bool) {
 
 /// Map a pointer offset from the grid origin to a grid point: (buffer line, column, right-half).
 /// `top_line` is the buffer line of viewport row 0 (negative while scrolled into history).
-pub fn pos_to_cell(
+pub(crate) fn pos_to_cell(
     rel_x: f32,
     rel_y: f32,
     cw: f32,
@@ -97,7 +97,7 @@ const LIGATURES: &[(&str, char)] = &[
 ];
 
 /// Find ligature spans in one row: `(start col, char len, glyph)`, non-overlapping, longest-first.
-pub fn ligature_spans(row: &[char]) -> Vec<(usize, usize, char)> {
+pub(crate) fn ligature_spans(row: &[char]) -> Vec<(usize, usize, char)> {
     let mut out = Vec::new();
     let mut i = 0;
     'outer: while i < row.len() {
@@ -379,7 +379,7 @@ pub const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (flush u
 pub const WINDOW_TAB_H_EXTRA: f32 = 0.0;
 
 #[cfg(not(target_os = "macos"))]
-pub const WINDOW_TAB_H_EXTRA: f32 = 0.0;
+pub(crate) const WINDOW_TAB_H_EXTRA: f32 = 0.0;
 
 pub const TAB_FIXED_W: f32 = 200.0; // fixed-mode standard width (Tabby-like)
 

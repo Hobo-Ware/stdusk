@@ -39,11 +39,11 @@ pub fn theme() -> Theme {
 
 // ---- terminal cell mapping ----
 
-pub fn is_default_bg(c: Color) -> bool {
+pub(crate) fn is_default_bg(c: Color) -> bool {
     matches!(c, Color::Named(NamedColor::Background))
 }
 
-pub fn to_color32_in(t: &Theme, c: Color) -> Color32 {
+pub(crate) fn to_color32_in(t: &Theme, c: Color) -> Color32 {
     match c {
         Color::Spec(rgb) => Color32::from_rgb(rgb.r, rgb.g, rgb.b),
         Color::Indexed(i) => indexed(t, i),
@@ -53,7 +53,7 @@ pub fn to_color32_in(t: &Theme, c: Color) -> Color32 {
 
 /// Foreground for a cell: when `bold` (drawBoldTextInBrightColors), promote the 8 base ANSI
 /// colors to their bright counterparts; everything else is unchanged.
-pub fn cell_fg_in(t: &Theme, c: Color, bold: bool) -> Color32 {
+pub(crate) fn cell_fg_in(t: &Theme, c: Color, bold: bool) -> Color32 {
     use NamedColor::{Black, Blue, Cyan, Green, Magenta, Red, White, Yellow};
     if !bold {
         return to_color32_in(t, c);
@@ -118,7 +118,7 @@ fn indexed(t: &Theme, i: u8) -> Color32 {
 /// Color reported for an OSC 4;n / 10 / 11 / 12 palette QUERY, from the given theme. Index
 /// space is alacritty's: 0-255 palette, then `NamedColor::Foreground/Background/Cursor`
 /// (256/257/258).
-pub fn query_color_in(t: &Theme, index: usize) -> Color32 {
+pub(crate) fn query_color_in(t: &Theme, index: usize) -> Color32 {
     match index {
         0..=15 => t.ansi[index],
         16..=255 => indexed(t, index as u8),
@@ -129,7 +129,7 @@ pub fn query_color_in(t: &Theme, index: usize) -> Color32 {
 }
 
 /// Live-theme `query_color_in`: queries answer with whatever theme is active at reply time.
-pub fn query_color(index: usize) -> Color32 {
+pub(crate) fn query_color(index: usize) -> Color32 {
     query_color_in(&theme(), index)
 }
 
@@ -152,7 +152,7 @@ pub fn dim() -> Color32 {
     legible_dim(&theme())
 }
 /// A theme's dim text color, nudged (only when needed) to at least 3:1 against its bg.
-pub fn legible_dim(t: &Theme) -> Color32 {
+pub(crate) fn legible_dim(t: &Theme) -> Color32 {
     ensure_contrast(t.ansi[8], t.bg, 3.0)
 }
 pub fn accent() -> Color32 {
@@ -180,10 +180,10 @@ pub fn theme_is_dark(t: &Theme) -> bool {
 }
 /// `COLORFGBG` env advertisement (`fg;bg` ANSI indices): the pre-OSC-11 way CLIs guess light
 /// vs dark. Reads the live theme; spawn snapshots it into the child's env.
-pub fn colorfgbg() -> &'static str {
+pub(crate) fn colorfgbg() -> &'static str {
     colorfgbg_for(is_dark())
 }
-pub fn colorfgbg_for(dark: bool) -> &'static str {
+pub(crate) fn colorfgbg_for(dark: bool) -> &'static str {
     if dark { "15;0" } else { "0;15" }
 }
 pub fn elevated() -> Color32 {
@@ -246,7 +246,7 @@ fn luminance(c: Color32) -> f32 {
 }
 
 /// WCAG contrast ratio between two colors: 1 (identical) ..= 21 (black on white).
-pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+pub(crate) fn contrast_ratio(a: Color32, b: Color32) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
@@ -366,7 +366,7 @@ pub fn one_half_dark() -> Theme {
     }
 }
 
-pub fn one_half_light() -> Theme {
+pub(crate) fn one_half_light() -> Theme {
     Theme {
         bg: rgb(0xfa, 0xfa, 0xfa),
         fg: rgb(0x38, 0x3a, 0x42),
@@ -392,7 +392,7 @@ pub fn one_half_light() -> Theme {
     }
 }
 
-pub fn dracula() -> Theme {
+pub(crate) fn dracula() -> Theme {
     Theme {
         bg: rgb(0x28, 0x2a, 0x36),
         fg: rgb(0xf8, 0xf8, 0xf2),
@@ -418,7 +418,7 @@ pub fn dracula() -> Theme {
     }
 }
 
-pub fn tokyo_night() -> Theme {
+pub(crate) fn tokyo_night() -> Theme {
     Theme {
         bg: rgb(0x1a, 0x1b, 0x26),
         fg: rgb(0xc0, 0xca, 0xf5),

@@ -7,41 +7,48 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-stdusk-core = { path = "crates/stdusk-core" }
-stdusk-egui = { path = "crates/stdusk-egui" }
-alacritty_terminal = "0.26.0"
+stdusk-core.workspace = true
+stdusk-egui.workspace = true
 anyhow = "1.0.104" # update check + brew upgrade: several error sources under one `?`
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] } # get_image() for clipboard image paste
-base64 = "0.22.1"
+base64.workspace = true
 block2 = "0.6" # NSEvent local monitor block (Cmd+V image-paste hook on macOS)
 eframe = { version = "0.35.0", features = ["glow", "__screenshot"] }
-egui = "0.35.0"
-font-kit = "0.14.3" # appearance.font family -> file bytes via the macOS core-text source
+egui.workspace = true
 global-hotkey = "0.8.0"
-libc = "0.2" # killpg on tab/app close: SIGTERM+SIGKILL the shell's process group (kill orphans)
+libc.workspace = true # killpg on tab/app close: SIGTERM+SIGKILL the shell's process group (kill orphans)
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] } # Open at login: SMAppService main-app login item
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSString", "NSUserDefaults"] } # AppleInterfaceStyle: the OS light/dark answer at startup
-portable-pty = "0.9.0"
-regex = "1.13.0"
-resvg = { version = "0.45", default-features = false } # CLI-badge brand SVGs -> egui textures (paths only; no text/fonts needed)
-rustix = { version = "1.1.4", features = ["net", "termios"] } # session handoff: SCM_RIGHTS fd passing + tcsetwinsize, both SAFE (the crate forbids unsafe)
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.151"
-sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
-toml = "1.1.3"
+rustix.workspace = true # session handoff: SCM_RIGHTS fd passing + tcsetwinsize, both SAFE (the crate forbids unsafe)
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+toml.workspace = true
 tray-icon = "0.24.1"
 ureq = "3.4.2" # update check: one redirect read from github.com/<repo>/releases/latest
 winit = "0.30" # macOS activation policy (accessory app) via eframe's event_loop_builder hook
 
 [dev-dependencies]
-stdusk-core = { path = "crates/stdusk-core", features = ["test-support"] }
-proptest = "1.8.0"
+stdusk-core = { workspace = true, features = ["test-support"] }
 
 [workspace]
 members = [".", "crates/stdusk-core", "crates/stdusk-egui"]
 resolver = "3"
+
+[workspace.dependencies]
+stdusk-core = { path = "crates/stdusk-core" }
+stdusk-egui = { path = "crates/stdusk-egui" }
+base64 = "0.22.1"
+egui = "0.35.0"
+libc = "0.2"
+proptest = "1.8.0"
+rustix = { version = "1.1.4", features = ["net", "termios"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.151"
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
+toml = "1.1.3"
 
 [workspace.lints.rust]
 unsafe_code = "deny" # justified local #[allow]s only: main's edition-2024 set_var + terminal's killpg FFI
@@ -63,3 +70,4 @@ float_cmp = "allow"                # exact != 0.0 / defaults comparisons are int
 similar_names = "allow"            # bel/st, cw/ch, rows/cols are the domain vocabulary
 too_many_lines = "allow"           # the eframe render loop is legitimately long
 too_many_arguments = "allow"       # render_grid threads ui + rect + term + metrics per pane
+must_use_candidate = "allow"       # the library surface has no must-use contract; the app is its only caller

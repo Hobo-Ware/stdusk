@@ -142,7 +142,7 @@ fn digit(key: egui::Key) -> Option<u8> {
 }
 
 /// Control code for `Ctrl+<letter>` (Ctrl-A = 1 .. Ctrl-Z = 26), or `None` for non-letters.
-pub fn ctrl_letter(key: egui::Key) -> Option<u8> {
+pub(crate) fn ctrl_letter(key: egui::Key) -> Option<u8> {
     use egui::Key;
     let n = match key {
         Key::A => 1,

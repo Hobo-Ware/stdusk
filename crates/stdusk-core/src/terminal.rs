@@ -42,7 +42,7 @@ pub enum CmdState {
 /// Map an OSC 133 exit code to a tab state. A signal termination (128+n, e.g. 130 = Ctrl+C /
 /// SIGINT, 143 = SIGTERM) means the user cancelled - that's not an error, so clear the indicator
 /// instead of flagging red.
-pub fn cmd_from_exit(code: Option<i32>) -> CmdState {
+pub(crate) fn cmd_from_exit(code: Option<i32>) -> CmdState {
     match code.unwrap_or(0) {
         0 => CmdState::Ok,
         129..=159 => CmdState::Idle,
@@ -151,7 +151,7 @@ pub struct CellSnap {
 /// Map a grid cell's char + flags to what the renderer draws: spacer cells (the second column
 /// of a wide char, incl. the leading spacer before a line-wrapped one) emit no glyph ('\0');
 /// a `WIDE_CHAR` cell keeps its glyph and is marked wide so it can span two cells.
-pub fn snap_glyph(c: char, flags: Flags) -> (char, bool) {
+pub(crate) fn snap_glyph(c: char, flags: Flags) -> (char, bool) {
     if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
         ('\0', false)
     } else {
@@ -171,27 +171,27 @@ pub struct GridSnap {
 /// Per-tab observable state, written by the reader thread, read by the UI.
 #[allow(clippy::struct_excessive_bools)] // independent per-pane flags, not a mode
 #[derive(Default)]
-pub struct TabState {
-    pub progress: Progress,
-    pub cwd: Option<String>,
-    pub clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
-    pub cmd: CmdState,             // OSC 133 last-command state (tab dot)
-    pub bell: bool,                // BEL rung since last consumed (drives the visual flash)
-    pub activity: bool,            // output since last consumed (notify-on-activity)
+pub(crate) struct TabState {
+    pub(crate) progress: Progress,
+    pub(crate) cwd: Option<String>,
+    pub(crate) clipboard: Option<String>, // OSC 52 copy request, consumed by the UI thread
+    pub(crate) cmd: CmdState,             // OSC 133 last-command state (tab dot)
+    pub(crate) bell: bool,                // BEL rung since last consumed (drives the visual flash)
+    pub(crate) activity: bool,            // output since last consumed (notify-on-activity)
     /// Any pty output at all since this `PtyTerm` was built - never cleared, unlike `activity`.
     /// The adopt redraw nudger's stop condition: an adopted pane starts with an empty grid, and
     /// this is what says the shell has actually painted something into it.
-    pub saw_output: bool,
+    pub(crate) saw_output: bool,
     /// Output chunks applied to the grid so far (never reset). Typed input waits on it for the echo.
-    pub output_gen: u64,
+    pub(crate) output_gen: u64,
     /// The first status stdusk's own shell hook reported (OSC 133 `D` with the own mark) since the
     /// UI last took one. Only the first after the agent decides its record, so later ones are not
     /// kept.
-    pub first_status: Option<Status>,
-    pub done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
-    pub exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
-    pub title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
-    pub theme_reports: bool,
+    pub(crate) first_status: Option<Status>,
+    pub(crate) done_notify: Option<i32>, // a long command just finished (exit code); UI consumes it
+    pub(crate) exited: Option<ExitInfo>, // the shell exited (pty EOF + reaped); UI applies on_exit
+    pub(crate) title_osc: Option<String>, // OSC 0/2 window title (None = unset / reset)
+    pub(crate) theme_reports: bool,
 }
 
 /// Grid sizing. History (scrollback) comes from `Config::scrolling_history`, not here.

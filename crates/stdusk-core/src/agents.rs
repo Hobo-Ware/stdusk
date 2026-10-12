@@ -63,13 +63,13 @@ impl SessionId {
         ok.then(|| Self(text.to_owned()))
     }
 
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 
     /// The creation time, in ms since the epoch, of a UUIDv7 id. Codex thread ids are v7: the first
     /// 48 bits are the time. Any other version has no time, so it gives `None`.
-    pub fn v7_time_ms(&self) -> Option<u64> {
+    pub(crate) fn v7_time_ms(&self) -> Option<u64> {
         let text = self.as_str();
         if text.as_bytes()[14] != b'7' {
             return None;
@@ -91,7 +91,7 @@ pub struct AgentSession {
 
 impl AgentSession {
     /// `crash_hint` marks a record kept only because its agent died of a crash signal.
-    pub fn to_saved(&self, crash_hint: bool) -> SavedAgent {
+    pub(crate) fn to_saved(&self, crash_hint: bool) -> SavedAgent {
         SavedAgent {
             crashed: crash_hint,
             kind: self.kind,
@@ -113,7 +113,7 @@ impl AgentSession {
 }
 
 /// A path string that is safe to keep: absolute, non-empty, no control characters.
-pub fn plain_abs_path(text: &str) -> Option<String> {
+pub(crate) fn plain_abs_path(text: &str) -> Option<String> {
     (Path::new(text).is_absolute() && !text.chars().any(char::is_control)).then(|| text.to_owned())
 }
 
@@ -126,7 +126,11 @@ pub fn plain_abs_path(text: &str) -> Option<String> {
 ///
 /// A file of this process was written after it started, so its second is at least the floored
 /// start second, and a stale file of an older process with the same pid is older.
-pub fn parse_claude_registry(json: &str, pid: u32, proc_start_secs: u64) -> Option<AgentSession> {
+pub(crate) fn parse_claude_registry(
+    json: &str,
+    pid: u32,
+    proc_start_secs: u64,
+) -> Option<AgentSession> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     if v.get("pid")?.as_u64()? != u64::from(pid) {
         return None;
@@ -148,16 +152,16 @@ pub fn parse_claude_registry(json: &str, pid: u32, proc_start_secs: u64) -> Opti
 
 /// One process that may hold the pane's Claude session: the nearest agent, or its direct child of
 /// the same kind. A launcher can run the native `claude` as a child, and the registry names it.
-pub struct Candidate<'a> {
-    pub pid: u32,
-    pub start_secs: u64,
+pub(crate) struct Candidate<'a> {
+    pub(crate) pid: u32,
+    pub(crate) start_secs: u64,
     /// The raw `~/.claude/sessions/<pid>.json`, if the scan found one.
-    pub registry_json: Option<&'a str>,
+    pub(crate) registry_json: Option<&'a str>,
 }
 
 /// The Claude session of a pane: the registry file of the first process in `family` that has a
 /// valid one. The registry is the only source, so it names the session.
-pub fn claude_session(family: &[Candidate]) -> Option<AgentSession> {
+pub(crate) fn claude_session(family: &[Candidate]) -> Option<AgentSession> {
     family.iter().find_map(|c| parse_claude_registry(c.registry_json?, c.pid, c.start_secs))
 }
 
@@ -180,7 +184,7 @@ pub enum Seen {
 
 /// The first session id in a command line. `claude --resume <id>`, `codex resume <id>` and
 /// `node codex.js resume <id>` all put it there. The form `--resume=<id>` counts too.
-pub fn argv_session(cmd: &[String]) -> Option<SessionId> {
+pub(crate) fn argv_session(cmd: &[String]) -> Option<SessionId> {
     cmd.iter().find_map(|arg| SessionId::parse(arg.rsplit('=').next().unwrap_or(arg)))
 }
 

@@ -68,13 +68,13 @@ pub fn text_field(
 }
 
 /// Clamped integer parse for `int_field`: digits only, empty -> None, clamped into range.
-pub fn parse_int_clamped(s: &str, min: usize, max: usize) -> Option<usize> {
+pub(crate) fn parse_int_clamped(s: &str, min: usize, max: usize) -> Option<usize> {
     let digits: String = s.chars().filter(char::is_ascii_digit).collect();
     digits.parse::<usize>().ok().map(|v| v.clamp(min, max))
 }
 
 /// One `num_field` stepper press: `up` adds `step`, else subtracts; saturating and clamped.
-pub fn step_int(v: usize, step: usize, up: bool, min: usize, max: usize) -> usize {
+pub(crate) fn step_int(v: usize, step: usize, up: bool, min: usize, max: usize) -> usize {
     if up { v.saturating_add(step).min(max) } else { v.saturating_sub(step).max(min) }
 }
 

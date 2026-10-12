@@ -7,10 +7,10 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-egui = "0.35.0"
+egui.workspace = true
 font-kit = "0.14.3"
 resvg = { version = "0.45", default-features = false }
-stdusk-core = { path = "../stdusk-core" }
+stdusk-core.workspace = true
 
 [dev-dependencies]
-stdusk-core = { path = "../stdusk-core", features = ["test-support"] }
+stdusk-core = { workspace = true, features = ["test-support"] }
