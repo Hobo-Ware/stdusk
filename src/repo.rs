@@ -6,10 +6,10 @@ use std::path::{Component, Path, PathBuf};
 
 use eframe::egui;
 
-use crate::progress::Progress;
-use crate::terminal::CmdState;
 use crate::ui::{self, icons};
 use crate::{Stdusk, colors, tabs};
+use stdusk_core::progress::Progress;
+use stdusk_core::terminal::CmdState;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Group {
@@ -344,7 +344,7 @@ fn chip_picker(
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip);
     let mut picked = None;
     egui::Popup::menu(&resp).show(|ui| {
-        crate::widgets::style_menu(ui);
+        stdusk_egui::widgets::style_menu(ui);
         ui.set_min_width(280.0);
         for (i, e) in entries.iter().enumerate() {
             if repo_row(ui, i, e, &e.group == cur).clicked() {

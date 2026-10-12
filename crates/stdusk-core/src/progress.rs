@@ -5,7 +5,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub(crate) enum Progress {
+pub enum Progress {
     #[default]
     None,
     Normal(u8),
@@ -18,19 +18,19 @@ pub(crate) enum Progress {
 static PCT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(^|[^\d])(\d+(\.\d+)?)%([^\d]|$)").unwrap());
 
-pub(crate) struct ProgressScanner {
+pub struct ProgressScanner {
     enabled: bool,
     carry: String, // trailing digits carried so a % split across chunks still matches
 }
 
 impl ProgressScanner {
-    pub(crate) fn new(enabled: bool) -> Self {
+    pub fn new(enabled: bool) -> Self {
         Self { enabled, carry: String::new() }
     }
 
     /// One decision per chunk (Tabby semantics): a chunk with a valid percentage sets it,
     /// any other chunk clears to None. Suppressed while the alt-screen is active.
-    pub(crate) fn feed(&mut self, chunk: &str, alt_screen: bool) -> Progress {
+    pub fn feed(&mut self, chunk: &str, alt_screen: bool) -> Progress {
         if !self.enabled {
             self.carry.clear();
             return Progress::None;

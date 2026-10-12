@@ -2,16 +2,21 @@
 //! all color accessors: terminal cell mapping + derived UI-chrome colors. Everything reads
 //! the active theme, so swapping themes recolors the whole app.
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
-use eframe::egui::Color32;
+use ecolor::Color32;
+
+/// WCAG-AA legibility floor for the scheme-browser previews. The live grid nudges glyphs to the
+/// user's `terminal.minimum_contrast` (default 4); the browser applies THIS floor unconditionally
+/// so every scheme is readable while you're picking one, regardless of the live setting.
+pub const PREVIEW_MIN_CONTRAST: f32 = 4.5;
 use std::sync::{LazyLock, RwLock};
 
 /// A full theme: default bg/fg/cursor + the 16 ANSI colors. UI-chrome colors are derived.
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) struct Theme {
-    pub(crate) bg: Color32,
-    pub(crate) fg: Color32,
-    pub(crate) cursor: Color32,
-    pub(crate) ansi: [Color32; 16],
+pub struct Theme {
+    pub bg: Color32,
+    pub fg: Color32,
+    pub cursor: Color32,
+    pub ansi: [Color32; 16],
 }
 
 // Swappable at runtime (e.g. follow-OS light/dark), so read/write behind a lock. `Theme` is `Copy`
@@ -19,26 +24,26 @@ pub(crate) struct Theme {
 static THEME: LazyLock<RwLock<Theme>> = LazyLock::new(|| RwLock::new(one_half_dark()));
 
 /// Set the active theme at startup.
-pub(crate) fn init(theme: Theme) {
+pub fn init(theme: Theme) {
     set(theme);
 }
 
 /// Swap the active theme (recolors the whole app on the next repaint).
-pub(crate) fn set(theme: Theme) {
+pub fn set(theme: Theme) {
     *THEME.write().unwrap() = theme;
 }
 
-pub(crate) fn theme() -> Theme {
+pub fn theme() -> Theme {
     *THEME.read().unwrap()
 }
 
 // ---- terminal cell mapping ----
 
-pub(crate) fn is_default_bg(c: Color) -> bool {
+pub fn is_default_bg(c: Color) -> bool {
     matches!(c, Color::Named(NamedColor::Background))
 }
 
-pub(crate) fn to_color32_in(t: &Theme, c: Color) -> Color32 {
+pub fn to_color32_in(t: &Theme, c: Color) -> Color32 {
     match c {
         Color::Spec(rgb) => Color32::from_rgb(rgb.r, rgb.g, rgb.b),
         Color::Indexed(i) => indexed(t, i),
@@ -48,7 +53,7 @@ pub(crate) fn to_color32_in(t: &Theme, c: Color) -> Color32 {
 
 /// Foreground for a cell: when `bold` (drawBoldTextInBrightColors), promote the 8 base ANSI
 /// colors to their bright counterparts; everything else is unchanged.
-pub(crate) fn cell_fg_in(t: &Theme, c: Color, bold: bool) -> Color32 {
+pub fn cell_fg_in(t: &Theme, c: Color, bold: bool) -> Color32 {
     use NamedColor::{Black, Blue, Cyan, Green, Magenta, Red, White, Yellow};
     if !bold {
         return to_color32_in(t, c);
@@ -113,7 +118,7 @@ fn indexed(t: &Theme, i: u8) -> Color32 {
 /// Color reported for an OSC 4;n / 10 / 11 / 12 palette QUERY, from the given theme. Index
 /// space is alacritty's: 0-255 palette, then `NamedColor::Foreground/Background/Cursor`
 /// (256/257/258).
-pub(crate) fn query_color_in(t: &Theme, index: usize) -> Color32 {
+pub fn query_color_in(t: &Theme, index: usize) -> Color32 {
     match index {
         0..=15 => t.ansi[index],
         16..=255 => indexed(t, index as u8),
@@ -124,67 +129,67 @@ pub(crate) fn query_color_in(t: &Theme, index: usize) -> Color32 {
 }
 
 /// Live-theme `query_color_in`: queries answer with whatever theme is active at reply time.
-pub(crate) fn query_color(index: usize) -> Color32 {
+pub fn query_color(index: usize) -> Color32 {
     query_color_in(&theme(), index)
 }
 
 // ---- derived UI-chrome colors (everything keyed off the theme) ----
 
-pub(crate) fn bg() -> Color32 {
+pub fn bg() -> Color32 {
     theme().bg
 }
-pub(crate) fn fg() -> Color32 {
+pub fn fg() -> Color32 {
     theme().fg
 }
-pub(crate) fn cursor() -> Color32 {
+pub fn cursor() -> Color32 {
     theme().cursor
 }
 /// Dim chrome/UI text. NOT raw `ansi[8]`: the 0.5.0 a11y audit found 37% of the community
 /// pack has ansi[8] nearly invisible against bg (64% have some ANSI color at ratio ~1.0), so
 /// chrome text gets a 3:1 WCAG floor. Terminal CELLS stay theme-exact - that fidelity knob is
 /// `terminal.minimum_contrast`.
-pub(crate) fn dim() -> Color32 {
+pub fn dim() -> Color32 {
     legible_dim(&theme())
 }
 /// A theme's dim text color, nudged (only when needed) to at least 3:1 against its bg.
-pub(crate) fn legible_dim(t: &Theme) -> Color32 {
+pub fn legible_dim(t: &Theme) -> Color32 {
     ensure_contrast(t.ansi[8], t.bg, 3.0)
 }
-pub(crate) fn accent() -> Color32 {
+pub fn accent() -> Color32 {
     theme().ansi[4]
 }
-pub(crate) fn red() -> Color32 {
+pub fn red() -> Color32 {
     theme().ansi[1]
 }
-pub(crate) fn green() -> Color32 {
+pub fn green() -> Color32 {
     theme().ansi[2]
 }
-pub(crate) fn yellow() -> Color32 {
+pub fn yellow() -> Color32 {
     theme().ansi[3]
 }
 /// True when the theme background is dark (drives the direction of the derived chrome shades, so
 /// the tab strip / active tab / borders read correctly on both light and dark themes).
-pub(crate) fn is_dark() -> bool {
+pub fn is_dark() -> bool {
     theme_is_dark(&theme())
 }
 /// True when a THEME's background is dark (perceived luminance, same rule the chrome shades
 /// use). Also classifies schemes for the browser's All/Light/Dark filter.
-pub(crate) fn theme_is_dark(t: &Theme) -> bool {
+pub fn theme_is_dark(t: &Theme) -> bool {
     let c = t.bg;
     0.299 * f32::from(c.r()) + 0.587 * f32::from(c.g()) + 0.114 * f32::from(c.b()) < 128.0
 }
 /// `COLORFGBG` env advertisement (`fg;bg` ANSI indices): the pre-OSC-11 way CLIs guess light
 /// vs dark. Reads the live theme; spawn snapshots it into the child's env.
-pub(crate) fn colorfgbg() -> &'static str {
+pub fn colorfgbg() -> &'static str {
     colorfgbg_for(is_dark())
 }
-pub(crate) fn colorfgbg_for(dark: bool) -> &'static str {
+pub fn colorfgbg_for(dark: bool) -> &'static str {
     if dark { "15;0" } else { "0;15" }
 }
-pub(crate) fn elevated() -> Color32 {
+pub fn elevated() -> Color32 {
     shade(theme().bg, if is_dark() { 1.28 } else { 0.90 }) // active-tab bg, set off from the bar
 }
-pub(crate) fn titlebar() -> Color32 {
+pub fn titlebar() -> Color32 {
     titlebar_in(&theme())
 }
 /// Tab-bar strip, separated from the body.
@@ -193,7 +198,7 @@ fn titlebar_in(t: &Theme) -> Color32 {
 }
 /// Active-tab fill, lifted above the strip on both theme kinds: toward fg on dark (floored,
 /// since dim-fg schemes barely move), toward white on light.
-pub(crate) fn active_tab() -> Color32 {
+pub fn active_tab() -> Color32 {
     active_tab_in(&theme())
 }
 fn active_tab_in(t: &Theme) -> Color32 {
@@ -204,27 +209,27 @@ fn active_tab_in(t: &Theme) -> Color32 {
     }
 }
 const ACTIVE_TAB_MIN_CONTRAST: f32 = 1.25;
-pub(crate) fn border() -> Color32 {
+pub fn border() -> Color32 {
     shade(theme().bg, if is_dark() { 1.6 } else { 0.78 }) // hairline divider
 }
 /// Subtle hover-highlight fill for icon buttons.
-pub(crate) fn hover() -> Color32 {
+pub fn hover() -> Color32 {
     let e = elevated();
     Color32::from_rgba_unmultiplied(e.r(), e.g(), e.b(), 160)
 }
 /// Hover fill for rows on the `elevated` menu/popup surface. `hover()` is elevated-at-alpha,
 /// which disappears when painted OVER elevated - this is one visible step further instead.
-pub(crate) fn hover_elevated() -> Color32 {
+pub fn hover_elevated() -> Color32 {
     shade(theme().bg, if is_dark() { 1.75 } else { 0.84 })
 }
 /// Translucent fill painted over selected cells.
-pub(crate) fn selection() -> Color32 {
+pub fn selection() -> Color32 {
     let a = accent();
     Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 90)
 }
 /// Dim fill for every (non-current) search match; the current one keeps the brighter
 /// selection fill on top.
-pub(crate) fn search_match() -> Color32 {
+pub fn search_match() -> Color32 {
     let a = accent();
     Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 45)
 }
@@ -241,7 +246,7 @@ fn luminance(c: Color32) -> f32 {
 }
 
 /// WCAG contrast ratio between two colors: 1 (identical) ..= 21 (black on white).
-pub(crate) fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
@@ -250,7 +255,7 @@ pub(crate) fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 /// the WCAG `ratio` against `bg`. Ratio <= 1 (or an already-passing pair) returns `fg`
 /// unchanged; an unreachable ratio returns the pure target. Stepped blend (not a bisection):
 /// contrast isn't monotonic when the blend crosses the background's luminance.
-pub(crate) fn ensure_contrast(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
+pub fn ensure_contrast(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
     let ratio = ratio.clamp(1.0, 21.0);
     if contrast_ratio(fg, bg) >= ratio {
         return fg;
@@ -270,17 +275,17 @@ pub(crate) fn ensure_contrast(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
 }
 /// `ensure_contrast` over cells in paint order: a row is mostly runs of one color pair, so the
 /// WCAG search runs once per run instead of once per cell.
-pub(crate) struct ContrastMemo {
+pub struct ContrastMemo {
     ratio: f32,
     last: Option<(Color32, Color32, Color32)>,
 }
 
 impl ContrastMemo {
-    pub(crate) fn new(ratio: f32) -> Self {
+    pub fn new(ratio: f32) -> Self {
         Self { ratio, last: None }
     }
 
-    pub(crate) fn ensure(&mut self, fg: Color32, bg: Color32) -> Color32 {
+    pub fn ensure(&mut self, fg: Color32, bg: Color32) -> Color32 {
         if let Some((f, b, out)) = self.last
             && (f, b) == (fg, bg)
         {
@@ -295,14 +300,14 @@ impl ContrastMemo {
 /// `fg * 0.66` multiply because a multiply darkens - on a LIGHT theme that INCREASES contrast
 /// and dim text would read bolder than normal text. Applied after the contrast floor so the
 /// floor can't cancel the fade (the floor guarantees the undimmed color is readable).
-pub(crate) fn faint(fg: Color32, bg: Color32) -> Color32 {
+pub fn faint(fg: Color32, bg: Color32) -> Color32 {
     let l = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * 0.45).round() as u8;
     Color32::from_rgb(l(fg.r(), bg.r()), l(fg.g(), bg.g()), l(fg.b(), bg.b()))
 }
 
 /// Swatches offered by the right-click Color menu - a curated vivid palette (2 rows of 6),
 /// theme-independent so tab underlines read cleanly on any background.
-pub(crate) fn tab_colors() -> [Color32; 12] {
+pub fn tab_colors() -> [Color32; 12] {
     [
         rgb(0xe0, 0x6c, 0x75), // red
         rgb(0xff, 0x9e, 0x64), // orange
@@ -335,7 +340,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-pub(crate) fn one_half_dark() -> Theme {
+pub fn one_half_dark() -> Theme {
     Theme {
         bg: rgb(0x28, 0x2c, 0x34),
         fg: rgb(0xdc, 0xdf, 0xe4),
@@ -361,7 +366,7 @@ pub(crate) fn one_half_dark() -> Theme {
     }
 }
 
-pub(crate) fn one_half_light() -> Theme {
+pub fn one_half_light() -> Theme {
     Theme {
         bg: rgb(0xfa, 0xfa, 0xfa),
         fg: rgb(0x38, 0x3a, 0x42),
@@ -387,7 +392,7 @@ pub(crate) fn one_half_light() -> Theme {
     }
 }
 
-pub(crate) fn dracula() -> Theme {
+pub fn dracula() -> Theme {
     Theme {
         bg: rgb(0x28, 0x2a, 0x36),
         fg: rgb(0xf8, 0xf8, 0xf2),
@@ -413,7 +418,7 @@ pub(crate) fn dracula() -> Theme {
     }
 }
 
-pub(crate) fn tokyo_night() -> Theme {
+pub fn tokyo_night() -> Theme {
     Theme {
         bg: rgb(0x1a, 0x1b, 0x26),
         fg: rgb(0xc0, 0xca, 0xf5),
@@ -440,7 +445,7 @@ pub(crate) fn tokyo_night() -> Theme {
 }
 
 /// Look up a built-in theme by config name (falls back to OneHalfDark).
-pub(crate) fn by_name(name: &str) -> Theme {
+pub fn by_name(name: &str) -> Theme {
     let norm = name.to_ascii_lowercase().replace([' ', '_'], "-");
     match norm.as_str() {
         // Every spelling of a built-in collapses to the one canonical built-in (1.4.3 de-dup):
@@ -555,7 +560,7 @@ mod tests {
         // The scheme-browser preview floors ink at PREVIEW_MIN_CONTRAST (4.5). Prove that makes
         // the default text (fg) AND every ANSI colour readable on EVERY scheme's own bg - so no
         // scheme (blazer/chalkboard/dotgov/...) previews as unreadable, no data mangling needed.
-        let floor = crate::settings::PREVIEW_MIN_CONTRAST;
+        let floor = PREVIEW_MIN_CONTRAST;
         for (name, t) in crate::themes::all_schemes() {
             let fg_r = contrast_ratio(ensure_contrast(t.fg, t.bg, floor), t.bg);
             assert!(fg_r >= floor - 0.1, "{name}: fg floored to {fg_r}, want {floor}");

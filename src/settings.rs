@@ -7,11 +7,11 @@
 
 use eframe::egui;
 
-use crate::colors::{self, Theme};
 use crate::ui::{self, icons};
 use crate::update;
 use crate::updater::{Status, Updater};
 use crate::{Stdusk, config, sync, tabs, terminal, themes};
+use stdusk_core::colors::{self, PREVIEW_MIN_CONTRAST, Theme};
 
 /// Left nav width (outer, incl. margins).
 const NAV_W: f32 = 184.0;
@@ -227,11 +227,6 @@ pub(crate) fn ink_color(t: &Theme, ink: Ink) -> egui::Color32 {
 pub(crate) fn normalize_name(name: &str) -> String {
     name.to_ascii_lowercase().replace([' ', '_'], "-")
 }
-
-/// WCAG-AA legibility floor for the scheme-browser previews. The live grid nudges glyphs to the
-/// user's `terminal.minimum_contrast` (default 4); the browser applies THIS floor unconditionally
-/// so every scheme is readable while you're picking one, regardless of the live setting.
-pub(crate) const PREVIEW_MIN_CONTRAST: f32 = 4.5;
 
 /// Indices of schemes whose name contains `query` (case-insensitive); all when empty.
 pub(crate) fn filter_schemes(all: &[(String, Theme)], query: &str) -> Vec<usize> {
@@ -478,7 +473,7 @@ fn row_new_tabs(ui: &mut egui::Ui, name: &str, desc: &str, control: impl FnOnce(
 
 /// A fraction slider displayed as a live percentage chip ("85%"). Returns true while changed.
 fn pct_slider(ui: &mut egui::Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
-    crate::widgets::slider(ui, value, range, |v| format!("{:.0}%", v * 100.0)).changed()
+    stdusk_egui::widgets::slider(ui, value, range, |v| format!("{:.0}%", v * 100.0)).changed()
 }
 
 /// A link-style row (About section): icon + title + dim subtitle, whole row clickable.
@@ -511,7 +506,7 @@ fn link_row(ui: &mut egui::Ui, icon: &str, name: &str, desc: &str) -> egui::Resp
         egui::FontId::proportional(11.0),
         colors::dim(),
     );
-    crate::widgets::focus_ring(ui, &resp, 9.0);
+    stdusk_egui::widgets::focus_ring(ui, &resp, 9.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -547,7 +542,7 @@ fn nav_row(ui: &mut egui::Ui, section: Section, selected: bool) -> egui::Respons
         egui::FontId::proportional(14.0),
         text_col,
     );
-    crate::widgets::focus_ring(ui, &resp, 8.0);
+    stdusk_egui::widgets::focus_ring(ui, &resp, 8.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -712,7 +707,7 @@ fn scheme_row(ui: &mut egui::Ui, name: &str, t: &Theme, active: bool) -> egui::R
         );
         sx += sw + gap;
     }
-    crate::widgets::focus_ring(ui, &resp, 9.0);
+    stdusk_egui::widgets::focus_ring(ui, &resp, 9.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -786,7 +781,7 @@ fn searchable_dropdown(
         egui::FontId::proportional(12.0),
         colors::dim(),
     );
-    crate::widgets::focus_ring(ui, &resp, 7.0);
+    stdusk_egui::widgets::focus_ring(ui, &resp, 7.0);
     if resp.clicked() {
         st.dropdown_open = if open { None } else { Some(id) };
         st.dropdown_filter.clear();
@@ -812,9 +807,9 @@ fn searchable_dropdown(
         .order(egui::Order::Foreground)
         .fixed_pos(rect.left_bottom() + egui::vec2(0.0, 4.0))
         .show(ui.ctx(), |ui| {
-            crate::widgets::overlay_frame().show(ui, |ui| {
+            stdusk_egui::widgets::overlay_frame().show(ui, |ui| {
                 ui.set_width(280.0);
-                let r = crate::widgets::text_field(
+                let r = stdusk_egui::widgets::text_field(
                     ui,
                     &mut st.dropdown_filter,
                     hint,
@@ -870,7 +865,7 @@ fn dropdown_row(ui: &mut egui::Ui, text: &str, active: bool, highlighted: bool) 
         egui::FontId::proportional(13.0),
         if active { colors::accent() } else { colors::fg() },
     );
-    crate::widgets::focus_ring(ui, &resp, 6.0);
+    stdusk_egui::widgets::focus_ring(ui, &resp, 6.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -898,7 +893,7 @@ fn scheme_dropdown(
                 ("Light", BrightFilter::Light),
                 ("Dark", BrightFilter::Dark),
             ] {
-                if crate::widgets::chip(ui, label, bright == f).clicked() {
+                if stdusk_egui::widgets::chip(ui, label, bright == f).clicked() {
                     st.dropdown_bright = Some(f);
                     bright = f; // applies this frame, not next
                 }
@@ -968,7 +963,7 @@ fn font_dropdown(
     value: &mut String,
 ) -> bool {
     const DEFAULT_LABEL: &str = "Default (bundled)";
-    let all = crate::fonts::installed_families();
+    let all = stdusk_egui::fonts::installed_families();
     let label = if value.is_empty() { DEFAULT_LABEL.to_owned() } else { value.clone() };
     let hint = format!("Search {} font families", all.len());
     searchable_dropdown(ui, st, id_salt, &label, &hint, |ui, st, field| {
@@ -1049,7 +1044,7 @@ fn appearance_section(
     let a = &mut cfg.appearance;
     rows(ui, |ui| {
         row(ui, "Follow system appearance", "Switch themes with the macOS light/dark mode", |ui| {
-            crate::widgets::toggle_switch(ui, &mut a.follow_system);
+            stdusk_egui::widgets::toggle_switch(ui, &mut a.follow_system);
         });
         if a.follow_system {
             row(ui, "Light theme", "Applied while macOS is light", |ui| {
@@ -1086,7 +1081,7 @@ fn appearance_section(
             ui.horizontal(|ui| {
                 for (label, value) in [("Fixed", "fixed"), ("Dynamic", "dynamic")] {
                     let selected = ui::tab_width_mode(&a.tab_width) == ui::tab_width_mode(value);
-                    if crate::widgets::chip(ui, label, selected).clicked() {
+                    if stdusk_egui::widgets::chip(ui, label, selected).clicked() {
                         a.tab_width = value.into();
                     }
                 }
@@ -1097,7 +1092,7 @@ fn appearance_section(
             "Group tabs by repo",
             "Show one git repo's tabs at a time, with a repo switcher",
             |ui| {
-                crate::widgets::toggle_switch(ui, &mut a.group_by_repo);
+                stdusk_egui::widgets::toggle_switch(ui, &mut a.group_by_repo);
             },
         );
     });
@@ -1111,7 +1106,7 @@ fn appearance_section(
             "Terminal font family - Nerd Fonts supported",
             "Empty uses the bundled default; applies when the field loses focus",
             |ui| {
-                let r = crate::widgets::text_field(
+                let r = stdusk_egui::widgets::text_field(
                     ui,
                     &mut a.font,
                     "e.g. JetBrainsMono Nerd Font",
@@ -1129,10 +1124,14 @@ fn appearance_section(
             }
         });
         row(ui, "Font size", "", |ui| {
-            crate::widgets::slider(ui, &mut a.font_size, 9.0..=24.0, |v| format!("{v:.0} pt"));
+            stdusk_egui::widgets::slider(ui, &mut a.font_size, 9.0..=24.0, |v| {
+                format!("{v:.0} pt")
+            });
         });
         row(ui, "Line padding", "Extra pixels added to each line's height", |ui| {
-            crate::widgets::slider(ui, &mut a.line_padding, 0.0..=8.0, |v| format!("{v:.0} px"));
+            stdusk_egui::widgets::slider(ui, &mut a.line_padding, 0.0..=8.0, |v| {
+                format!("{v:.0} px")
+            });
         });
         row_full(
             ui,
@@ -1140,13 +1139,13 @@ fn appearance_section(
             "Nudge text toward black/white until it meets a WCAG contrast ratio",
             "1 = off (the default); Tabby ships 4; 4.5 = WCAG AA",
             |ui| {
-                crate::widgets::slider(ui, &mut t.minimum_contrast, 1.0..=21.0, |v| {
+                stdusk_egui::widgets::slider(ui, &mut t.minimum_contrast, 1.0..=21.0, |v| {
                     format!("{v:.1}")
                 });
             },
         );
         row(ui, "Ligatures", "Draw common code sequences as single glyphs", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.ligatures);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.ligatures);
             ui.add_space(10.0);
             lig_preview(ui, t.ligatures);
         });
@@ -1155,7 +1154,7 @@ fn appearance_section(
             "Bold in bright colors",
             "Draw bold text with the bright ANSI palette",
             |ui| {
-                crate::widgets::toggle_switch(ui, &mut t.bold_bright);
+                stdusk_egui::widgets::toggle_switch(ui, &mut t.bold_bright);
             },
         );
     });
@@ -1168,14 +1167,14 @@ fn appearance_section(
                     [("Block", "block"), ("Underline", "underline"), ("Beam", "beam")]
                 {
                     let selected = ui::cursor_style(&t.cursor) == ui::cursor_style(value);
-                    if crate::widgets::chip(ui, label, selected).clicked() {
+                    if stdusk_egui::widgets::chip(ui, label, selected).clicked() {
                         t.cursor = value.into();
                     }
                 }
             });
         });
         row(ui, "Blink the cursor", "", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.cursor_blink);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.cursor_blink);
         });
     });
     fx
@@ -1200,7 +1199,7 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
     subheading(ui, "Behavior");
     rows(ui, |ui| {
         row_new_tabs(ui, "Scrollback lines", "History kept per pane", |ui| {
-            crate::widgets::num_field(
+            stdusk_egui::widgets::num_field(
                 ui,
                 "scrollback",
                 &mut t.scrollback_lines,
@@ -1214,7 +1213,7 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
             "Shell integration",
             "OSC 133 command marks and OSC 7 directory reports",
             |ui| {
-                crate::widgets::toggle_switch(ui, &mut t.shell_integration);
+                stdusk_egui::widgets::toggle_switch(ui, &mut t.shell_integration);
             },
         );
         row_new_tabs(
@@ -1222,14 +1221,14 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
             "History autosuggestions",
             "Fish-style inline suggestions from history (zsh; Right-arrow accepts)",
             |ui| {
-                crate::widgets::toggle_switch(ui, &mut t.autosuggestions);
+                stdusk_egui::widgets::toggle_switch(ui, &mut t.autosuggestions);
             },
         );
         row_new_tabs(ui, "Detect progress", "Track % output as a tab progress bar", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.detect_progress);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.detect_progress);
         });
         row_new_tabs(ui, "Word separators", "Characters that end a double-click selection", |ui| {
-            crate::widgets::text_field(
+            stdusk_egui::widgets::text_field(
                 ui,
                 &mut t.word_separators,
                 "separators",
@@ -1243,30 +1242,30 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 {
                     let selected =
                         terminal::on_exit_mode(&t.on_exit) == terminal::on_exit_mode(value);
-                    if crate::widgets::chip(ui, label, selected).clicked() {
+                    if stdusk_egui::widgets::chip(ui, label, selected).clicked() {
                         t.on_exit = value.into();
                     }
                 }
             });
         });
         row(ui, "Dynamic tab title", "Follow the title the shell sets (OSC 0/2)", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.dynamic_title);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.dynamic_title);
         });
         row(ui, "AI CLI badges", "Badge tabs running a known AI CLI", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.detect_clis);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.detect_clis);
         });
         row(ui, "Notify when done", "Long command finishes while hidden", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.notify_on_done);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.notify_on_done);
         });
         row(ui, "Option sends Meta", "ESC-prefixed keys instead of composed chars", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.alt_is_meta);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.alt_is_meta);
         });
         row(
             ui,
             "Confirm closing busy tabs",
             "Ask before closing a tab with a running process",
             |ui| {
-                crate::widgets::toggle_switch(ui, &mut t.warn_on_close_running);
+                stdusk_egui::widgets::toggle_switch(ui, &mut t.warn_on_close_running);
             },
         );
         for (name, desc, value) in [
@@ -1285,7 +1284,7 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 ui.horizontal(|ui| {
                     for (label, v) in [("After current", "after_current"), ("End", "end")] {
                         let selected = tabs::new_tab_position(value) == tabs::new_tab_position(v);
-                        if crate::widgets::chip(ui, label, selected).clicked() {
+                        if stdusk_egui::widgets::chip(ui, label, selected).clicked() {
                             *value = v.into();
                         }
                     }
@@ -1297,20 +1296,20 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
     subheading(ui, "Paste");
     rows(ui, |ui| {
         row(ui, "Warn on multiline paste", "Confirm before pasting multiple lines", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.warn_on_multiline_paste);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.warn_on_multiline_paste);
         });
         row(ui, "Trim whitespace", "Strip leading/trailing whitespace from pastes", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.trim_whitespace_on_paste);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.trim_whitespace_on_paste);
         });
         row(ui, "Newlines to spaces", "Collapse pasted newlines into single spaces", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.replace_newlines_on_paste);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.replace_newlines_on_paste);
         });
     });
 
     subheading(ui, "Mouse");
     rows(ui, |ui| {
         row(ui, "Clickable links", "Open URLs and file paths on click", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.clickable_links);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.clickable_links);
         });
         row(
             ui,
@@ -1320,7 +1319,7 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 ui.horizontal(|ui| {
                     for (label, value) in [("Cmd", "cmd"), ("Option", "alt"), ("Ctrl", "ctrl")] {
                         let selected = t.app_link_modifier.eq_ignore_ascii_case(value);
-                        if crate::widgets::chip(ui, label, selected).clicked() {
+                        if stdusk_egui::widgets::chip(ui, label, selected).clicked() {
                             t.app_link_modifier = value.into();
                         }
                     }
@@ -1328,10 +1327,10 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
             },
         );
         row(ui, "Copy on select", "Clipboard updates when a selection finishes", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.copy_on_select);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.copy_on_select);
         });
         row(ui, "Paste on middle click", "", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.paste_on_middle_click);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.paste_on_middle_click);
         });
         row(ui, "Right click", "Paste/Copy act on a quick tap; holding opens the menu", |ui| {
             ui.horizontal(|ui| {
@@ -1340,14 +1339,14 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 {
                     let selected =
                         ui::right_click_mode(&t.right_click) == ui::right_click_mode(value);
-                    if crate::widgets::chip(ui, label, selected).clicked() {
+                    if stdusk_egui::widgets::chip(ui, label, selected).clicked() {
                         t.right_click = value.into();
                     }
                 }
             });
         });
         row(ui, "Focus follows mouse", "Hovering a split pane focuses it (no click)", |ui| {
-            crate::widgets::toggle_switch(ui, &mut t.focus_follows_mouse);
+            stdusk_egui::widgets::toggle_switch(ui, &mut t.focus_follows_mouse);
         });
     });
 
@@ -1387,7 +1386,7 @@ fn inline_icon(ui: &mut egui::Ui, id: egui::Id, center: egui::Pos2, icon: &str, 
         egui::FontId::proportional(14.0),
         if hovered { colors::fg() } else { colors::dim() },
     );
-    crate::widgets::focus_ring(ui, &resp, 6.0);
+    stdusk_egui::widgets::focus_ring(ui, &resp, 6.0);
     resp.clicked()
 }
 
@@ -1439,7 +1438,7 @@ fn profile_row(
         egui::FontId::proportional(11.0),
         colors::dim(),
     );
-    crate::widgets::focus_ring(ui, &resp, 9.0);
+    stdusk_egui::widgets::focus_ring(ui, &resp, 9.0);
     // Trailing icons, right to left: Delete, Duplicate, Launch.
     let mut x = rect.right() - 22.0;
     let mut hits = [false; 3];
@@ -1471,11 +1470,13 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
     subheading(ui, "Edit profile");
     rows(ui, |ui| {
         row(ui, "Name", "", |ui| {
-            crate::widgets::text_field(ui, &mut p.name, "profile name", 200.0, colors::fg());
+            stdusk_egui::widgets::text_field(ui, &mut p.name, "profile name", 200.0, colors::fg());
         });
         row_full(ui, "Shell", "Command run for this profile's tabs", "Empty uses $SHELL", |ui| {
             let mut buf = p.shell.clone().unwrap_or_default();
-            if crate::widgets::text_field(ui, &mut buf, "/bin/zsh", 200.0, colors::fg()).changed() {
+            if stdusk_egui::widgets::text_field(ui, &mut buf, "/bin/zsh", 200.0, colors::fg())
+                .changed()
+            {
                 p.shell = (!buf.is_empty()).then_some(buf);
             }
         });
@@ -1485,7 +1486,7 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
             "Extra shell arguments",
             "Space-separated; quote to keep spaces",
             |ui| {
-                if crate::widgets::text_field(
+                if stdusk_egui::widgets::text_field(
                     ui,
                     &mut st.profile_args,
                     "-l -i",
@@ -1500,13 +1501,15 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
         );
         row_full(ui, "Working directory", "", "~ expands to your home", |ui| {
             let mut buf = p.cwd.clone().unwrap_or_default();
-            if crate::widgets::text_field(ui, &mut buf, "~/Git", 200.0, colors::fg()).changed() {
+            if stdusk_egui::widgets::text_field(ui, &mut buf, "~/Git", 200.0, colors::fg())
+                .changed()
+            {
                 p.cwd = (!buf.is_empty()).then_some(buf);
             }
         });
         row(ui, "Tab color", "", |ui| {
             ui.vertical(|ui| {
-                if crate::widgets::chip(ui, "No color", p.color.is_none()).clicked() {
+                if stdusk_egui::widgets::chip(ui, "No color", p.color.is_none()).clicked() {
                     p.color = None;
                 }
                 ui.add_space(4.0);
@@ -1515,7 +1518,7 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for &c in swatch_row {
                             let hex = crate::session::color_to_hex(c);
-                            if crate::widgets::color_swatch(
+                            if stdusk_egui::widgets::color_swatch(
                                 ui,
                                 c,
                                 p.color.as_deref() == Some(hex.as_str()),
@@ -1536,11 +1539,12 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
     let mut remove: Option<usize> = None;
     for (ri, (k, v)) in st.profile_env.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            env_changed |= crate::widgets::text_field(ui, k, "NAME", 150.0, colors::fg()).changed();
+            env_changed |=
+                stdusk_egui::widgets::text_field(ui, k, "NAME", 150.0, colors::fg()).changed();
             ui.label(egui::RichText::new("=").color(colors::dim()));
             env_changed |=
-                crate::widgets::text_field(ui, v, "value", 200.0, colors::fg()).changed();
-            if crate::widgets::icon_button(ui, icons::TRASH, "Remove variable").clicked() {
+                stdusk_egui::widgets::text_field(ui, v, "value", 200.0, colors::fg()).changed();
+            if stdusk_egui::widgets::icon_button(ui, icons::TRASH, "Remove variable").clicked() {
                 remove = Some(ri);
             }
         });
@@ -1550,7 +1554,7 @@ fn profile_editor(ui: &mut egui::Ui, cfg: &mut config::Config, st: &mut Settings
         env_changed = true;
     }
     ui.add_space(4.0);
-    if crate::widgets::action_button(ui, "Add variable", false).clicked() {
+    if stdusk_egui::widgets::action_button(ui, "Add variable", false).clicked() {
         st.profile_env.push((String::new(), String::new()));
     }
     if env_changed {
@@ -1600,7 +1604,7 @@ fn profiles_section(
         ui.label(egui::RichText::new("No profiles yet.").color(colors::dim()));
     }
     ui.add_space(8.0);
-    if crate::widgets::action_button(ui, "Add profile", true).clicked() {
+    if stdusk_egui::widgets::action_button(ui, "Add profile", true).clicked() {
         act = Some(ProfileAct::Add);
     }
     match act {
@@ -1659,7 +1663,7 @@ fn hotkey_row(
     row(ui, name, &format!("Default {default}"), |ui| {
         let invalid = !value.trim().is_empty() && crate::keys::parse_hotkey_spec(value).is_none();
         let color = if invalid { colors::red() } else { colors::fg() };
-        let r = crate::widgets::text_field(ui, value, "unbound", 160.0, color);
+        let r = stdusk_egui::widgets::text_field(ui, value, "unbound", 160.0, color);
         if r.lost_focus() && invalid {
             fx.invalid = Some(value.clone());
         }
@@ -1717,7 +1721,7 @@ fn hotkeys_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> HotkeysFx {
         hotkey_row(ui, "Settings", &d.settings, &mut h.settings, &mut fx);
     });
     ui.add_space(14.0);
-    if crate::widgets::action_button(ui, "Reset to defaults", false).clicked() {
+    if stdusk_egui::widgets::action_button(ui, "Reset to defaults", false).clicked() {
         *h = d;
     }
     fx
@@ -1749,7 +1753,7 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
                     for (label, value) in [("Dropdown", "dropdown"), ("Window", "window")] {
                         let selected =
                             config::window_mode(&cfg.quake.mode) == config::window_mode(value);
-                        if crate::widgets::chip(ui, label, selected).clicked() && !selected {
+                        if stdusk_egui::widgets::chip(ui, label, selected).clicked() && !selected {
                             cfg.quake.mode = value.into();
                             fx.mode_changed = true;
                         }
@@ -1764,7 +1768,7 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     rows(ui, |ui| {
         row(ui, "Global hotkey", "Applies when the field loses focus", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
-                let r = crate::widgets::text_field(
+                let r = stdusk_egui::widgets::text_field(
                     ui,
                     &mut q.hotkey,
                     "e.g. Ctrl+Grave, F13",
@@ -1787,7 +1791,7 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
     rows(ui, |ui| {
         row(ui, "Hide on focus loss", "Hide when another app takes focus", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
-                crate::widgets::toggle_switch(ui, &mut q.hide_on_focus_loss);
+                stdusk_egui::widgets::toggle_switch(ui, &mut q.hide_on_focus_loss);
             });
         });
         row(
@@ -1796,21 +1800,21 @@ fn quake_section(ui: &mut egui::Ui, cfg: &mut config::Config) -> QuakeFx {
             "Drop onto the active Space, on the screen with the mouse",
             |ui| {
                 ui.add_enabled_ui(!window_mode, |ui| {
-                    crate::widgets::toggle_switch(ui, &mut q.follow_active_space);
+                    stdusk_egui::widgets::toggle_switch(ui, &mut q.follow_active_space);
                 });
             },
         );
         row(ui, "Hide from Dock", "Run as an accessory app (no Dock icon)", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
-                crate::widgets::toggle_switch(ui, &mut q.hide_from_dock);
+                stdusk_egui::widgets::toggle_switch(ui, &mut q.hide_from_dock);
             });
         });
         row(ui, "Menu-bar icon", "Status item with Show/Hide and Quit", |ui| {
-            crate::widgets::toggle_switch(ui, &mut q.menu_bar_icon);
+            stdusk_egui::widgets::toggle_switch(ui, &mut q.menu_bar_icon);
         });
         row(ui, "Dock icon while visible", "Show the Dock icon only while shown", |ui| {
             ui.add_enabled_ui(!window_mode, |ui| {
-                crate::widgets::toggle_switch(ui, &mut q.dock_when_visible);
+                stdusk_egui::widgets::toggle_switch(ui, &mut q.dock_when_visible);
             });
         });
     });
@@ -1855,7 +1859,7 @@ fn login_item_switch(ui: &mut egui::Ui, status: crate::macos::LoginItem) -> (egu
     };
     let response = ui
         .add_enabled_ui(status != LoginItem::Unavailable, |ui| {
-            crate::widgets::toggle_switch(ui, &mut on)
+            stdusk_egui::widgets::toggle_switch(ui, &mut on)
         })
         .inner
         .on_hover_text(tip)
@@ -1881,7 +1885,8 @@ fn open_at_login_row(ui: &mut egui::Ui, st: &mut SettingsState) {
             st.login_item_checked_at = None;
         }
         if status == LoginItem::NeedsApproval
-            && crate::widgets::action_button(ui, "Approve in System Settings", false).clicked()
+            && stdusk_egui::widgets::action_button(ui, "Approve in System Settings", false)
+                .clicked()
         {
             open_login_items_settings();
             st.login_item = None;
@@ -1904,7 +1909,7 @@ fn session_section(
             "Restore session",
             "Reopen last session's tabs (cwd, title, color) on launch",
             |ui| {
-                crate::widgets::toggle_switch(ui, &mut cfg.session.restore);
+                stdusk_egui::widgets::toggle_switch(ui, &mut cfg.session.restore);
             },
         );
         row_full(
@@ -1917,7 +1922,7 @@ fn session_section(
                     ui.horizontal(|ui| {
                         for (label, mode) in RESUME_CHOICES {
                             let selected = cfg.session.resume_agents == mode;
-                            if crate::widgets::chip(ui, label, selected).clicked() {
+                            if stdusk_egui::widgets::chip(ui, label, selected).clicked() {
                                 cfg.session.resume_agents = mode;
                             }
                         }
@@ -1939,7 +1944,7 @@ fn session_section(
             "Git remote for config.toml + custom schemes",
             "Keep it private - e.g. gh repo create stdusk-settings --private",
             |ui| {
-                crate::widgets::text_field(
+                stdusk_egui::widgets::text_field(
                     ui,
                     &mut cfg.sync.repo,
                     "git@github.com:you/stdusk-settings.git",
@@ -1955,17 +1960,17 @@ fn session_section(
             "Needs a sync repo above",
             |ui| {
                 ui.add_enabled_ui(!cfg.sync.repo.trim().is_empty(), |ui| {
-                    crate::widgets::toggle_switch(ui, &mut cfg.sync.auto);
+                    stdusk_egui::widgets::toggle_switch(ui, &mut cfg.sync.auto);
                 });
             },
         );
         row(ui, "Sync now", "Uses your own git credentials (SSH key / helper)", |ui| {
             ui.add_enabled_ui(!busy && !cfg.sync.repo.trim().is_empty(), |ui| {
                 ui.horizontal(|ui| {
-                    if crate::widgets::action_button(ui, "Push", true).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Push", true).clicked() {
                         op = Some(sync::Op::Push);
                     }
-                    if crate::widgets::action_button(ui, "Pull", false)
+                    if stdusk_egui::widgets::action_button(ui, "Pull", false)
                         .on_hover_text("Overwrites local settings with the repo's")
                         .clicked()
                     {
@@ -2057,7 +2062,7 @@ fn updates_block(ui: &mut egui::Ui, cfg: &mut config::Config, updater: &mut Upda
     rows(ui, |ui| {
         row(ui, "Status", &update_status_line(&updater.status), |ui| {
             ui.horizontal(|ui| {
-                if crate::widgets::action_button(ui, "Check now", false).clicked() {
+                if stdusk_egui::widgets::action_button(ui, "Check now", false).clicked() {
                     updater.check_now();
                 }
                 let Status::Available(release) = &updater.status else { return };
@@ -2066,7 +2071,7 @@ fn updates_block(ui: &mut egui::Ui, cfg: &mut config::Config, updater: &mut Upda
                 } else {
                     "View release".into()
                 };
-                if crate::widgets::action_button(ui, &label, true).clicked() {
+                if stdusk_egui::widgets::action_button(ui, &label, true).clicked() {
                     if brew {
                         let release = release.clone();
                         updater.install(release);
@@ -2077,7 +2082,7 @@ fn updates_block(ui: &mut egui::Ui, cfg: &mut config::Config, updater: &mut Upda
             });
         });
         row(ui, "Check automatically", "Look for a new release every hour", |ui| {
-            crate::widgets::toggle_switch(ui, &mut cfg.updates.check);
+            stdusk_egui::widgets::toggle_switch(ui, &mut cfg.updates.check);
         });
         let hint = if brew {
             "Uses brew upgrade. Restart when it's done."
@@ -2086,7 +2091,7 @@ fn updates_block(ui: &mut egui::Ui, cfg: &mut config::Config, updater: &mut Upda
         };
         row_full(ui, "Install in the background", "", hint, |ui| {
             ui.add_enabled_ui(brew, |ui| {
-                crate::widgets::toggle_switch(ui, &mut cfg.updates.auto_install);
+                stdusk_egui::widgets::toggle_switch(ui, &mut cfg.updates.auto_install);
             });
         });
     });
@@ -2192,7 +2197,7 @@ impl Stdusk {
         let mut bright = self.settings.scheme_bright.unwrap_or(auto);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(icons::MAGNIFYING_GLASS).size(15.0).color(colors::dim()));
-            crate::widgets::text_field(
+            stdusk_egui::widgets::text_field(
                 ui,
                 &mut self.settings.filter,
                 &format!("Search {} color schemes", all.len()),
@@ -2205,7 +2210,7 @@ impl Stdusk {
                 ("Light", BrightFilter::Light),
                 ("Dark", BrightFilter::Dark),
             ] {
-                if crate::widgets::chip(ui, label, bright == f).clicked() {
+                if stdusk_egui::widgets::chip(ui, label, bright == f).clicked() {
                     self.settings.scheme_bright = Some(f);
                     bright = f; // applies this frame, not next
                 }
@@ -2304,13 +2309,13 @@ impl Stdusk {
     fn settings_footer(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         let mut close = false;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::action_button(ui, "Save", true).clicked() {
+            if stdusk_egui::widgets::action_button(ui, "Save", true).clicked() {
                 self.save_settings(ctx);
             }
-            if crate::widgets::action_button(ui, "Close", false).clicked() {
+            if stdusk_egui::widgets::action_button(ui, "Close", false).clicked() {
                 close = true;
             }
-            if crate::widgets::action_button(ui, "Revert", false).clicked() {
+            if stdusk_egui::widgets::action_button(ui, "Revert", false).clicked() {
                 self.cfg = config::Config::load();
                 self.rebaseline_settings();
                 self.reapply_config(ctx);
@@ -2591,7 +2596,7 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(crate::widgets::overlay_frame())
+            .frame(stdusk_egui::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Unsaved changes").strong().color(colors::fg()));
@@ -2602,13 +2607,13 @@ impl Stdusk {
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::widgets::action_button(ui, "Save", true).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Save", true).clicked() {
                         save = true;
                     }
-                    if crate::widgets::action_button(ui, "Discard", false).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Discard", false).clicked() {
                         discard = true;
                     }
-                    if crate::widgets::action_button(ui, "Keep editing", false).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Keep editing", false).clicked() {
                         keep = true;
                     }
                 });
@@ -2735,7 +2740,7 @@ mod tests {
 
     #[test]
     fn ink_color_maps_roles() {
-        let t = crate::colors::one_half_dark();
+        let t = stdusk_core::colors::one_half_dark();
         assert_eq!(ink_color(&t, Ink::Fg), t.fg);
         assert_eq!(ink_color(&t, Ink::Dim), t.ansi[8]);
         assert_eq!(ink_color(&t, Ink::Ansi(3)), t.ansi[3]);
@@ -2744,7 +2749,7 @@ mod tests {
 
     #[test]
     fn scheme_filter_is_case_insensitive_substring() {
-        let t = crate::colors::one_half_dark();
+        let t = stdusk_core::colors::one_half_dark();
         let all: Vec<(String, Theme)> =
             ["dracula", "nord", "one-half-dark"].iter().map(|n| ((*n).to_string(), t)).collect();
         assert_eq!(filter_schemes(&all, ""), vec![0, 1, 2]);

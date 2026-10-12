@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use global_hotkey::hotkey::{Code, Modifiers};
 use serde::{Deserialize, Serialize};
+use stdusk_core::shell::ShellProfile;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -152,14 +153,14 @@ pub(crate) fn find_profile<'a>(profiles: &'a [Profile], name: &str) -> Option<&'
     profiles.iter().find(|p| p.name.eq_ignore_ascii_case(name))
 }
 
-/// Expand a leading `~` / `~/...` to `$HOME`. `~user` and paths without a leading `~` pass
-/// through unchanged, as does everything when $HOME is unset.
-pub(crate) fn expand_tilde(path: &str) -> String {
-    match path.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-            std::env::var("HOME").map_or_else(|_| path.to_string(), |home| format!("{home}{rest}"))
+impl From<&Profile> for ShellProfile {
+    fn from(p: &Profile) -> Self {
+        Self {
+            shell: p.shell.clone(),
+            args: p.args.clone(),
+            cwd: p.cwd.clone(),
+            env: p.env.clone(),
         }
-        _ => path.to_string(),
     }
 }
 
@@ -178,9 +179,9 @@ pub(crate) enum ResumeAgents {
 
 /// The one mapping from the setting to how restore reopens sessions. `None` is "Off": nothing is
 /// tracked and nothing is typed.
-impl From<ResumeAgents> for Option<crate::agents::ResumeMode> {
+impl From<ResumeAgents> for Option<stdusk_core::agents::ResumeMode> {
     fn from(setting: ResumeAgents) -> Self {
-        use crate::agents::ResumeMode;
+        use stdusk_core::agents::ResumeMode;
         match setting {
             ResumeAgents::Auto => Some(ResumeMode::Auto),
             ResumeAgents::Prefill => Some(ResumeMode::Prefill),
@@ -519,6 +520,7 @@ pub(crate) fn activation_is_regular(cfg: &Config, visible: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stdusk_core::shell::expand_tilde;
 
     #[test]
     fn defaults_match_tabby_baseline() {

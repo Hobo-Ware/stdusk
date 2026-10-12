@@ -19,19 +19,19 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 /// Scrollback lines carried on top of the visible screen. Covers the "my loop printed 100 lines"
 /// case and a couple of screens of context; a full 25k-line history would be megabytes per pane for
 /// content the user has already scrolled past.
-pub(crate) const MAX_HISTORY_LINES: usize = 200;
+pub const MAX_HISTORY_LINES: usize = 200;
 
 /// Hard cap on one pane's dump. Lines are dropped OLDEST first, so the newest screen always
 /// survives - a huge grid degrades to less scrollback rather than failing the handoff.
-pub(crate) const MAX_DUMP_BYTES: usize = 128 * 1024;
+pub const MAX_DUMP_BYTES: usize = 128 * 1024;
 
 /// One cell as the donor saw it. Raw `Color`s on purpose (see the module header).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Cell {
-    pub(crate) c: char,
-    pub(crate) fg: Color,
-    pub(crate) bg: Color,
-    pub(crate) flags: Flags,
+pub struct Cell {
+    pub c: char,
+    pub fg: Color,
+    pub bg: Color,
+    pub flags: Flags,
 }
 
 impl Cell {
@@ -64,7 +64,7 @@ const STYLE_FLAGS: Flags = Flags::BOLD
 /// Over `MAX_DUMP_BYTES` the oldest lines are dropped; if that eats into the screen itself, the gap
 /// is padded with empty lines so the surviving rows still land where they were and the cursor
 /// position stays truthful.
-pub(crate) fn encode(lines: &[Vec<Cell>], screen_rows: usize, cursor: (usize, usize)) -> Vec<u8> {
+pub fn encode(lines: &[Vec<Cell>], screen_rows: usize, cursor: (usize, usize)) -> Vec<u8> {
     // Nothing on screen: send nothing, so the caller can tell "no replay" from "a blank replay"
     // and fall back to asking the shell to repaint instead.
     if lines.iter().all(|l| l.iter().all(Cell::is_blank)) {

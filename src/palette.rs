@@ -5,9 +5,9 @@ use eframe::egui;
 
 use crate::finder::Search;
 use crate::tabs::{TabAction, spawn_opts};
-use crate::terminal::PtyTerm;
 use crate::ui;
 use crate::{COLS, ROWS, Stdusk, colors, config, pane};
+use stdusk_core::terminal::PtyTerm;
 
 const MAX_ROWS: usize = 8;
 const ROW_W: f32 = 320.0;
@@ -190,10 +190,10 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(crate::widgets::overlay_frame())
+            .frame(stdusk_egui::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 64.0))
             .show(ctx, |ui| {
-                let r = crate::widgets::text_field(
+                let r = stdusk_egui::widgets::text_field(
                     ui,
                     &mut st.query,
                     "Type a command",
@@ -332,7 +332,12 @@ impl Stdusk {
     /// Split the focused pane (same transform as the Cmd+D / Cmd+Shift+D keybind).
     fn split_focused(&mut self, dir: pane::SplitDir, ctx: &egui::Context) {
         let cwd = self.tabs[self.active].focused_term().cwd();
-        let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(&self.cfg, cwd));
+        let new = PtyTerm::spawn(
+            COLS,
+            ROWS,
+            stdusk_egui::repaint_handle(ctx),
+            &spawn_opts(&self.cfg, cwd),
+        );
         let tab = &mut self.tabs[self.active];
         let root = tab.root.take().expect("root");
         let (root, focus) = root.split(&tab.focused, dir, new, false);

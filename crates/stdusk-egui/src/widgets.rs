@@ -2,18 +2,13 @@
 //! chips, menu rows, icon buttons) that the chrome (settings, finder, tab bar, palette) builds
 //! on so every control reads identically. Pure egui - no terminal-grid drawing (that stays in
 //! `ui.rs`). Use these; don't hand-roll surfaces/inputs/buttons.
-use eframe::egui;
 
-use crate::colors;
 use crate::ui::icons;
+use stdusk_core::colors;
 
 /// A filled-circle color swatch for the tab Color menu. Draws a bright ring when `selected`, a
 /// dim ring on hover; returns the Response.
-pub(crate) fn color_swatch(
-    ui: &mut egui::Ui,
-    color: egui::Color32,
-    selected: bool,
-) -> egui::Response {
+pub fn color_swatch(ui: &mut egui::Ui, color: egui::Color32, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::click());
     let center = rect.center();
     // Keyboard focus wins the ring (accent), then the selected/hover treatments. Memory
@@ -38,7 +33,7 @@ pub(crate) fn color_swatch(
 
 /// The standard floating-overlay surface: elevated fill, hairline border, rounded corners, soft
 /// shadow. Use for every popover/dialog (find bar, rename) so they read identically.
-pub(crate) fn overlay_frame() -> egui::Frame {
+pub fn overlay_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(colors::elevated())
         .stroke(egui::Stroke::new(1.0, colors::border()))
@@ -54,7 +49,7 @@ pub(crate) fn overlay_frame() -> egui::Frame {
 
 /// The standard single-line text input: uniform 15pt font, theme-colored field bg, consistent
 /// inner padding. `color` tints the typed text (e.g. red for no-results). Returns the Response.
-pub(crate) fn text_field(
+pub fn text_field(
     ui: &mut egui::Ui,
     text: &mut String,
     hint: &str,
@@ -73,13 +68,13 @@ pub(crate) fn text_field(
 }
 
 /// Clamped integer parse for `int_field`: digits only, empty -> None, clamped into range.
-pub(crate) fn parse_int_clamped(s: &str, min: usize, max: usize) -> Option<usize> {
+pub fn parse_int_clamped(s: &str, min: usize, max: usize) -> Option<usize> {
     let digits: String = s.chars().filter(char::is_ascii_digit).collect();
     digits.parse::<usize>().ok().map(|v| v.clamp(min, max))
 }
 
 /// One `num_field` stepper press: `up` adds `step`, else subtracts; saturating and clamped.
-pub(crate) fn step_int(v: usize, step: usize, up: bool, min: usize, max: usize) -> usize {
+pub fn step_int(v: usize, step: usize, up: bool, min: usize, max: usize) -> usize {
     if up { v.saturating_add(step).min(max) } else { v.saturating_sub(step).max(min) }
 }
 
@@ -105,7 +100,7 @@ fn stepper_button(ui: &mut egui::Ui, icon: &str) -> egui::Response {
 /// `range` as you type; the shown text snaps to the real value on blur) plus small +/-
 /// steppers that nudge by `step`. Matches the rest of the inputs visually - never use a raw
 /// `DragValue` in settings rows.
-pub(crate) fn num_field(
+pub fn num_field(
     ui: &mut egui::Ui,
     id_salt: &str,
     value: &mut usize,
@@ -173,7 +168,7 @@ fn value_chip(ui: &mut egui::Ui, text: &str) {
 
 /// The design-system slider: accent trailing fill and the live value in a styled chip
 /// instead of egui's raw `DragValue`. `fmt` renders the chip text ("85%", "13 pt", ...).
-pub(crate) fn slider(
+pub fn slider(
     ui: &mut egui::Ui,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
@@ -192,7 +187,7 @@ pub(crate) fn slider(
 
 /// The standard action button (dialog OK/Cancel etc.): consistent padding; `primary` fills with
 /// the accent so the default action stands out. Returns the Response.
-pub(crate) fn action_button(ui: &mut egui::Ui, label: &str, primary: bool) -> egui::Response {
+pub fn action_button(ui: &mut egui::Ui, label: &str, primary: bool) -> egui::Response {
     ui.spacing_mut().button_padding = egui::vec2(12.0, 6.0);
     let text = egui::RichText::new(label).color(if primary { colors::bg() } else { colors::fg() });
     let mut btn = egui::Button::new(text).corner_radius(7);
@@ -210,7 +205,7 @@ pub(crate) fn action_button(ui: &mut egui::Ui, label: &str, primary: bool) -> eg
 /// invisible. `radius` matches the widget's corner radius. Reads memory focus directly (not
 /// `Response::has_focus`, which is also gated on VIEWPORT focus): macOS keeps a control's
 /// focus ring visible in inactive windows, and the screenshot harness window is never focused.
-pub(crate) fn focus_ring(ui: &egui::Ui, resp: &egui::Response, radius: f32) {
+pub fn focus_ring(ui: &egui::Ui, resp: &egui::Response, radius: f32) {
     if ui.ctx().memory(|m| m.has_focus(resp.id)) {
         ui.painter().rect_stroke(
             resp.rect.expand(1.5),
@@ -223,7 +218,7 @@ pub(crate) fn focus_ring(ui: &egui::Ui, resp: &egui::Response, radius: f32) {
 
 /// Give a context menu / popup room to breathe (wider, roomier rows). Call at the top of every
 /// menu closure AND its submenus so they stay consistent.
-pub(crate) fn style_menu(ui: &mut egui::Ui) {
+pub fn style_menu(ui: &mut egui::Ui) {
     ui.set_min_width(210.0);
     let s = ui.spacing_mut();
     s.button_padding = egui::vec2(12.0, 7.0);
@@ -233,7 +228,7 @@ pub(crate) fn style_menu(ui: &mut egui::Ui) {
 /// The standard context-menu row: label left, dim keyboard shortcut right (pass "" for none),
 /// stretched to the menu width so shortcuts align. Use for every plain menu row (submenu
 /// triggers stay `ui.menu_button`).
-pub(crate) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> egui::Response {
+pub fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> egui::Response {
     let mut btn = egui::Button::new(label).min_size(egui::vec2(ui.available_width(), 0.0));
     if !shortcut.is_empty() {
         btn = btn.shortcut_text(egui::RichText::new(shortcut).size(11.5).color(colors::dim()));
@@ -243,7 +238,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> egui:
 
 /// A Tabby-style on/off switch: sliding knob on an accent-filled pill while on. The standard
 /// boolean control for settings rows (reads better right-aligned than a checkbox).
-pub(crate) fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
+pub fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
     let (rect, mut resp) = ui.allocate_exact_size(egui::vec2(38.0, 22.0), egui::Sense::click());
     if resp.clicked() {
         *on = !*on;
@@ -270,7 +265,7 @@ pub(crate) fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response 
 
 /// A small selectable chip (segmented option, e.g. cursor style): accent tint + ring while
 /// selected, hover fill otherwise. Returns the Response.
-pub(crate) fn chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+pub fn chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     let font = egui::FontId::proportional(13.0);
     let color = if selected { colors::accent() } else { colors::fg() };
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, color);
@@ -302,14 +297,14 @@ pub(crate) fn chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
 }
 
 /// Tab-bar icon-button size (shared so the tab bar can right-align the gear by a spacer).
-pub(crate) const ICON_BTN_W: f32 = 32.0;
+pub const ICON_BTN_W: f32 = 32.0;
 const ICON_BTN_H: f32 = 30.0;
 /// `icon_toggle` size (shared so the tab bar can right-align the gear by a spacer).
-pub(crate) const ICON_TOGGLE_W: f32 = 28.0;
+pub const ICON_TOGGLE_W: f32 = 28.0;
 
 /// A fixed-size Phosphor-icon button with hover feedback. Returns the Response (so callers
 /// can anchor a popup or read `.clicked()`).
-pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
+pub fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(ICON_BTN_W, ICON_BTN_H), egui::Sense::click());
     let hovered = resp.hovered();
@@ -329,12 +324,7 @@ pub(crate) fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Res
 }
 
 /// A toggle variant of `icon_button`: tinted accent fill + accent glyph while `active`.
-pub(crate) fn icon_toggle(
-    ui: &mut egui::Ui,
-    icon: &str,
-    active: bool,
-    tip: &str,
-) -> egui::Response {
+pub fn icon_toggle(ui: &mut egui::Ui, icon: &str, active: bool, tip: &str) -> egui::Response {
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(ICON_TOGGLE_W, 26.0), egui::Sense::click());
     let hovered = resp.hovered();
@@ -363,7 +353,6 @@ pub(crate) fn icon_toggle(
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui;
     use egui::{Key, Modifiers};
 
     use super::{chip, num_field, parse_int_clamped, slider, step_int, text_field, toggle_switch};
@@ -446,16 +435,16 @@ mod tests {
         let mut q = String::new();
         let mut on = false;
         widget_frame(&ctx, vec![], none, &mut |ui| {
-            text_field(ui, &mut q, "search", 120.0, crate::colors::fg()).request_focus();
+            text_field(ui, &mut q, "search", 120.0, stdusk_core::colors::fg()).request_focus();
             toggle_switch(ui, &mut on);
         });
         widget_frame(&ctx, vec![keyev(Key::Tab, none)], none, &mut |ui| {
-            text_field(ui, &mut q, "search", 120.0, crate::colors::fg());
+            text_field(ui, &mut q, "search", 120.0, stdusk_core::colors::fg());
             toggle_switch(ui, &mut on);
         });
         let mut focused = false;
         widget_frame(&ctx, vec![], none, &mut |ui| {
-            text_field(ui, &mut q, "search", 120.0, crate::colors::fg());
+            text_field(ui, &mut q, "search", 120.0, stdusk_core::colors::fg());
             focused = toggle_switch(ui, &mut on).has_focus();
         });
         assert!(focused, "Tab must move focus from the field to the switch");

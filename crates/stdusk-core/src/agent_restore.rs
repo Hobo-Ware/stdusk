@@ -17,7 +17,7 @@ use crate::session::SavedAgent;
 
 /// Why a saved session did not resume.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SkipReason {
+pub enum SkipReason {
     BadId,
     DirectoryMissing,
     TranscriptMissing,
@@ -52,7 +52,7 @@ impl SkipReason {
         }
     }
 
-    pub(crate) fn text(self) -> &'static str {
+    pub fn text(self) -> &'static str {
         self.forms().0
     }
 
@@ -65,7 +65,7 @@ impl SkipReason {
 
 /// What restore tells the user inside a pane, until the user acts in it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PaneNotice {
+pub enum PaneNotice {
     /// The saved session did not resume, and the pane is a plain shell.
     NotResumed { kind: AgentKind, reason: SkipReason },
     /// The session ended by a crash signal. Its resume command is typed at the first prompt and
@@ -75,35 +75,35 @@ pub(crate) enum PaneNotice {
 
 /// A saved session that did not resume, named by its directory for the toast.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Skip {
-    pub(crate) label: String,
-    pub(crate) reason: SkipReason,
+pub struct Skip {
+    pub label: String,
+    pub reason: SkipReason,
 }
 
 /// A saved session that restore reopens.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Resume {
-    pub(crate) session: AgentSession,
+pub struct Resume {
+    pub session: AgentSession,
     /// The saved record was kept only because its agent crashed (a crash hint). The pane keeps
     /// that mark until an agent binds to it.
-    pub(crate) crash_hint: bool,
+    pub crash_hint: bool,
     /// The user's `resume_agents` setting.
     setting: ResumeMode,
 }
 
 impl Resume {
-    pub(crate) fn new(session: AgentSession, crash_hint: bool, setting: ResumeMode) -> Self {
+    pub fn new(session: AgentSession, crash_hint: bool, setting: ResumeMode) -> Self {
         Self { session, crash_hint, setting }
     }
 
     /// How to reopen: a crash hint is typed without Enter whatever the setting says, because a
     /// status of 137 cannot prove an out-of-memory kill (the user's own `kill -9` looks the same).
-    pub(crate) fn mode(&self) -> ResumeMode {
+    pub fn mode(&self) -> ResumeMode {
         if self.crash_hint { ResumeMode::Prefill } else { self.setting }
     }
 
     /// The command that reopens the session, typed at the first prompt.
-    pub(crate) fn input(&self) -> Vec<u8> {
+    pub fn input(&self) -> Vec<u8> {
         let line = match self.session.kind {
             AgentKind::Claude => format!("claude --resume {}", self.session.id.as_str()),
             AgentKind::Codex => format!("codex resume {}", self.session.id.as_str()),
@@ -118,7 +118,7 @@ impl Resume {
 /// The restore decisions of one session file. Leaves are decided in the order restore builds
 /// them, so a conversation that two saved panes claim resumes in the first one only.
 #[derive(Default)]
-pub(crate) struct RestorePlan {
+pub struct RestorePlan {
     claimed: HashSet<(AgentKind, SessionId)>,
     skips: Vec<Skip>,
     /// Sessions that come back as a typed hint after a crash.
@@ -130,7 +130,7 @@ impl RestorePlan {
     /// kept for the toast too. A leaf resumes only when its id parses, its directory exists, its
     /// transcript exists, and no earlier leaf claimed the same `(agent, id)`. A crash hint does
     /// not claim: it only types a command, and a healthy record of the session must not lose to it.
-    pub(crate) fn resume(
+    pub fn resume(
         &mut self,
         saved: &SavedAgent,
         setting: ResumeMode,
@@ -147,7 +147,7 @@ impl RestorePlan {
 
     /// Record that a saved leaf did not resume, for the toast. `resume` does this for its own
     /// failures. A caller that decides a skip itself (a failed handoff) calls it directly.
-    pub(crate) fn skipped(&mut self, saved: &SavedAgent, reason: SkipReason) {
+    pub fn skipped(&mut self, saved: &SavedAgent, reason: SkipReason) {
         let label = Path::new(&saved.cwd)
             .file_name()
             .map_or_else(|| saved.cwd.clone(), |n| n.to_string_lossy().into_owned());
@@ -175,18 +175,14 @@ impl RestorePlan {
     }
 
     /// The one toast after restore, or `None` when nothing needs saying.
-    pub(crate) fn into_toast(self) -> Option<String> {
+    pub fn into_toast(self) -> Option<String> {
         restore_toast(&self.skips, self.crash_hints)
     }
 }
 
 /// How many saved sessions the next launch reopens without a keypress: the ones restore would
 /// resume, minus the crashed ones (typed as a hint) and all of them in "type only" mode.
-pub(crate) fn auto_resumable(
-    saved: &[SavedAgent],
-    setting: ResumeMode,
-    fs: &dyn ResumeFs,
-) -> usize {
+pub fn auto_resumable(saved: &[SavedAgent], setting: ResumeMode, fs: &dyn ResumeFs) -> usize {
     let mut plan = RestorePlan::default();
     saved
         .iter()

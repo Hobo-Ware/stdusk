@@ -7,6 +7,8 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+stdusk-core = { path = "crates/stdusk-core" }
+stdusk-egui = { path = "crates/stdusk-egui" }
 alacritty_terminal = "0.26.0"
 anyhow = "1.0.104" # update check + brew upgrade: several error sources under one `?`
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] } # get_image() for clipboard image paste
@@ -34,6 +36,7 @@ ureq = "3.4.2" # update check: one redirect read from github.com/<repo>/releases
 winit = "0.30" # macOS activation policy (accessory app) via eframe's event_loop_builder hook
 
 [dev-dependencies]
+stdusk-core = { path = "crates/stdusk-core", features = ["test-support"] }
 proptest = "1.8.0"
 
 [workspace]

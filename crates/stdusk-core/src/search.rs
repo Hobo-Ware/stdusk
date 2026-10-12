@@ -6,23 +6,23 @@ use regex::RegexBuilder;
 
 /// A single match: which buffer line, starting column, and length in cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Match {
-    pub(crate) line: i32,
-    pub(crate) col: usize,
-    pub(crate) len: usize,
+pub struct Match {
+    pub line: i32,
+    pub col: usize,
+    pub len: usize,
 }
 
 /// Search modifiers, mirrored by the find-bar toggles (Tabby parity).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SearchOpts {
-    pub(crate) case_sensitive: bool,
-    pub(crate) regex: bool,
-    pub(crate) whole_word: bool,
+pub struct SearchOpts {
+    pub case_sensitive: bool,
+    pub regex: bool,
+    pub whole_word: bool,
 }
 
 /// Every non-overlapping occurrence of `query` across `lines`, top-to-bottom, left-to-right.
 /// Empty query yields nothing; an invalid regex (in regex mode) also yields nothing.
-pub(crate) fn find_matches(lines: &[(i32, String)], query: &str, opts: SearchOpts) -> Vec<Match> {
+pub fn find_matches(lines: &[(i32, String)], query: &str, opts: SearchOpts) -> Vec<Match> {
     if query.is_empty() {
         return Vec::new();
     }
@@ -50,7 +50,7 @@ pub(crate) fn find_matches(lines: &[(i32, String)], query: &str, opts: SearchOpt
 /// Matches mapped into viewport coordinates for the all-match overlay: `(row, col, len)` for
 /// every match inside the visible range (`top_line` = buffer line of viewport row 0, `rows`
 /// tall, `cols` wide). Length is clamped at the right edge; off-grid columns are dropped.
-pub(crate) fn visible_matches(
+pub fn visible_matches(
     matches: &[Match],
     top_line: i32,
     rows: usize,

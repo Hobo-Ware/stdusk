@@ -4,17 +4,18 @@
 //! shell. The tree-walk + name matching is pure and unit-tested; `ProcScanner` refreshes the
 //! process table ~1 Hz on its own thread and the UI runs the walks on the latest table.
 
-use egui::Color32;
+use ecolor::Color32;
 
 use crate::agent_codex::{self, CodexProc};
 use crate::agent_codex_scan::CodexScanner;
 use crate::agents::{self, AgentKind, AgentSession, Candidate, Seen};
+use crate::repaint::Repaint;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A recognized AI CLI. The enum order is the badge priority when a tab somehow hosts several.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Cli {
+pub enum Cli {
     Claude,
     Codex,
     Gemini,
@@ -39,7 +40,7 @@ const TABLE: &[(Cli, &str, &[&str])] = &[
 
 impl Cli {
     /// Lowercase brand label shown in the tab badge.
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Cli::Claude => "claude",
             Cli::Codex => "codex",
@@ -52,7 +53,7 @@ impl Cli {
     }
 
     /// Brand accent for the badge.
-    pub(crate) fn color(self) -> Color32 {
+    pub fn color(self) -> Color32 {
         match self {
             Cli::Claude => Color32::from_rgb(0xD9, 0x77, 0x57), // Anthropic clay
             Cli::Codex => Color32::from_rgb(0x10, 0xA3, 0x7F),  // OpenAI green
@@ -66,23 +67,23 @@ impl Cli {
 }
 
 /// A minimal process record - the pure `detect` works on these so it needs no sysinfo in tests.
-pub(crate) struct Proc {
-    pub(crate) pid: u32,
-    pub(crate) parent: Option<u32>,
-    pub(crate) name: String,
-    pub(crate) cmd: Vec<String>,
+pub struct Proc {
+    pub pid: u32,
+    pub parent: Option<u32>,
+    pub name: String,
+    pub cmd: Vec<String>,
     /// Process start, seconds since the epoch. A session record older than this is stale.
-    pub(crate) start_time: u64,
+    pub start_time: u64,
     /// Where the process runs. Only the Codex processes get one (see [`codex_sessions`]), because
     /// the read costs a system call each.
-    pub(crate) cwd: Option<String>,
+    pub cwd: Option<String>,
     /// The user of the process. Only the Codex processes get one, like `cwd`.
-    pub(crate) uid: Option<sysinfo::Uid>,
+    pub uid: Option<sysinfo::Uid>,
 }
 
 /// The highest-priority known CLI running among the descendants of `root` (the tab's shell), or
 /// `None`. `root` itself (the shell) is never classified - only its children and below.
-pub(crate) fn detect(procs: &[Proc], root: u32) -> Option<Cli> {
+pub fn detect(procs: &[Proc], root: u32) -> Option<Cli> {
     // Adjacency: parent pid -> indices of its children.
     let mut children: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
     for (i, p) in procs.iter().enumerate() {
@@ -143,7 +144,7 @@ fn strip_ext(seg: &str) -> &str {
 /// The name of a process still running under `root` (the tab's shell), or `None` when the shell
 /// is idle. Used by the close-tab confirmation. Prefers a recognized CLI's label; otherwise the
 /// deepest descendant (the foreground-most program, e.g. `zsh -> ssh` names `ssh`).
-pub(crate) fn busy_child(procs: &[Proc], root: u32) -> Option<String> {
+pub fn busy_child(procs: &[Proc], root: u32) -> Option<String> {
     if let Some(cli) = detect(procs, root) {
         return Some(cli.label().to_owned());
     }
@@ -176,7 +177,7 @@ pub(crate) fn busy_child(procs: &[Proc], root: u32) -> Option<String> {
 /// Used to count + preview what a close/quit will terminate (the shell's process group). A
 /// recognized AI CLI is surfaced by its brand label (e.g. `claude`), everything else by its raw
 /// process name. Order is discovery order; the caller truncates for display.
-pub(crate) fn running_children(procs: &[Proc], root: u32) -> Vec<String> {
+pub fn running_children(procs: &[Proc], root: u32) -> Vec<String> {
     let mut children: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
     for (i, p) in procs.iter().enumerate() {
         if let Some(par) = p.parent {
@@ -204,7 +205,7 @@ pub(crate) fn running_children(procs: &[Proc], root: u32) -> Vec<String> {
 
 /// Snapshot sysinfo's process table into plain `Proc`s (the pure fns work on these). The ~1 Hz
 /// scan loop snapshots ONCE and runs `detect`/`busy_child` per tab on the same table.
-pub(crate) fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
+pub fn snapshot(sys: &sysinfo::System) -> Vec<Proc> {
     sys.processes()
         .values()
         .map(|p| Proc {
@@ -247,7 +248,7 @@ fn scan_refresh_kind() -> sysinfo::ProcessRefreshKind {
 /// named for the agent. A node/bun/deno install runs a script, and that script must be either in
 /// the agent's package (`@openai/codex`, `@anthropic-ai/claude-code`) or a launcher named for the
 /// agent in a `bin` directory. A repo or folder that is merely named `codex` does not count.
-pub(crate) fn agent_kind(name: &str, cmd: &[String]) -> Option<AgentKind> {
+pub fn agent_kind(name: &str, cmd: &[String]) -> Option<AgentKind> {
     // A version or help query runs no session, and a scan that catches one under the pane's
     // shell must not read it as the pane's agent.
     if cmd.iter().skip(1).any(|arg| matches!(arg.as_str(), "--version" | "-V" | "--help" | "-h")) {
@@ -285,7 +286,7 @@ pub(crate) fn agent_kind(name: &str, cmd: &[String]) -> Option<AgentKind> {
 /// tool of the outer agent starts is deeper, so it never counts. At one depth the agent in the
 /// tty's foreground group (`foreground`, see `PtyTerm::foreground_pgid`) wins, so a stopped job
 /// does not hide the agent the user works in. Otherwise the lowest pid wins.
-pub(crate) fn nearest_agent(
+pub fn nearest_agent(
     procs: &[Proc],
     root: u32,
     foreground: Option<u32>,
@@ -317,20 +318,20 @@ pub(crate) fn nearest_agent(
 
 /// What the scan thread found for the agent sessions, so the UI thread does no file I/O.
 #[derive(Default)]
-pub(crate) struct AgentFiles {
+pub struct AgentFiles {
     /// Claude registry files by pid, raw (the parser checks them against the process).
-    pub(crate) registry: std::collections::HashMap<u32, String>,
+    pub registry: std::collections::HashMap<u32, String>,
     /// The Codex session of each Codex process, by pid (see [`agent_codex`]).
-    pub(crate) codex: std::collections::HashMap<u32, AgentSession>,
+    pub codex: std::collections::HashMap<u32, AgentSession>,
 }
 
 /// One scan: the process table and the agent files read beside it.
-pub(crate) struct Scan {
-    pub(crate) procs: Vec<Proc>,
-    pub(crate) files: AgentFiles,
+pub struct Scan {
+    pub procs: Vec<Proc>,
+    pub files: AgentFiles,
     /// When the thread began this scan, before it read the process table. An exit status that
     /// arrived later than this is newer than everything the scan shows.
-    pub(crate) taken: std::time::Instant,
+    pub taken: std::time::Instant,
 }
 
 /// The nearest agent `head` and its direct children of the same kind. Never a deeper descendant:
@@ -344,7 +345,7 @@ fn agent_family<'a>(procs: &'a [Proc], head: &'a Proc, kind: AgentKind) -> Vec<&
 /// What a scan saw under one pane's shell. The reported pid is the nearest agent's, even when its
 /// child owns the Claude registry file. Claude's session is the registry's. Codex's is the match of
 /// its rollout scan, and it is `None` when that match is in doubt.
-pub(crate) fn pane_seen(scan: &Scan, root: u32, foreground: Option<u32>) -> Seen {
+pub fn pane_seen(scan: &Scan, root: u32, foreground: Option<u32>) -> Seen {
     let Some((kind, head)) = nearest_agent(&scan.procs, root, foreground) else {
         return Seen::NoAgent;
     };
@@ -375,7 +376,7 @@ fn is_codex_service(cmd: &[String]) -> bool {
 /// The live Codex processes that may hold a thread. That is every Codex process on the machine and
 /// not only the ones under a pane, because a TUI in another terminal makes threads in the same
 /// daemon. Not the daemon, and not the native child of a launcher (the launcher stands for it).
-pub(crate) fn codex_tuis(procs: &[Proc]) -> Vec<&Proc> {
+pub fn codex_tuis(procs: &[Proc]) -> Vec<&Proc> {
     let by_pid: std::collections::HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
     let is_codex = |p: &Proc| agent_kind(&p.name, &p.cmd) == Some(AgentKind::Codex);
     procs
@@ -450,7 +451,7 @@ fn read_small(path: &std::path::Path) -> Option<String> {
 
 /// Read the Claude registry file of each Claude process in `procs`. Runs on the scan thread. An
 /// unreadable or invalid file is just absent.
-pub(crate) fn read_agent_files(procs: &[Proc], claude_home: &std::path::Path) -> AgentFiles {
+pub fn read_agent_files(procs: &[Proc], claude_home: &std::path::Path) -> AgentFiles {
     let mut files = AgentFiles::default();
     for p in procs.iter().filter(|p| agent_kind(&p.name, &p.cmd) == Some(AgentKind::Claude)) {
         if let Some(text) = read_small(&claude_home.join(format!("sessions/{}.json", p.pid))) {
@@ -464,7 +465,7 @@ const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The ~1 Hz process-table refresh, on its own thread: a full refresh takes 7-19 ms with ~850
 /// processes, long enough to drop a frame or two when the UI thread paid for it.
-pub(crate) struct ProcScanner {
+pub struct ProcScanner {
     latest: Arc<Mutex<Option<Scan>>>,
     enabled: Arc<AtomicBool>,
 }
@@ -474,7 +475,7 @@ pub(crate) struct ProcScanner {
 /// the agents as they are and not as they were up to a second ago. `codex` is the rollout scanner
 /// of the scan thread. The UI thread passes `None` and reuses the last match instead, which keeps
 /// the scanner's memory in one place and the rollout reads off the UI thread.
-pub(crate) fn scan_now(
+pub fn scan_now(
     sys: &mut sysinfo::System,
     claude_home: &std::path::Path,
     codex: Option<&mut CodexScanner>,
@@ -490,7 +491,7 @@ pub(crate) fn scan_now(
 }
 
 impl ProcScanner {
-    pub(crate) fn spawn(ctx: egui::Context, enabled: bool) -> Self {
+    pub fn spawn(repaint: Repaint, enabled: bool) -> Self {
         let latest = Arc::new(Mutex::new(None));
         let enabled = Arc::new(AtomicBool::new(enabled));
         let slot = Arc::downgrade(&latest);
@@ -504,7 +505,7 @@ impl ProcScanner {
                     let scan = scan_now(&mut sys, &claude_home, Some(&mut codex));
                     let Some(slot) = slot.upgrade() else { return };
                     *slot.lock().unwrap() = Some(scan);
-                    ctx.request_repaint();
+                    repaint.now();
                 } else if slot.strong_count() == 0 {
                     return;
                 }
@@ -514,11 +515,11 @@ impl ProcScanner {
         Self { latest, enabled }
     }
 
-    pub(crate) fn set_enabled(&self, on: bool) {
+    pub fn set_enabled(&self, on: bool) {
         self.enabled.store(on, Ordering::Relaxed);
     }
 
-    pub(crate) fn take(&self) -> Option<Scan> {
+    pub fn take(&self) -> Option<Scan> {
         self.latest.lock().unwrap().take()
     }
 }
@@ -533,7 +534,7 @@ impl ProcScanner {
 /// stays cwd-less forever, and its tab keeps the bare "zsh" placeholder. Asking the OS costs one
 /// targeted refresh (`PROC_PIDVNODEPATHINFO` on macOS), so keep it off per-frame paths - it exists
 /// for the handoff, which runs it once per pane during a restart.
-pub(crate) fn process_cwd(pid: u32) -> Option<String> {
+pub fn process_cwd(pid: u32) -> Option<String> {
     let pid = sysinfo::Pid::from_u32(pid);
     let mut sys = sysinfo::System::new();
     sys.refresh_processes_specifics(
@@ -546,7 +547,7 @@ pub(crate) fn process_cwd(pid: u32) -> Option<String> {
 }
 
 /// Whether a process with this pid exists. Startup uses it to tell a live writer from a dead one.
-pub(crate) fn process_alive(pid: u32) -> bool {
+pub fn process_alive(pid: u32) -> bool {
     let pid = sysinfo::Pid::from_u32(pid);
     let mut sys = sysinfo::System::new();
     sys.refresh_processes_specifics(
@@ -582,7 +583,7 @@ struct Member {
 ///
 /// Costs one process-table refresh plus a `getsid` per process (macOS sysinfo answers `session_id`
 /// with a live syscall), so this is teardown-only - never a per-frame path.
-pub(crate) fn pty_victims(leader: u32) -> Vec<u32> {
+pub fn pty_victims(leader: u32) -> Vec<u32> {
     let mut sys = sysinfo::System::new();
     sys.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::All,
@@ -829,11 +830,11 @@ mod tests {
             }
             None
         };
-        let off = ProcScanner::spawn(egui::Context::default(), false);
+        let off = ProcScanner::spawn(Repaint::none(), false);
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert!(off.take().is_none(), "a disabled scanner must not refresh the table");
 
-        let on = ProcScanner::spawn(egui::Context::default(), true);
+        let on = ProcScanner::spawn(Repaint::none(), true);
         let table = poll(&on).expect("an enabled scanner publishes a table");
         assert!(table.procs.iter().any(|p| p.pid == std::process::id()), "the live table holds us");
         assert!(on.take().is_none(), "take drains the slot until the next scan");

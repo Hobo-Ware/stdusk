@@ -1,24 +1,24 @@
 //! Tabs: the `Tab` model + spawn helpers, the tab-bar panel, the right-click tab
 //! menu, and Stdusk's tab-management methods (new/close/move/reopen/rename/apply).
 
-use crate::agent_pane::{AgentSetup, PROMPT_FALLBACK};
-use crate::agent_restore;
-use crate::agents::{self, ResumeMode};
 use std::sync::atomic::Ordering;
+use stdusk_core::agent_pane::{AgentSetup, PROMPT_FALLBACK};
+use stdusk_core::agent_restore;
+use stdusk_core::agents::{self, ResumeMode};
 
 use eframe::egui;
 
 use crate::config::{Config, Profile};
-use crate::progress::Progress;
-use crate::terminal::{self, PtyTerm};
 use crate::ui::{self, draw_tab, icons, tint};
-use crate::widgets::{color_swatch, icon_button, style_menu};
 use crate::{COLS, ROWS, Stdusk, colors, pane, procwatch, repo, session};
+use stdusk_core::progress::Progress;
+use stdusk_core::terminal::{self, PtyTerm};
+use stdusk_egui::widgets::{color_swatch, icon_button, style_menu};
 
 /// Width the bar's right-side controls need: "+", the Tabs popup, the gear, and their
 /// spacing/spacer - reserved when splitting the rest into equal fixed-width tabs.
 const BAR_CONTROLS_W: f32 =
-    6.0 + crate::widgets::ICON_BTN_W * 2.0 + crate::widgets::ICON_TOGGLE_W + 3.0 * 4.0;
+    6.0 + stdusk_egui::widgets::ICON_BTN_W * 2.0 + stdusk_egui::widgets::ICON_TOGGLE_W + 3.0 * 4.0;
 
 /// Monotonic tab identity - stable across reorders/closes (used to target deferred actions).
 static NEXT_TAB_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -142,7 +142,8 @@ fn tab_with_root(root: pane::Pane<PtyTerm>) -> Tab {
 
 pub(crate) fn spawn_tab(cfg: &Config, ctx: &egui::Context, cwd: Option<String>) -> Tab {
     let group = repo::Group::for_cwd(cwd.as_deref());
-    let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd.clone()));
+    let term =
+        PtyTerm::spawn(COLS, ROWS, stdusk_egui::repaint_handle(ctx), &spawn_opts(cfg, cwd.clone()));
     Tab { group, repo_probed_cwd: cwd, ..tab_with_root(pane::Pane::leaf(term)) }
 }
 
@@ -196,7 +197,8 @@ fn adopt_saved_tree(
     // A leaf whose shell was not handed over gets a fresh shell, and its agent record ends with
     // the old one. That is a skip like any other: the toast counts it and the pane says so.
     let fresh = |leaf: &session::SavedPane, cwd: Option<String>| {
-        let mut term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
+        let mut term =
+            PtyTerm::spawn(COLS, ROWS, stdusk_egui::repaint_handle(ctx), &spawn_opts(cfg, cwd));
         if let session::SavedPane::Leaf { agent: Some(saved), .. } = leaf {
             let reason = agent_restore::SkipReason::NotHandedOver;
             plan.borrow_mut().skipped(saved, reason);
@@ -218,7 +220,7 @@ fn adopt_saved_tree(
         // right even for a layout that shifted, and an adopted pty has no other way to know it.
         let opts = spawn_opts(cfg, meta.cwd.clone().or(cwd));
         let (cols, rows) = crate::handoff::grid_dims(meta.cols, meta.rows);
-        let handover = crate::terminal::Adopted {
+        let handover = stdusk_core::terminal::Adopted {
             fd,
             cols,
             rows,
@@ -230,7 +232,7 @@ fn adopt_saved_tree(
             title_osc: crate::handoff::clamp_title(meta.title_osc.clone()),
             theme_reports: meta.theme_reports,
         };
-        let Ok(mut term) = PtyTerm::adopt(ctx.clone(), handover, &opts) else {
+        let Ok(mut term) = PtyTerm::adopt(stdusk_egui::repaint_handle(ctx), handover, &opts) else {
             eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
             // The failed adoption dropped the only fd we had for that shell, and the predecessor
             // disarms every pane as soon as we acknowledge - so this is the last chance anyone has
@@ -321,7 +323,7 @@ pub(crate) fn spawn_saved_tabs(
                 if let Some((_, Ok(resume))) = &restored {
                     resume_opts(&mut opts, resume);
                 }
-                let mut term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts);
+                let mut term = PtyTerm::spawn(COLS, ROWS, stdusk_egui::repaint_handle(ctx), &opts);
                 if let Some((kind, outcome)) = restored {
                     if let Some(notice) = restore_notice(kind, &outcome) {
                         term.set_notice(notice);
@@ -363,7 +365,8 @@ pub(crate) fn respawn_term(cfg: &Config, ctx: &egui::Context, term: &mut PtyTerm
         Some(e) if e.uptime_secs < terminal::RAPID_EXIT_SECS => term.rapid_exits() + 1,
         _ => 0,
     };
-    let mut fresh = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(cfg, cwd));
+    let mut fresh =
+        PtyTerm::spawn(COLS, ROWS, stdusk_egui::repaint_handle(ctx), &spawn_opts(cfg, cwd));
     fresh.set_rapid_exits(rapid);
     *term = fresh;
 }
@@ -372,8 +375,8 @@ pub(crate) fn respawn_term(cfg: &Config, ctx: &egui::Context, term: &mut PtyTerm
 /// (renamed, so cwd auto-titling stays off) and colored per its `color`.
 pub(crate) fn spawn_profile_tab(cfg: &Config, ctx: &egui::Context, profile: &Profile) -> Tab {
     let mut opts = spawn_opts(cfg, None);
-    opts.profile = Some(profile.clone());
-    let term = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &opts);
+    opts.profile = Some(profile.into());
+    let term = PtyTerm::spawn(COLS, ROWS, stdusk_egui::repaint_handle(ctx), &opts);
     let mut tab = tab_with_root(pane::Pane::leaf(term));
     tab.title.clone_from(&profile.name);
     tab.color = profile.color.as_deref().and_then(session::hex_to_color);
@@ -515,7 +518,7 @@ fn drag_swap_target(rects: &[egui::Rect], from: usize, pointer_x: f32) -> Option
 /// submenu and the "+" button's right-click menu.
 fn profile_menu_rows(ui: &mut egui::Ui, profiles: &[Profile], action: &mut Option<TabAction>) {
     for (pi, p) in profiles.iter().enumerate() {
-        if crate::widgets::menu_item(ui, &p.name, "").clicked() {
+        if stdusk_egui::widgets::menu_item(ui, &p.name, "").clicked() {
             *action = Some(TabAction::NewWithProfile(pi));
         }
     }
@@ -541,11 +544,11 @@ fn tab_menu(
     // running child from the ~1 Hz procwatch cache - never a synchronous scan on menu open.
     if let Some(name) = proc {
         ui.add_enabled_ui(false, |ui| {
-            crate::widgets::menu_item(ui, &format!("Running: {name}"), "");
+            stdusk_egui::widgets::menu_item(ui, &format!("Running: {name}"), "");
         });
         ui.separator();
     }
-    if crate::widgets::menu_item(ui, "New tab", &cfg.hotkeys.new_tab).clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "New tab", &cfg.hotkeys.new_tab).clicked() {
         *action = Some(TabAction::New);
     }
     if !cfg.profiles.is_empty() {
@@ -554,21 +557,21 @@ fn tab_menu(
             profile_menu_rows(ui, &cfg.profiles, action);
         });
     }
-    if crate::widgets::menu_item(ui, "Duplicate", "").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Duplicate", "").clicked() {
         *action = Some(TabAction::Duplicate(i));
     }
-    if crate::widgets::menu_item(ui, "Rename…", "double-click").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Rename…", "double-click").clicked() {
         *action = Some(TabAction::Rename(i));
     }
-    if crate::widgets::menu_item(ui, "Restart", "").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Restart", "").clicked() {
         *action = Some(TabAction::Restart(i));
     }
-    if crate::widgets::menu_item(ui, if pinned { "Unpin" } else { "Pin" }, "").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, if pinned { "Unpin" } else { "Pin" }, "").clicked() {
         *action = Some(TabAction::TogglePin(i));
     }
     // Notify on activity (Tabby's checkbox row): checked = the Phosphor check in the
     // shortcut slot. Per-tab, not persisted; one notification per unviewed stretch.
-    if crate::widgets::menu_item(
+    if stdusk_egui::widgets::menu_item(
         ui,
         "Notify on activity",
         if notify_activity { icons::CHECK } else { "" },
@@ -607,23 +610,23 @@ fn tab_menu(
         }
     });
     ui.separator();
-    if crate::widgets::menu_item(ui, "Move left", "Cmd+Shift+←").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Move left", "Cmd+Shift+←").clicked() {
         *action = Some(TabAction::MoveLeft(i));
     }
-    if crate::widgets::menu_item(ui, "Move right", "Cmd+Shift+→").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Move right", "Cmd+Shift+→").clicked() {
         *action = Some(TabAction::MoveRight(i));
     }
     ui.separator();
-    if crate::widgets::menu_item(ui, "Close", &cfg.hotkeys.close).clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Close", &cfg.hotkeys.close).clicked() {
         *action = Some(TabAction::Close(i));
     }
-    if crate::widgets::menu_item(ui, "Close other tabs", "").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Close other tabs", "").clicked() {
         *action = Some(TabAction::CloseOthers(i));
     }
-    if crate::widgets::menu_item(ui, "Close tabs to the right", "").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Close tabs to the right", "").clicked() {
         *action = Some(TabAction::CloseRight(i));
     }
-    if crate::widgets::menu_item(ui, "Close tabs to the left", "").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Close tabs to the left", "").clicked() {
         *action = Some(TabAction::CloseLeft(i));
     }
 }
@@ -642,7 +645,7 @@ fn spawn_relaunch_watcher() {
     let script = format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.2; done; exec open -a {app}",
         pid = std::process::id(),
-        app = crate::shell::single_quote(&app.to_string_lossy()),
+        app = stdusk_core::shell::single_quote(&app.to_string_lossy()),
     );
     // Detached on purpose: it must outlive us, which is why it waits on our pid instead of
     // being reaped with us.
@@ -835,12 +838,13 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(crate::widgets::overlay_frame())
+            .frame(stdusk_egui::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Rename tab").color(colors::dim()));
                 ui.add_space(6.0);
-                let r = crate::widgets::text_field(ui, &mut buf, "Tab name", 220.0, colors::fg());
+                let r =
+                    stdusk_egui::widgets::text_field(ui, &mut buf, "Tab name", 220.0, colors::fg());
                 // Focus ONCE on open. Re-requesting every frame would stop egui from ever
                 // reporting the Enter-triggered lost_focus, so Enter would never commit.
                 if focus {
@@ -852,10 +856,10 @@ impl Stdusk {
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::widgets::action_button(ui, "Rename", true).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Rename", true).clicked() {
                         commit = true;
                     }
-                    if crate::widgets::action_button(ui, "Cancel", false).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Cancel", false).clicked() {
                         cancel = true;
                     }
                 });
@@ -922,7 +926,7 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(crate::widgets::overlay_frame())
+            .frame(stdusk_egui::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Close tab?").strong().color(colors::fg()));
@@ -930,10 +934,10 @@ impl Stdusk {
                 ui.label(egui::RichText::new(&msg).color(colors::dim()));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::widgets::action_button(ui, "Close", true).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Close", true).clicked() {
                         confirm = true;
                     }
-                    if crate::widgets::action_button(ui, "Cancel", false).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Cancel", false).clicked() {
                         cancel = true;
                     }
                 });
@@ -1124,7 +1128,7 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(crate::widgets::overlay_frame())
+            .frame(stdusk_egui::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new(title).strong().color(colors::fg()));
@@ -1132,10 +1136,10 @@ impl Stdusk {
                 ui.label(egui::RichText::new(&msg).color(colors::dim()));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::widgets::action_button(ui, ok, true).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, ok, true).clicked() {
                         confirm = true;
                     }
-                    if crate::widgets::action_button(ui, "Cancel", false).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Cancel", false).clicked() {
                         cancel = true;
                     }
                 });
@@ -1229,7 +1233,7 @@ impl Stdusk {
                     // that REPLACES it. `settings_extra` is the delta the swap adds beyond the
                     // gear the base already budgeted, so fixed tabs shrink by exactly that.
                     let settings_extra = if self.settings_tab {
-                        ui::SETTINGS_TAB_W + 4.0 - crate::widgets::ICON_TOGGLE_W
+                        ui::SETTINGS_TAB_W + 4.0 - stdusk_egui::widgets::ICON_TOGGLE_W
                     } else {
                         0.0
                     };
@@ -1364,14 +1368,14 @@ impl Stdusk {
                         for (pos, &i) in visible.iter().enumerate() {
                             let shortcut =
                                 if pos < 9 { format!("Cmd+{}", pos + 1) } else { String::new() };
-                            if crate::widgets::menu_item(ui, &self.tabs[i].title, &shortcut)
+                            if stdusk_egui::widgets::menu_item(ui, &self.tabs[i].title, &shortcut)
                                 .clicked()
                             {
                                 clicked = Some(i);
                             }
                         }
                         ui.separator();
-                        if crate::widgets::menu_item(
+                        if stdusk_egui::widgets::menu_item(
                             ui,
                             "Command palette…",
                             &self.cfg.hotkeys.palette,
@@ -1390,7 +1394,7 @@ impl Stdusk {
                     let right_w = if self.settings_tab {
                         ui::SETTINGS_TAB_W + 4.0
                     } else {
-                        crate::widgets::ICON_TOGGLE_W
+                        stdusk_egui::widgets::ICON_TOGGLE_W
                     };
                     ui.add_space((ui.available_width() - right_w).max(0.0));
                     if self.settings_tab {
@@ -1425,7 +1429,8 @@ impl Stdusk {
                                 ui::shortcut_tip("Settings", &self.cfg.hotkeys.settings)
                             }
                         };
-                        let gear = crate::widgets::icon_toggle(ui, icons::GEAR, false, &gear_tip);
+                        let gear =
+                            stdusk_egui::widgets::icon_toggle(ui, icons::GEAR, false, &gear_tip);
                         if self.pending_update.is_some() || offered.is_some() {
                             ui.painter().circle_filled(
                                 ui::update_dot_center(gear.rect),
@@ -1537,16 +1542,14 @@ mod tests {
             bold_bright: false,
             agent_tracking: None,
             cwd: None,
-            profile: Some(Profile {
-                name: "e2e".into(),
+            profile: Some(stdusk_core::shell::ShellProfile {
                 shell: Some("/bin/sh".into()),
                 args: vec!["-c".into(), "printf READY; exec cat >/dev/null".into()],
                 cwd: None,
                 env: std::collections::BTreeMap::new(),
-                color: None,
             }),
         };
-        let term = PtyTerm::spawn(20, 5, egui::Context::default(), &opts);
+        let term = PtyTerm::spawn(20, 5, stdusk_core::repaint::Repaint::none(), &opts);
         let mut tab = tab_with_root(pane::Pane::leaf(term));
         let text = |tab: &Tab| -> String {
             tab.focused_term()
@@ -1965,7 +1968,7 @@ mod tests {
 
     #[test]
     fn a_resumed_leaf_starts_in_the_session_dir_and_queues_the_command() {
-        use crate::agents::{AgentKind, AgentSession, SessionId};
+        use stdusk_core::agents::{AgentKind, AgentSession, SessionId};
         let cfg = Config::default();
         let session = AgentSession {
             kind: AgentKind::Codex,
@@ -1988,8 +1991,13 @@ mod tests {
     #[test]
     fn real_pty_copy_from_a_background_tab_reaches_the_clipboard() {
         let spawn = |script: &str| {
-            let opts = crate::test_support::spawn_opts("/bin/sh", &["-c", script]);
-            tab_with_root(pane::Pane::leaf(PtyTerm::spawn(20, 5, egui::Context::default(), &opts)))
+            let opts = stdusk_core::test_support::spawn_opts("/bin/sh", &["-c", script]);
+            tab_with_root(pane::Pane::leaf(PtyTerm::spawn(
+                20,
+                5,
+                stdusk_core::repaint::Repaint::none(),
+                &opts,
+            )))
         };
         let tabs = [spawn("exec cat >/dev/null"), spawn("printf '\\033]52;c;aGk=\\a'; exec cat")];
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -2076,8 +2084,12 @@ mod tests {
         use crate::config::ResumeAgents::{Auto, Off, Prefill};
         // The pane spawned under `auto` and holds a record. The setting changes while it runs.
         let auto = Config::default();
-        let mut term =
-            PtyTerm::spawn(COLS, ROWS, egui::Context::default(), &spawn_opts(&auto, None));
+        let mut term = PtyTerm::spawn(
+            COLS,
+            ROWS,
+            stdusk_core::repaint::Repaint::none(),
+            &spawn_opts(&auto, None),
+        );
         let session = agents::AgentSession::from_saved(&saved_agent_record()).unwrap();
         term.restore_agent(session, false);
         assert!(term.agent_saved().is_some(), "the pane holds a record");

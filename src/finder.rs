@@ -4,8 +4,8 @@
 use eframe::egui;
 
 use crate::ui::icons;
-use crate::widgets::{icon_button, icon_toggle};
 use crate::{Stdusk, colors, search};
+use stdusk_egui::widgets::{icon_button, icon_toggle};
 
 /// Scrollback-search overlay state (Cmd+F). Matches are found over the buffer; the "current"
 /// one is highlighted via the terminal selection and scrolled into view.
@@ -49,7 +49,7 @@ impl Stdusk {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(crate::widgets::overlay_frame())
+            .frame(stdusk_egui::widgets::overlay_frame())
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(
@@ -70,10 +70,10 @@ impl Stdusk {
                 ui.label(egui::RichText::new(preview).monospace().small().color(colors::dim()));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::widgets::action_button(ui, "Paste", true).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Paste", true).clicked() {
                         do_paste = true;
                     }
-                    if crate::widgets::action_button(ui, "Cancel", false).clicked() {
+                    if stdusk_egui::widgets::action_button(ui, "Cancel", false).clicked() {
                         cancel = true;
                     }
                 });
@@ -126,7 +126,7 @@ impl Stdusk {
                 const PILL_W: f32 = 620.0;
                 ui.horizontal(|ui| {
                     ui.add_space((ui.available_width() - PILL_W).max(0.0));
-                    crate::widgets::overlay_frame().show(ui, |ui| {
+                    stdusk_egui::widgets::overlay_frame().show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 7.0;
                             ui.visuals_mut().extreme_bg_color = colors::bg(); // field bg = theme
@@ -146,7 +146,7 @@ impl Stdusk {
                                 colors::dim(),
                             );
                             let accent = if no_results { colors::red() } else { colors::fg() };
-                            let r = crate::widgets::text_field(
+                            let r = stdusk_egui::widgets::text_field(
                                 ui,
                                 &mut st.query,
                                 "Find",

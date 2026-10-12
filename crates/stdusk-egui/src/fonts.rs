@@ -2,15 +2,14 @@
 //! bytes via the system font source (core-text on macOS), picking the closest-to-regular and
 //! closest-to-bold faces by NAME, and assembles the full `FontDefinitions` (icons + user font +
 //! emoji/symbol fallbacks). Shared by startup and the settings live-apply so they can't drift.
-use eframe::egui;
 
 /// egui font-family name for the terminal's real bold face (registered by `build_fonts` only
 /// when the user's font family resolves a bold sibling - the bundled default has none).
-pub(crate) const BOLD_FONT_FAMILY: &str = "term-bold";
+pub const BOLD_FONT_FAMILY: &str = "term-bold";
 
 /// A user font resolved to raw file bytes + the face index inside the file (.ttc collections
 /// like Menlo need the index; plain .ttf/.otf use 0).
-pub(crate) struct ResolvedFont {
+pub struct ResolvedFont {
     bytes: Vec<u8>,
     index: u32,
 }
@@ -95,18 +94,18 @@ fn resolve_face(family: &str, score: impl Fn(&str) -> Option<u32>) -> Option<Res
 /// the system font source (core-text on macOS). None for an empty or unknown family.
 /// NOTE: font-kit's `select_best_match` is NOT face-accurate on macOS (it returned Menlo
 /// *Italic* for "Menlo"), so select the family and pick the closest-to-regular face ourselves.
-pub(crate) fn resolve_font(family: &str) -> Option<ResolvedFont> {
+pub fn resolve_font(family: &str) -> Option<ResolvedFont> {
     resolve_face(family, |n| Some(face_name_score(n)))
 }
 
 /// Resolve the family's real BOLD face (upright, closest to plain Bold), or `None` when the
 /// family doesn't ship one - bold cells then keep the regular face.
-pub(crate) fn resolve_bold_font(family: &str) -> Option<ResolvedFont> {
+pub fn resolve_bold_font(family: &str) -> Option<ResolvedFont> {
     resolve_face(family, bold_face_name_score)
 }
 
 /// Installed font family names, sorted; cached (the font list doesn't change mid-run).
-pub(crate) fn installed_families() -> &'static [String] {
+pub fn installed_families() -> &'static [String] {
     static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     FAMILIES.get_or_init(|| {
         let mut names = font_kit::source::SystemSource::new().all_families().unwrap_or_default();
@@ -122,7 +121,7 @@ pub(crate) fn installed_families() -> &'static [String] {
 /// A resolved `bold` face registers a second family (`BOLD_FONT_FAMILY`) that `render_grid`
 /// switches to for BOLD cells; without one, bold cells keep the regular face (the bright-ANSI
 /// color treatment `terminal.bold_bright` is independent and stands either way).
-pub(crate) fn build_fonts(
+pub fn build_fonts(
     custom: Option<ResolvedFont>,
     bold: Option<ResolvedFont>,
 ) -> egui::FontDefinitions {
@@ -196,7 +195,6 @@ mod tests {
         BOLD_FONT_FAMILY, bold_face_name_score, build_fonts, face_name_score, installed_families,
         resolve_bold_font, resolve_font,
     };
-    use eframe::egui;
 
     // Font resolution hits the real system source - gate on macOS where Menlo always exists.
     #[test]

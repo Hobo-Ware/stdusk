@@ -5,9 +5,11 @@
 use eframe::egui;
 
 use crate::tabs::spawn_opts;
-use crate::terminal::PtyTerm;
 use crate::ui::{self, collect_input, render_grid};
-use crate::widgets::style_menu;
+use stdusk_core::terminal::PtyTerm;
+use stdusk_egui::mouse::MouseReportingExt as _;
+use stdusk_egui::widgets::style_menu;
+
 use crate::{COLS, ROWS, Stdusk, colors, pane};
 
 /// The raw byte a Ctrl+V keypress sends (matches `keys::ctrl_letter(Key::V)`). Forwarding it makes
@@ -68,12 +70,12 @@ fn pane_menu(
 ) {
     style_menu(ui);
     ui.add_enabled_ui(has_selection, |ui| {
-        if crate::widgets::menu_item(ui, "Copy", "Cmd+C").clicked() {
+        if stdusk_egui::widgets::menu_item(ui, "Copy", "Cmd+C").clicked() {
             *action = Some(PaneAction::Copy(path.to_vec()));
         }
     });
     ui.add_enabled_ui(cwd.is_some(), |ui| {
-        if crate::widgets::menu_item(ui, "Copy current path", "").clicked() {
+        if stdusk_egui::widgets::menu_item(ui, "Copy current path", "").clicked() {
             *action = Some(PaneAction::CopyPath(path.to_vec()));
         }
     });
@@ -81,24 +83,24 @@ fn pane_menu(
     ui.menu_button("Split", |ui| {
         use pane::SplitDir::{Column, Row};
         style_menu(ui);
-        if crate::widgets::menu_item(ui, "Right", "Cmd+D").clicked() {
+        if stdusk_egui::widgets::menu_item(ui, "Right", "Cmd+D").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Row, false));
         }
-        if crate::widgets::menu_item(ui, "Down", "Cmd+Shift+D").clicked() {
+        if stdusk_egui::widgets::menu_item(ui, "Down", "Cmd+Shift+D").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Column, false));
         }
-        if crate::widgets::menu_item(ui, "Left", "").clicked() {
+        if stdusk_egui::widgets::menu_item(ui, "Left", "").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Row, true));
         }
-        if crate::widgets::menu_item(ui, "Up", "").clicked() {
+        if stdusk_egui::widgets::menu_item(ui, "Up", "").clicked() {
             *action = Some(PaneAction::Split(path.to_vec(), Column, true));
         }
     });
     ui.separator();
-    if crate::widgets::menu_item(ui, "New tab", "Cmd+T").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "New tab", "Cmd+T").clicked() {
         *action = Some(PaneAction::NewTab);
     }
-    if crate::widgets::menu_item(ui, "Close pane", "Cmd+W").clicked() {
+    if stdusk_egui::widgets::menu_item(ui, "Close pane", "Cmd+W").clicked() {
         *action = Some(PaneAction::Close(path.to_vec()));
     }
 }
@@ -145,7 +147,7 @@ impl Stdusk {
                 let bold_font = self.bold_font_ready.then(|| {
                     egui::FontId::new(
                         self.cfg.appearance.font_size * self.zoom,
-                        egui::FontFamily::Name(crate::fonts::BOLD_FONT_FAMILY.into()),
+                        egui::FontFamily::Name(stdusk_egui::fonts::BOLD_FONT_FAMILY.into()),
                     )
                 });
                 let m = ui.painter().layout_no_wrap("M".to_owned(), font.clone(), colors::fg());
@@ -285,10 +287,11 @@ impl Stdusk {
                         app_mouse =
                             mr.app_owns_pointer(mods, &tcfg.app_link_modifier, input_captured);
                         if app_mouse {
-                            let grid = crate::mouse::GridGeom { rect: *rect, cw, ch, cols, rows };
+                            let grid =
+                                stdusk_egui::mouse::GridGeom { rect: *rect, cw, ch, cols, rows };
                             let id = egui::Id::new(("pointer_tracker", path));
                             let mut tracker = ui.data(|d| d.get_temp(id)).unwrap_or_default();
-                            let bytes = crate::mouse::pointer_reports(
+                            let bytes = stdusk_egui::mouse::pointer_reports(
                                 &pointer_events,
                                 grid,
                                 mr,
@@ -312,7 +315,7 @@ impl Stdusk {
                                 // Alt+wheel sends arrow keys instead of scrolling, one per line
                                 // (Tabby's mousewheel handler - gated on Alt alone). An explicit
                                 // user override, so it wins even over app mouse reporting.
-                                term.send(&crate::keys::alt_scroll_bytes(lines));
+                                term.send(&stdusk_egui::keys::alt_scroll_bytes(lines));
                             } else if mr.reports_buttons() && mr.sgr {
                                 // The app asked for real mouse reporting: wheel -> SGR 1006 events
                                 // at the pointer's cell, so its fullscreen TUI scrolls (Claude
@@ -325,17 +328,17 @@ impl Stdusk {
                                 // caps to available history), the app has no backstop, so an
                                 // accelerated frame of many lines would over-scroll its TUI.
                                 let id = egui::Id::new(("wheel_accumulator", path));
-                                let mut wheel: crate::mouse::WheelAccumulator =
+                                let mut wheel: stdusk_egui::mouse::WheelAccumulator =
                                     ui.data(|d| d.get_temp(id)).unwrap_or_default();
                                 let raw_lines = wheel.lines(&pointer_events, ch, rows);
                                 ui.data_mut(|d| d.insert_temp(id, wheel));
-                                let reports = crate::mouse::wheel_report_lines(raw_lines);
-                                term.send(&crate::mouse::wheel_sgr(reports, col, row));
+                                let reports = stdusk_egui::mouse::wheel_report_lines(raw_lines);
+                                term.send(&stdusk_egui::mouse::wheel_sgr(reports, col, row));
                             } else if mr.alternate_scroll && term.is_alt_screen() {
                                 // Alt-screen app without real mouse reporting (less/pager): wheel
                                 // emits arrow keys (xterm alternateScroll), since the alt grid has
                                 // no scrollback to move.
-                                term.send(&crate::keys::alt_scroll_bytes(lines));
+                                term.send(&stdusk_egui::keys::alt_scroll_bytes(lines));
                             } else {
                                 term.scroll(lines);
                             }
@@ -391,8 +394,12 @@ impl Stdusk {
                         && !term.mouse_reporting().reports_buttons()
                         && let Some(p) = resp.interact_pointer_pos()
                     {
-                        let lines =
-                            crate::mouse::drag_autoscroll_lines(p.y, rect.top(), rect.bottom(), ch);
+                        let lines = stdusk_egui::mouse::drag_autoscroll_lines(
+                            p.y,
+                            rect.top(),
+                            rect.bottom(),
+                            ch,
+                        );
                         if lines != 0 {
                             term.scroll(lines);
                             ctx.request_repaint();
@@ -589,7 +596,12 @@ impl Stdusk {
             }
             Some(PaneAction::Split(p, dir, new_first)) => {
                 let cwd = self.tabs[self.active].root().leaf_at(&p).and_then(PtyTerm::cwd);
-                let new = PtyTerm::spawn(COLS, ROWS, ctx.clone(), &spawn_opts(&self.cfg, cwd));
+                let new = PtyTerm::spawn(
+                    COLS,
+                    ROWS,
+                    stdusk_egui::repaint_handle(ctx),
+                    &spawn_opts(&self.cfg, cwd),
+                );
                 let tab = &mut self.tabs[self.active];
                 let root = tab.root.take().expect("root");
                 let (root, focus) = root.split(&p, dir, new, new_first);

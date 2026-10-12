@@ -564,8 +564,8 @@ impl crate::Stdusk {
 /// a handoff that pane has nothing left to name its tab from: the successor's `Term` starts with no
 /// title and no scrollback either, so the tab sits on the bare "zsh" placeholder until the user
 /// happens to `cd`. Asking the OS costs one targeted process refresh per pane, once per restart.
-fn pane_cwd(term: &crate::terminal::PtyTerm) -> Option<String> {
-    term.cwd().or_else(|| term.shell_pid().and_then(crate::procwatch::process_cwd))
+fn pane_cwd(term: &stdusk_core::terminal::PtyTerm) -> Option<String> {
+    term.cwd().or_else(|| term.shell_pid().and_then(stdusk_core::procwatch::process_cwd))
 }
 
 /// Longest OSC title carried over the wire, in CHARS (never bytes - splitting a code point would
@@ -603,8 +603,8 @@ pub(crate) fn decode_screen(screen: Option<&String>) -> Vec<u8> {
 /// Is a command running, as far as OSC 133 has told us? `Idle` is NOT "at a prompt": it is also what
 /// a shell that emits no OSC 133 at all reports forever, so it maps to `None` (unknown) and lets the
 /// successor decide from the tty instead. Only a completed command (`Ok`/`Fail`) proves a prompt.
-fn cmd_running(cmd: crate::terminal::CmdState) -> Option<bool> {
-    use crate::terminal::CmdState::{Fail, Idle, Ok, Running};
+fn cmd_running(cmd: stdusk_core::terminal::CmdState) -> Option<bool> {
+    use stdusk_core::terminal::CmdState::{Fail, Idle, Ok, Running};
     match cmd {
         Running => Some(true),
         Ok | Fail => Some(false),
@@ -908,7 +908,7 @@ mod tests {
         // pty is needed: this only reproduces with a live shell process to ask the OS about.
         let dir = std::env::temp_dir().join(format!("stdusk-pane-cwd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let opts = crate::terminal::SpawnOpts {
+        let opts = stdusk_core::terminal::SpawnOpts {
             detect_progress: false,
             shell_integration: false, // no OSC 133 hooks, and nothing emits OSC 7 either
             autosuggestions: false,
@@ -917,16 +917,19 @@ mod tests {
             bold_bright: false,
             agent_tracking: None,
             cwd: Some(dir.to_string_lossy().into_owned()),
-            profile: Some(crate::config::Profile {
-                name: "cwdless".into(),
+            profile: Some(stdusk_core::shell::ShellProfile {
                 shell: Some("/bin/sh".into()),
                 args: vec!["-c".into(), "sleep 30".into()],
                 cwd: None,
                 env: std::collections::BTreeMap::new(),
-                color: None,
             }),
         };
-        let mut term = crate::terminal::PtyTerm::spawn(80, 24, egui::Context::default(), &opts);
+        let mut term = stdusk_core::terminal::PtyTerm::spawn(
+            80,
+            24,
+            stdusk_core::repaint::Repaint::none(),
+            &opts,
+        );
         // Wait for the shell to exist (the pgid is captured at spawn, but be honest about timing).
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while term.shell_pid().is_none() && std::time::Instant::now() < deadline {
@@ -963,7 +966,7 @@ mod tests {
     /// successor started by `launch`, then the full exchange. `Ok(())` means it acknowledged.
     fn live_handoff(sock_file: &Path, launch: impl FnOnce(&Path)) -> std::io::Result<()> {
         let listener = listen(sock_file)?;
-        let opts = crate::terminal::SpawnOpts {
+        let opts = stdusk_core::terminal::SpawnOpts {
             detect_progress: false,
             shell_integration: false,
             autosuggestions: false,
@@ -972,18 +975,21 @@ mod tests {
             bold_bright: false,
             agent_tracking: None,
             cwd: None,
-            profile: Some(crate::config::Profile {
-                name: "live".into(),
+            profile: Some(stdusk_core::shell::ShellProfile {
                 shell: Some("/bin/sh".into()),
                 args: vec!["-c".into(), "while :; do printf 'tick '; sleep 1; done".into()],
                 cwd: None,
                 env: std::collections::BTreeMap::new(),
-                color: None,
             }),
         };
         // Dropping this at the end of the test kills the shell again - we never mark it handed off,
         // because the successor is about to be killed too.
-        let term = crate::terminal::PtyTerm::spawn(80, 24, egui::Context::default(), &opts);
+        let term = stdusk_core::terminal::PtyTerm::spawn(
+            80,
+            24,
+            stdusk_core::repaint::Repaint::none(),
+            &opts,
+        );
         launch(sock_file);
         let sock = accept_within(&listener, Duration::from_secs(30))?;
         let session = SavedSession {

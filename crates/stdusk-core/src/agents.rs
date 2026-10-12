@@ -20,14 +20,14 @@ use crate::session::SavedAgent;
 /// Which agent CLI a pane ran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum AgentKind {
+pub enum AgentKind {
     Claude,
     Codex,
 }
 
 impl AgentKind {
     /// The name the user knows it by, for a notice.
-    pub(crate) fn display_name(self) -> &'static str {
+    pub fn display_name(self) -> &'static str {
         match self {
             Self::Claude => "Claude",
             Self::Codex => "Codex",
@@ -37,7 +37,7 @@ impl AgentKind {
 
 /// How restore reopens a session. "Off" is not a mode: `tabs::resume_mode` gives `None` for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ResumeMode {
+pub enum ResumeMode {
     /// Type the command and press Enter.
     Auto,
     /// Type the command and leave Enter to the user.
@@ -51,10 +51,10 @@ fn is_lower_hex(b: u8) -> bool {
 /// A canonical lowercase 8-4-4-4-12 hex UUID. The only constructor is [`SessionId::parse`], so a
 /// value of this type is always safe to type into a shell line and to join into a file name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct SessionId(String);
+pub struct SessionId(String);
 
 impl SessionId {
-    pub(crate) fn parse(text: &str) -> Option<Self> {
+    pub fn parse(text: &str) -> Option<Self> {
         let ok = text.len() == 36
             && text.bytes().enumerate().all(|(i, b)| match i {
                 8 | 13 | 18 | 23 => b == b'-',
@@ -63,13 +63,13 @@ impl SessionId {
         ok.then(|| Self(text.to_owned()))
     }
 
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// The creation time, in ms since the epoch, of a UUIDv7 id. Codex thread ids are v7: the first
     /// 48 bits are the time. Any other version has no time, so it gives `None`.
-    pub(crate) fn v7_time_ms(&self) -> Option<u64> {
+    pub fn v7_time_ms(&self) -> Option<u64> {
         let text = self.as_str();
         if text.as_bytes()[14] != b'7' {
             return None;
@@ -80,18 +80,18 @@ impl SessionId {
 
 /// One agent conversation: what runs and where its transcript lives.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AgentSession {
-    pub(crate) kind: AgentKind,
-    pub(crate) id: SessionId,
+pub struct AgentSession {
+    pub kind: AgentKind,
+    pub id: SessionId,
     /// Absolute directory that owns the transcript. Resume runs here.
-    pub(crate) cwd: String,
+    pub cwd: String,
     /// The transcript file. A Codex rollout scan names it. A Claude registry record names none.
-    pub(crate) transcript: Option<String>,
+    pub transcript: Option<String>,
 }
 
 impl AgentSession {
     /// `crash_hint` marks a record kept only because its agent died of a crash signal.
-    pub(crate) fn to_saved(&self, crash_hint: bool) -> SavedAgent {
+    pub fn to_saved(&self, crash_hint: bool) -> SavedAgent {
         SavedAgent {
             crashed: crash_hint,
             kind: self.kind,
@@ -102,7 +102,7 @@ impl AgentSession {
     }
 
     /// The live form of a saved record, or `None` when its id is not a canonical UUID.
-    pub(crate) fn from_saved(saved: &SavedAgent) -> Option<Self> {
+    pub fn from_saved(saved: &SavedAgent) -> Option<Self> {
         Some(Self {
             kind: saved.kind,
             id: SessionId::parse(&saved.session)?,
@@ -113,7 +113,7 @@ impl AgentSession {
 }
 
 /// A path string that is safe to keep: absolute, non-empty, no control characters.
-pub(crate) fn plain_abs_path(text: &str) -> Option<String> {
+pub fn plain_abs_path(text: &str) -> Option<String> {
     (Path::new(text).is_absolute() && !text.chars().any(char::is_control)).then(|| text.to_owned())
 }
 
@@ -126,11 +126,7 @@ pub(crate) fn plain_abs_path(text: &str) -> Option<String> {
 ///
 /// A file of this process was written after it started, so its second is at least the floored
 /// start second, and a stale file of an older process with the same pid is older.
-pub(crate) fn parse_claude_registry(
-    json: &str,
-    pid: u32,
-    proc_start_secs: u64,
-) -> Option<AgentSession> {
+pub fn parse_claude_registry(json: &str, pid: u32, proc_start_secs: u64) -> Option<AgentSession> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     if v.get("pid")?.as_u64()? != u64::from(pid) {
         return None;
@@ -152,16 +148,16 @@ pub(crate) fn parse_claude_registry(
 
 /// One process that may hold the pane's Claude session: the nearest agent, or its direct child of
 /// the same kind. A launcher can run the native `claude` as a child, and the registry names it.
-pub(crate) struct Candidate<'a> {
-    pub(crate) pid: u32,
-    pub(crate) start_secs: u64,
+pub struct Candidate<'a> {
+    pub pid: u32,
+    pub start_secs: u64,
     /// The raw `~/.claude/sessions/<pid>.json`, if the scan found one.
-    pub(crate) registry_json: Option<&'a str>,
+    pub registry_json: Option<&'a str>,
 }
 
 /// The Claude session of a pane: the registry file of the first process in `family` that has a
 /// valid one. The registry is the only source, so it names the session.
-pub(crate) fn claude_session(family: &[Candidate]) -> Option<AgentSession> {
+pub fn claude_session(family: &[Candidate]) -> Option<AgentSession> {
     family.iter().find_map(|c| parse_claude_registry(c.registry_json?, c.pid, c.start_secs))
 }
 
@@ -169,7 +165,7 @@ pub(crate) fn claude_session(family: &[Candidate]) -> Option<AgentSession> {
 
 /// What one scan saw under a pane's shell.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Seen {
+pub enum Seen {
     NoAgent,
     /// The nearest agent process: its kind, its pid, and its session when its source named one
     /// (the Claude registry, or the Codex rollout match).
@@ -184,14 +180,14 @@ pub(crate) enum Seen {
 
 /// The first session id in a command line. `claude --resume <id>`, `codex resume <id>` and
 /// `node codex.js resume <id>` all put it there. The form `--resume=<id>` counts too.
-pub(crate) fn argv_session(cmd: &[String]) -> Option<SessionId> {
+pub fn argv_session(cmd: &[String]) -> Option<SessionId> {
     cmd.iter().find_map(|arg| SessionId::parse(arg.rsplit('=').next().unwrap_or(arg)))
 }
 
 // --- Restore ------------------------------------------------------------------------------------
 
 /// The file-system questions the restore plan asks. A trait so tests use a fake.
-pub(crate) trait ResumeFs {
+pub trait ResumeFs {
     fn is_dir(&self, path: &str) -> bool;
     fn is_file(&self, path: &str) -> bool;
     /// Claude's transcript for an id, found in `projects/*/`. Only for a record that names no path.
@@ -200,12 +196,12 @@ pub(crate) trait ResumeFs {
 
 /// The real file system. `claude_home` is `$CLAUDE_CONFIG_DIR` or `~/.claude`, read from
 /// stdusk's own environment. A field, so tests can point it at a scratch directory.
-pub(crate) struct SystemFs {
-    pub(crate) claude_home: PathBuf,
+pub struct SystemFs {
+    pub claude_home: PathBuf,
 }
 
 impl SystemFs {
-    pub(crate) fn from_env() -> Self {
+    pub fn from_env() -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         let claude_home = std::env::var_os("CLAUDE_CONFIG_DIR")
             .filter(|v| !v.is_empty())
