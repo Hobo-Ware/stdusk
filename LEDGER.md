@@ -626,6 +626,17 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   `warn_on_close_running`); CLI badges are compact brand-color initial chips BEFORE the title -
   structurally unable to overlap the close-x. 129 tests green, both screenshot harnesses verified.
 
+## Workspace split - `stdusk-core` and `stdusk-egui` library crates (2026-10-12, unreleased)
+- The repo is a Cargo workspace. The app stays at the root; the terminal engine (pty, parsers, agent
+  tracking, session types) lives in `crates/stdusk-core` (no egui), and grid rendering, input, tab
+  drawing, fonts, colors and widgets live in `crates/stdusk-egui`. Other egui apps can embed the
+  terminal through these crates as git dependencies.
+- `PtyTerm::spawn` takes a `Repaint` callback instead of `egui::Context`; spawn takes a
+  `ShellProfile { shell, args, cwd, env }`. `colors::init(Theme)` sets the process-wide theme.
+- Behavior-neutral: 610 tests before and after; `--screenshot` of main vs the branch compared with
+  `magick compare -metric PSNR` = 120 dB (identical). Not moved yet: `AppPaths`, the restart handoff
+  and the quake/macOS window glue (still app-only).
+
 ## 1.6.0 (shipped, branch merged to main) - Restart keeps the shells running
 - **Session handoff is complete** (phases 1-4). Restart no longer kills anything from a bundle: the
   predecessor binds a unix socket, `open -n -a <bundle> --args --adopt <sock>`, sends a TOML header
