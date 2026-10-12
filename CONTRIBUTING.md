@@ -7,9 +7,9 @@ crate: `Cargo.toml` and `src/` are at the root. macOS-only for now.
 
 ```sh
 cargo run                 # launch the GUI (needs a display)
-cargo test                # unit + real-pty + proptest
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+cargo test --workspace     # unit + real-pty + proptest
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
 A change is mergeable when all four are green. CI enforces the last three on every PR; see
@@ -66,7 +66,7 @@ House rules:
   - Respect V1.md's non-goals before building anything large.
 
 Definition of done (CI enforces the last three on every PR):
-  cargo build && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check
+  cargo build && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all --check
 State your assumptions and the plan before large changes; if two interpretations are
 plausible, surface both instead of guessing.
 ```

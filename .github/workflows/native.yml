@@ -3,7 +3,7 @@ name: native (rust)
 on:
   push:
     branches: [main]
-    paths: ['src/**', 'Cargo.toml', 'Cargo.lock', 'build.rs', 'assets/**', 'packaging/**', '.github/workflows/native.yml']
+    paths: ['src/**', 'crates/**', 'Cargo.toml', 'Cargo.lock', 'assets/**', 'packaging/**', '.github/workflows/native.yml']
   # No paths filter on PRs: the `check` job is a REQUIRED status check, so it must run on
   # every PR - a filtered check that skips reports nothing and blocks the merge forever.
   pull_request:
@@ -21,8 +21,8 @@ jobs:
         with:
           workspaces: .
       - name: fmt
-        run: cargo fmt --check
+        run: cargo fmt --all --check
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets
