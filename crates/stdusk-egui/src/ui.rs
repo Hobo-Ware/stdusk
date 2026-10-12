@@ -375,11 +375,7 @@ pub const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (flush u
 /// position (top-left). Repositioning them to center on the tab row was reverted (an absolute-Y
 /// move in the wrong coord space flung them off-screen). Kept as a tunable const - `tabs.rs`
 /// honors a non-zero value if the window-mode strip ever wants a taller look.
-#[cfg(target_os = "macos")]
 pub const WINDOW_TAB_H_EXTRA: f32 = 0.0;
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) const WINDOW_TAB_H_EXTRA: f32 = 0.0;
 
 pub const TAB_FIXED_W: f32 = 200.0; // fixed-mode standard width (Tabby-like)
 

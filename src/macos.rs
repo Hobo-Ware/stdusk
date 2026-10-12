@@ -3,7 +3,9 @@
 //! `#[cfg(not(target_os = "macos"))]` no-op stub so the rest of the crate calls them
 //! unconditionally. Split out of `main.rs`; the quake show/hide policy (`apply_visibility`)
 //! stays there and calls into these.
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eframe::egui;
@@ -85,6 +87,7 @@ pub(crate) fn set_unified_titlebar(_enabled: bool) {}
 /// How far (points) to lower the traffic lights from their macOS default position so their row
 /// centres on the taller tab strip. Dialed in by eye against a real window-mode window (the
 /// headless harness can't render OS buttons). Unflipped coords: down = subtract.
+#[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_DROP: f64 = 5.0;
 
 /// The absolute y to place a traffic-light button at, capturing the macOS-default y into `baseline`
@@ -92,6 +95,7 @@ const TRAFFIC_LIGHT_DROP: f64 = 5.0;
 /// off a once-captured baseline (rather than nudging the current position) is what keeps re-applying
 /// idempotent: no per-frame drift, and it can never fling the buttons off-screen the way relative
 /// window-height math did (the 1.4.1 vanished-traffic-lights bug). Pure so the idempotence is tested.
+#[cfg(target_os = "macos")]
 pub(crate) fn traffic_light_y(baseline: &mut Option<f64>, current: f64) -> f64 {
     *baseline.get_or_insert(current) - TRAFFIC_LIGHT_DROP
 }
@@ -245,6 +249,7 @@ pub(crate) fn app_is_active() -> bool {
 /// Whether a Cmd+V keystroke over an image-only clipboard should be swallowed (and an image paste
 /// injected). Pure decision so the seam is unit-testable; the impure clipboard probe lives in
 /// `clipboard_image_only`.
+#[cfg(target_os = "macos")]
 pub(crate) fn decide_cmd_v_image_paste(command_down: bool, is_v: bool, image_only: bool) -> bool {
     command_down && is_v && image_only
 }
@@ -320,6 +325,7 @@ pub(crate) fn notify_done(title: &str, code: i32) {
 /// Where the "Open at login" item stands. `status()` is the only source of truth: the user can
 /// also change the item in System Settings > General > Login Items, so stdusk stores nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) enum LoginItem {
     Off,
     On,
@@ -333,6 +339,7 @@ pub(crate) enum LoginItem {
 
 /// Map `SMAppServiceStatus`' raw value (0 not registered, 1 enabled, 2 requires approval,
 /// 3 not found). Not found is recoverable by registration; unknown values are unavailable.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn login_item_from_raw(raw: isize) -> LoginItem {
     match raw {
         0 => LoginItem::Off,
@@ -419,10 +426,10 @@ fn login_item_api_available() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{decide_cmd_v_image_paste, traffic_light_y};
-
+    #[cfg(target_os = "macos")]
     #[test]
     fn traffic_light_baseline_captured_once_and_reapply_is_idempotent() {
+        use super::traffic_light_y;
         // First call captures the macOS-default y as the baseline and drops from it.
         let mut baseline = None;
         let placed = traffic_light_y(&mut baseline, 30.0);
@@ -454,8 +461,10 @@ mod tests {
         assert_eq!(super::os_dark_mode(), Some(stored_dark));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn cmd_v_image_paste_only_swallows_command_v_over_an_image() {
+        use super::decide_cmd_v_image_paste;
         // The intended case: Cmd held, "v", image-only clipboard -> swallow + inject.
         assert!(decide_cmd_v_image_paste(true, true, true));
         // No image on the clipboard: let egui's normal (text) Cmd+V through.

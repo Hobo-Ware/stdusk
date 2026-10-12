@@ -12,22 +12,24 @@ stdusk-egui.workspace = true
 anyhow = "1.0.104" # update check + brew upgrade: several error sources under one `?`
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] } # get_image() for clipboard image paste
 base64.workspace = true
-block2 = "0.6" # NSEvent local monitor block (Cmd+V image-paste hook on macOS)
 eframe = { version = "0.35.0", features = ["glow", "__screenshot"] }
 egui.workspace = true
 global-hotkey = "0.8.0"
 libc.workspace = true # killpg on tab/app close: SIGTERM+SIGKILL the shell's process group (kill orphans)
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
-objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] } # Open at login: SMAppService main-app login item
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSString", "NSUserDefaults"] } # AppleInterfaceStyle: the OS light/dark answer at startup
 rustix.workspace = true # session handoff: SCM_RIGHTS fd passing + tcsetwinsize, both SAFE (the crate forbids unsafe)
 serde.workspace = true
 serde_json.workspace = true
 sysinfo.workspace = true
 toml.workspace = true
-tray-icon = "0.24.1"
 ureq = "3.4.2" # update check: one redirect read from github.com/<repo>/releases/latest
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6" # NSEvent local monitor block (Cmd+V image-paste hook on macOS)
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSString", "NSUserDefaults"] } # AppleInterfaceStyle: the OS light/dark answer at startup
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] } # Open at login: SMAppService main-app login item
+tray-icon = "0.24.1"
 winit = "0.30" # macOS activation policy (accessory app) via eframe's event_loop_builder hook
 
 [dev-dependencies]
