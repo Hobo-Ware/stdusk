@@ -21,9 +21,15 @@ drop-down, theming, tab management) plus a first-party AI agent Tabby lacks.
 - `portable-pty` 0.9 - shell process + pty
 - `global-hotkey` 0.8 - Carbon-API global hotkey (no macOS Accessibility grant)
 - `serde` + `toml` - config; `regex` - progress scrape; `base64` - OSC 52
-- Edition 2024, single binary crate.
+- Edition 2024, a Cargo workspace: the `stdusk` binary at the root plus two library crates.
 
 ## Module layout
+
+Modules below that hold no egui code (`terminal`, `osc`, `progress`, `modes`, `screen`, `search`,
+`links`, `shell`, `pane`, `colors`, `themes`, `procwatch`, the `agent*` files, `test_support`) live in
+`crates/stdusk-core/src/`. The egui renderers and widgets (`fonts`, `widgets`, `mouse`, `key_to_bytes`,
+`render_grid`, `collect_input`, `draw_tab`) live in `crates/stdusk-egui/src/`. Their one-line
+descriptions stay in the tree below.
 
 ```
 src/
@@ -71,9 +77,9 @@ roadmap). Read both before starting; update `LEDGER.md` after every milestone.
 ```
 # crate is at the repo root (native/ promoted in 1.0.9)
 cargo build 2>build.log; echo $?        # check the REAL exit code, never `| tail`
-cargo test                              # unit + proptest
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+cargo test --workspace                  # unit + proptest
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
 cargo run                               # opens the GUI (needs the user's aqua session)
 cargo run -- --screenshot /tmp/x.png    # visual-test harness: demo tabs -> PNG -> exit
 ```
