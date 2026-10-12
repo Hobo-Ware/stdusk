@@ -57,7 +57,7 @@ struct Stdusk {
     prev_active: usize, // previously active tab index, for toggle-last-tab (Cmd+O)
     focus_history: Vec<u64>, // tab ids, most recently focused first; picks the tab after a close
     cfg: Config,
-    hotkey_mgr: GlobalHotKeyManager, // kept alive so the registration persists
+    hotkey_mgr: Option<GlobalHotKeyManager>, // kept alive so the registration persists; None without a hotkey backend
     registered_hotkey: String, // the hotkey string currently registered (live re-registration)
     hotkey_registered: bool,   // whether a global hotkey is registered (false in window mode)
     applied_font: String,      // the appearance.font last applied/attempted (live font re-apply)
@@ -141,9 +141,13 @@ impl Stdusk {
 
         // Global quake hotkey from config (default Ctrl+`). Carbon API on macOS - no
         // Accessibility grant needed. Window mode has no summon hotkey - skip registration.
-        let mgr = GlobalHotKeyManager::new().expect("hotkey manager");
-        let hotkey_registered = config::should_register_hotkey(&cfg.quake.mode);
-        if hotkey_registered {
+        let mgr = GlobalHotKeyManager::new()
+            .inspect_err(|e| {
+                eprintln!("stdusk: no global hotkey ({e}); use `stdusk --toggle` to show/hide");
+            })
+            .ok();
+        let hotkey_registered = config::should_register_hotkey(&cfg.quake.mode) && mgr.is_some();
+        if hotkey_registered && let Some(mgr) = &mgr {
             let (mods, code) = config::parse_hotkey(&cfg.quake.hotkey);
             let _ = mgr.register(HotKey::new(mods, code));
         }
@@ -179,7 +183,12 @@ impl Stdusk {
         let new_tab_req = instance::pending_counter();
         #[cfg(unix)]
         if let Some(listener) = instance_listener {
-            instance::spawn_listener(listener, new_tab_req.clone(), cc.egui_ctx.clone());
+            instance::spawn_listener(
+                listener,
+                new_tab_req.clone(),
+                toggle.clone(),
+                cc.egui_ctx.clone(),
+            );
         }
         #[cfg(not(unix))]
         let _ = instance_listener;
@@ -584,6 +593,16 @@ impl Stdusk {
         }
     }
 
+    fn unregister_hotkey(
+        &self,
+        mods: Option<global_hotkey::hotkey::Modifiers>,
+        code: global_hotkey::hotkey::Code,
+    ) {
+        if let Some(mgr) = &self.hotkey_mgr {
+            let _ = mgr.unregister(HotKey::new(mods, code));
+        }
+    }
+
     /// Reconcile the global quake hotkey with the config (settings live-apply: field commit, Save,
     /// Revert, Discard, sync pull, and mode switches). Window mode wants NO hotkey, so it
     /// unregisters any live one; dropdown mode (re-)registers when the string changed or nothing
@@ -592,7 +611,7 @@ impl Stdusk {
         if !config::should_register_hotkey(&self.cfg.quake.mode) {
             if self.hotkey_registered {
                 let (mods, code) = config::parse_hotkey(&self.registered_hotkey);
-                let _ = self.hotkey_mgr.unregister(HotKey::new(mods, code));
+                self.unregister_hotkey(mods, code);
                 self.hotkey_registered = false;
             }
             return false;
@@ -602,10 +621,11 @@ impl Stdusk {
         }
         if self.hotkey_registered {
             let (mods, code) = config::parse_hotkey(&self.registered_hotkey);
-            let _ = self.hotkey_mgr.unregister(HotKey::new(mods, code));
+            self.unregister_hotkey(mods, code);
         }
+        let Some(mgr) = &self.hotkey_mgr else { return false };
         let (mods, code) = config::parse_hotkey(&self.cfg.quake.hotkey);
-        let _ = self.hotkey_mgr.register(HotKey::new(mods, code));
+        let _ = mgr.register(HotKey::new(mods, code));
         self.registered_hotkey = self.cfg.quake.hotkey.clone();
         self.hotkey_registered = true;
         true
@@ -959,8 +979,10 @@ impl eframe::App for Stdusk {
                 }
                 self.visible = true;
                 self.was_focused = true;
-                // No summon hotkey is registered in window mode; drop any stray toggle flag.
-                self.toggle.store(false, Ordering::SeqCst);
+                // No summon hotkey is registered in window mode; a `--toggle` just raises the window.
+                if self.toggle.swap(false, Ordering::SeqCst) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
                 // The menu-bar item still works: Show brings us to front, Quit exits.
                 if let Some(tray) = &self.tray {
                     let clicks = tray::poll(tray);
@@ -1573,6 +1595,19 @@ impl eframe::App for Stdusk {
     }
 }
 
+/// `stdusk --toggle`: ask the running instance to show/hide itself and exit, without a window. For
+/// desktops with no global hotkey (Wayland): bind this command to a key in the compositor.
+fn toggle_running_instance() -> ! {
+    #[cfg(unix)]
+    let sent = instance::socket_path().is_some_and(|path| instance::send_toggle(&path).is_ok());
+    #[cfg(not(unix))]
+    let sent = false;
+    if !sent {
+        eprintln!("stdusk: no running instance to toggle");
+    }
+    std::process::exit(i32::from(!sent))
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -1595,6 +1630,10 @@ fn main() -> eframe::Result<()> {
             std::env::set_var("HOME", dir);
             std::env::set_var("XDG_RUNTIME_DIR", dir);
         }
+    }
+
+    if args.iter().any(|a| a == "--toggle") {
+        toggle_running_instance();
     }
 
     let mut cfg = Config::load();

@@ -1,6 +1,7 @@
 //! Single-instance enforcement (both quake and window mode). Only one stdusk process runs; a
 //! second launch connects to the primary over a Unix domain socket, asks it to surface + open a
-//! new tab, and exits(0) without ever creating a window. A stale socket (previous crash) is
+//! new tab, and exits(0) without ever creating a window. `stdusk --toggle` uses the same socket to
+//! show/hide the running instance (the way to summon it where no global hotkey exists, Wayland). A stale socket (previous crash) is
 //! unlinked and taken over. The wire command parsing + the stale-lock decision are pure and
 //! unit-tested; the socket round-trip is exercised below too.
 #[cfg(unix)]
@@ -9,7 +10,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// The bound listener the primary holds. A cross-platform alias so `Stdusk::new`'s signature
 /// compiles everywhere; only the unix build actually accepts connections.
@@ -18,20 +19,25 @@ pub(crate) type Listener = UnixListener;
 #[cfg(not(unix))]
 pub(crate) type Listener = ();
 
-/// The one command the socket carries today: focus the running instance and open a new tab.
+/// Focus the running instance and open a new tab: what a plain second launch sends.
 pub(crate) const CMD_NEW_TAB: &str = "new-tab";
+
+/// Show the running instance if hidden, hide it if shown: what `stdusk --toggle` sends.
+pub(crate) const CMD_TOGGLE: &str = "toggle";
 
 /// A parsed socket command. Kept as an enum so the wire protocol can grow (activate-only, run a
 /// program, ...) without the listener thread having to string-match inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Command {
     NewTab,
+    Toggle,
 }
 
 /// Parse one line off the socket. Unknown/blank lines are ignored (forward-compatible).
 pub(crate) fn parse_command(line: &str) -> Option<Command> {
     match line.trim() {
         CMD_NEW_TAB => Some(Command::NewTab),
+        CMD_TOGGLE => Some(Command::Toggle),
         _ => None,
     }
 }
@@ -74,11 +80,26 @@ pub(crate) enum Acquired {
     Secondary,
 }
 
-/// Send the one-line new-tab command down a connected stream (best effort).
+/// Send a one-line command down a connected stream (best effort).
 #[cfg(unix)]
-fn signal_new_tab(mut stream: UnixStream) {
-    let _ = writeln!(stream, "{CMD_NEW_TAB}");
+fn send_line(mut stream: UnixStream, command: &str) {
+    let _ = writeln!(stream, "{command}");
     let _ = stream.flush();
+}
+
+/// Send the new-tab command down a connected stream (best effort).
+#[cfg(unix)]
+fn signal_new_tab(stream: UnixStream) {
+    send_line(stream, CMD_NEW_TAB);
+}
+
+/// Tell the running primary to toggle its window (`stdusk --toggle`). `Err` when nothing is
+/// listening, so the caller can say so instead of silently doing nothing.
+#[cfg(unix)]
+pub(crate) fn send_toggle(path: &std::path::Path) -> std::io::Result<()> {
+    let mut stream = UnixStream::connect(path)?;
+    writeln!(stream, "{CMD_TOGGLE}")?;
+    stream.flush()
 }
 
 /// Bind the socket and become primary, creating the parent dir first. Handles a bind race with
@@ -140,13 +161,15 @@ pub(crate) fn take_over(path: &std::path::Path) -> Option<UnixListener> {
     UnixListener::bind(path).ok()
 }
 
-/// Spawn the primary's accept loop: each incoming connection's command bumps `pending` and wakes
-/// the UI via `request_repaint`. It only touches an atomic + the egui context - never the pty
-/// lock - so it can't deadlock the render loop.
+/// Spawn the primary's accept loop: a new-tab command bumps `pending`, a toggle command sets
+/// `toggle` (the flag the global-hotkey thread sets too), and either wakes the UI via
+/// `request_repaint`. It only touches atomics + the egui context - never the pty lock - so it
+/// can't deadlock the render loop.
 #[cfg(unix)]
 pub(crate) fn spawn_listener(
     listener: UnixListener,
     pending: Arc<AtomicUsize>,
+    toggle: Arc<AtomicBool>,
     ctx: eframe::egui::Context,
 ) {
     std::thread::spawn(move || {
@@ -154,11 +177,17 @@ pub(crate) fn spawn_listener(
             let Ok(stream) = conn else { continue };
             let mut reader = BufReader::new(stream);
             let mut line = String::new();
-            if reader.read_line(&mut line).is_ok() && parse_command(&line) == Some(Command::NewTab)
-            {
-                pending.fetch_add(1, Ordering::SeqCst);
-                ctx.request_repaint();
+            if reader.read_line(&mut line).is_err() {
+                continue;
             }
+            match parse_command(&line) {
+                Some(Command::NewTab) => {
+                    pending.fetch_add(1, Ordering::SeqCst);
+                }
+                Some(Command::Toggle) => toggle.store(true, Ordering::SeqCst),
+                None => continue,
+            }
+            ctx.request_repaint();
         }
     });
 }
@@ -178,6 +207,7 @@ mod tests {
         assert_eq!(parse_command("new-tab"), Some(Command::NewTab));
         assert_eq!(parse_command("new-tab\n"), Some(Command::NewTab));
         assert_eq!(parse_command("  new-tab  "), Some(Command::NewTab));
+        assert_eq!(parse_command("toggle\n"), Some(Command::Toggle));
         assert_eq!(parse_command(""), None);
         assert_eq!(parse_command("quit"), None);
         assert_eq!(parse_command("new-window"), None);
@@ -196,6 +226,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn toggling_with_no_primary_listening_is_an_error() {
+        let path =
+            std::env::temp_dir().join(format!("stdusk-test-none-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert!(send_toggle(&path).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn socket_round_trip_primary_receives_secondary_command() {
         use std::time::{Duration, Instant};
 
@@ -210,7 +249,8 @@ mod tests {
         };
         let pending = pending_counter();
         let ctx = eframe::egui::Context::default();
-        spawn_listener(listener, pending.clone(), ctx);
+        let toggle = Arc::new(AtomicBool::new(false));
+        spawn_listener(listener, pending.clone(), toggle.clone(), ctx);
 
         let Acquired::Secondary = acquire(&path) else {
             panic!("second acquire must be secondary");
@@ -222,6 +262,15 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(pending.load(Ordering::SeqCst), 1, "primary must receive the new-tab command");
+        assert!(!toggle.load(Ordering::SeqCst), "a new-tab command must not toggle");
+
+        send_toggle(&path).expect("a live primary accepts the toggle");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !toggle.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(toggle.load(Ordering::SeqCst), "primary must receive the toggle command");
+        assert_eq!(pending.load(Ordering::SeqCst), 1, "a toggle must not open a tab");
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }
