@@ -1608,6 +1608,16 @@ fn toggle_running_instance() -> ! {
     std::process::exit(i32::from(!sent))
 }
 
+/// Screenshot and background dev runs must not pull keyboard focus away from the window the
+/// developer is typing in: no Dock icon and no activation on launch.
+#[cfg(target_os = "macos")]
+fn open_without_taking_focus(builder: &mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>) {
+    use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+    builder
+        .with_activation_policy(ActivationPolicy::Accessory)
+        .with_activate_ignoring_other_apps(false);
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -1763,9 +1773,10 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(Arc::new(icon));
     }
 
+    let background = screenshot.is_some() || std::env::var_os("STDUSK_BACKGROUND").is_some();
     let mut options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow, // __screenshot capture requires the glow backend
-        viewport,
+        viewport: viewport.with_active(!background),
         ..Default::default()
     };
     // Dock/menu-bar presence on macOS:
@@ -1785,6 +1796,10 @@ fn main() -> eframe::Result<()> {
             #[cfg(not(target_os = "macos"))]
             let _ = builder;
         }));
+    }
+    #[cfg(target_os = "macos")]
+    if background {
+        options.event_loop_builder = Some(Box::new(open_without_taking_focus));
     }
     let settings_shot = settings_shot.is_some();
     let result = eframe::run_native(

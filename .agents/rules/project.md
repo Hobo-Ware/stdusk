@@ -82,6 +82,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 cargo run                               # opens the GUI (needs the user's aqua session)
 cargo run -- --screenshot /tmp/x.png    # visual-test harness: demo tabs -> PNG -> exit
+STDUSK_BACKGROUND=1 cargo run           # any dev run without stealing focus (--screenshot does this itself)
 ```
 
 The screenshot harness (`--screenshot`) renders representative demo tabs and saves a
