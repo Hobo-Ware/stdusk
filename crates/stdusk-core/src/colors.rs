@@ -155,17 +155,37 @@ pub fn dim() -> Color32 {
 pub(crate) fn legible_dim(t: &Theme) -> Color32 {
     ensure_contrast(t.ansi[8], t.bg, 3.0)
 }
+/// UI colors an embedding app sets for its own brand. Each one left `None` follows the theme's ANSI
+/// color, so the terminal's own palette is never changed by the brand.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct Chrome {
+    pub accent: Option<Color32>,
+    pub red: Option<Color32>,
+    pub green: Option<Color32>,
+    pub yellow: Option<Color32>,
+}
+
+static CHROME: LazyLock<RwLock<Chrome>> = LazyLock::new(|| RwLock::new(Chrome::default()));
+
+pub fn set_chrome(chrome: Chrome) {
+    *CHROME.write().unwrap() = chrome;
+}
+
+fn chrome() -> Chrome {
+    *CHROME.read().unwrap()
+}
+
 pub fn accent() -> Color32 {
-    theme().ansi[4]
+    chrome().accent.unwrap_or(theme().ansi[4])
 }
 pub fn red() -> Color32 {
-    theme().ansi[1]
+    chrome().red.unwrap_or(theme().ansi[1])
 }
 pub fn green() -> Color32 {
-    theme().ansi[2]
+    chrome().green.unwrap_or(theme().ansi[2])
 }
 pub fn yellow() -> Color32 {
-    theme().ansi[3]
+    chrome().yellow.unwrap_or(theme().ansi[3])
 }
 /// True when the theme background is dark (drives the direction of the derived chrome shades, so
 /// the tab strip / active tab / borders read correctly on both light and dark themes).
@@ -465,6 +485,18 @@ pub fn by_name(name: &str) -> Theme {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn chrome_colors_override_the_ui_and_leave_the_terminal_palette_alone() {
+        let teal = Color32::from_rgb(0x2d, 0xd4, 0xbf);
+        let before = theme();
+        set_chrome(Chrome { accent: Some(teal), ..Chrome::default() });
+        assert_eq!(accent(), teal);
+        assert_eq!(red(), before.ansi[1]);
+        assert_eq!(theme().ansi[4], before.ansi[4]);
+        set_chrome(Chrome::default());
+        assert_eq!(accent(), before.ansi[4]);
+    }
     use super::*;
 
     #[test]
