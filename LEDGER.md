@@ -2664,6 +2664,30 @@ This section holds the state only.
 - Verified: unit tests, clippy, fmt, and the real redirect (`stdusk-v1.8.0`). Not yet verified:
   a live install from the running app.
 
+## Shared live handoff (branch shared-handoff, no behavior change; 619 tests)
+The handover transport moved out of the app binary into `stdusk_core::handoff` so an embedding app
+can hand its own live panes to a freshly launched process and adopt them with `PtyTerm::adopt`.
+- **In core**: wire format (`PROTOCOL` 2, unchanged), `PaneMeta` (every pane field, plus an opaque
+  `extra: serde_json::Value` that stdusk leaves `Null`, which is never written, so the wire is
+  byte-identical), the `Layout` trait (the app's header payload; the transport only asks its
+  `pane_count`), `Incoming<S>`, `listen`, `accept_within`, `LAUNCH_TIMEOUT`, `send_session`,
+  `recv_session`, `capture_pane` (a `PtyTerm` to meta + fd), `adopt_pane` (meta + fd to a `PtyTerm`,
+  reaping the orphaned process group when the adoption fails), `fallback`. The module docs carry
+  the contract, including "a failed handoff leaves the old window up".
+- **Stays in `src/handoff.rs`**: the instance-socket flag (`gave_instance_socket`), `available`
+  (bundle check), `sock_path`, `spawn_successor` (`open -n -a`, `--adopt`, `--state-dir`),
+  `Stdusk::hand_off` and `handoff_panes` (tabs to panes), `impl Layout for SavedSession`, and the
+  two `--ignored` live checks (they need the real binary).
+- `main.rs` calls `stdusk_core::handoff::{fallback, Fallback}`; `tabs.rs` adopts through
+  `adopt_pane`. The app no longer depends on `rustix` or `base64` directly.
+- Tests: 615 passed / 4 ignored before, 619 passed / 4 ignored after. All 17 transport tests moved
+  with the code (the layout-specific ones now use a small test `Layout` in core); added an `extra`
+  round trip, `capture_pane`, `adopt_pane` geometry clamping, and the saved-session pairing test.
+- Verified: fmt, clippy `-D warnings`, `cargo test --workspace` on macOS (cargo 1.93). Not verified:
+  Linux and Rust 1.99 (left to CI), the two live `--ignored` handoff checks, a real two-process
+  handover (needs a second app process with a window).
+- Entries above that cite `handoff::...` paths predate this move.
+
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
   Keep the unsaved-changes dialog open and report the error when writing config fails.
