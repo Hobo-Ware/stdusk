@@ -26,7 +26,7 @@ drop-down, theming, tab management) plus a first-party AI agent Tabby lacks.
 ## Module layout
 
 Modules below that hold no egui code (`terminal`, `osc`, `progress`, `modes`, `screen`, `search`,
-`links`, `shell`, `pane`, `colors`, `themes`, `paths`, `procwatch`, the `agent*` files, `test_support`) live in
+`links`, `shell`, `pane`, `colors`, `themes`, `paths`, `procwatch`, `handoff`, the `agent*` files, `test_support`) live in
 `crates/stdusk-core/src/`. The egui renderers and widgets (`fonts`, `widgets`, `mouse`, `key_to_bytes`,
 `render_grid`, `collect_input`, `draw_tab`) live in `crates/stdusk-egui/src/`. Their one-line
 descriptions stay in the tree below.
@@ -48,6 +48,7 @@ src/
   ui.rs          pure UI helpers extracted from the render loop (grid render, draw_tab, pos_to_cell)
   widgets.rs     design-system egui primitives (text_field, num_field, slider, chip, toggle_switch, focus_ring, icon buttons)
   settings.rs    settings view and reapply_config (runtime theme/hotkey/font; callers own edit baselines)
+  handoff.rs     app half of the session handoff: launch the successor, snapshot tabs, instance-socket flag (the transport is `stdusk_core::handoff`)
   keys.rs        keyboard input encoding (key_to_bytes, ctrl/alt sequences, hotkey parse/match)
   terminal.rs    PtyTerm: pty spawn, reader thread, alacritty Term, grid snapshot, selection
   mouse.rs       SGR 1006 mouse reporting (wheel/click encoding, drag autoscroll) gated on TermMode
@@ -58,6 +59,7 @@ src/
   progress.rs    ProgressScanner: Tabby's %-regex scrape (alt-screen guarded)
   osc.rs         OscScanner: OSC 7/1337/52/9;4 framing across chunk boundaries
   modes.rs       DEC mode 2031 tracking + dark/light theme reports (apps repaint on theme change)
+  handoff.rs     (stdusk-core) live pty handover transport: wire format, `PaneMeta` + opaque `extra`, `Layout`, capture/adopt, fallback
   screen.rs      grid -> ANSI screen dump, replayed into a handed-over pane (session handoff)
   search.rs      scrollback search: match finding + options
   links.rs       URL/path detection for clickable links
