@@ -4,7 +4,8 @@
 //! the parsers (`osc`, `progress`, `modes`, `screen`, `search`, `links`), `shell` launch setup,
 //! the `pane` split tree and the Claude Code / Codex session tracking (`agents`, `procwatch`)
 //! build on it. Background threads ask for a redraw through `repaint::Repaint`.
-//! `colors` keeps the process-wide theme every renderer reads.
+//! `colors` keeps the process-wide theme every renderer reads. `handoff` moves live ptys to a
+//! freshly launched process so an app can restart without killing its shells.
 
 pub mod agent_codex;
 pub mod agent_codex_scan;
@@ -13,6 +14,7 @@ pub mod agent_restore;
 pub mod agent_track;
 pub mod agents;
 pub mod colors;
+pub mod handoff;
 pub mod links;
 pub mod modes;
 pub mod mouse;

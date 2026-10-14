@@ -187,7 +187,7 @@ fn adopt_saved_tree(
     cfg: &Config,
     ctx: &egui::Context,
     sp: &session::SavedPane,
-    panes: &mut std::vec::IntoIter<(crate::handoff::PaneMeta, std::os::fd::OwnedFd)>,
+    panes: &mut std::vec::IntoIter<(stdusk_core::handoff::PaneMeta, std::os::fd::OwnedFd)>,
     plan: &mut agent_restore::RestorePlan,
 ) -> pane::Pane<PtyTerm> {
     // RefCell because `rebuild` takes a `Fn` (it's shared down the recursion), and popping the
@@ -219,27 +219,10 @@ fn adopt_saved_tree(
         // The pane's own cwd at handover beats the saved leaf's: it rides with the fd, so it is
         // right even for a layout that shifted, and an adopted pty has no other way to know it.
         let opts = spawn_opts(cfg, meta.cwd.clone().or(cwd));
-        let (cols, rows) = crate::handoff::grid_dims(meta.cols, meta.rows);
-        let handover = stdusk_core::terminal::Adopted {
-            fd,
-            cols,
-            rows,
-            pgid: meta.pgid,
-            alive: crate::handoff::alive_duration(meta.alive_secs),
-            alt_screen: meta.alt_screen,
-            cmd_running: meta.cmd_running,
-            replay: crate::handoff::decode_screen(meta.screen.as_ref()),
-            title_osc: stdusk_core::terminal::clamp_title(meta.title_osc.clone()),
-            theme_reports: meta.theme_reports,
-        };
-        let Ok(mut term) = PtyTerm::adopt(stdusk_egui::repaint_handle(ctx), handover, &opts) else {
+        let Ok(mut term) =
+            stdusk_core::handoff::adopt_pane(stdusk_egui::repaint_handle(ctx), &meta, fd, &opts)
+        else {
             eprintln!("stdusk: a handed-over pane could not be adopted; starting a fresh shell");
-            // The failed adoption dropped the only fd we had for that shell, and the predecessor
-            // disarms every pane as soon as we acknowledge - so this is the last chance anyone has
-            // to reap it. The fresh shell gets no record: no agent runs in it.
-            if let Some(pgid) = meta.pgid {
-                terminal::reap_orphaned_session(pgid);
-            }
             return fresh(leaf, opts.cwd);
         };
         // The agent keeps running in an adopted shell, so the pane keeps its record.
@@ -275,7 +258,7 @@ pub(crate) fn adopt_saved_tab(
     cfg: &Config,
     ctx: &egui::Context,
     st: &session::SavedTab,
-    panes: &mut std::vec::IntoIter<(crate::handoff::PaneMeta, std::os::fd::OwnedFd)>,
+    panes: &mut std::vec::IntoIter<(stdusk_core::handoff::PaneMeta, std::os::fd::OwnedFd)>,
     plan: &mut agent_restore::RestorePlan,
 ) -> Tab {
     let mut tab = tab_with_root(adopt_saved_tree(cfg, ctx, &saved_tree(st), panes, plan));
@@ -1668,7 +1651,7 @@ mod tests {
         title_osc: Option<&str>,
     ) -> (Tab, std::io::PipeWriter) {
         let (rx, tx) = std::io::pipe().expect("pipe");
-        let meta = crate::handoff::PaneMeta {
+        let meta = stdusk_core::handoff::PaneMeta {
             pgid: None,
             cwd: cwd.map(Into::into),
             alive_secs: 30.0,
@@ -1679,6 +1662,7 @@ mod tests {
             screen: None,
             title_osc: title_osc.map(Into::into),
             theme_reports: false,
+            ..Default::default()
         };
         let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
         let tab = adopt_saved_tab(
@@ -1768,7 +1752,7 @@ mod tests {
                 ..Default::default()
             };
             let (rx, mut tx) = std::io::pipe().expect("pipe");
-            let meta = crate::handoff::PaneMeta { cols: 80, rows: 24, ..Default::default() };
+            let meta = stdusk_core::handoff::PaneMeta { cols: 80, rows: 24, ..Default::default() };
             let mut panes = vec![(meta, std::os::fd::OwnedFd::from(rx))].into_iter();
             let tab = adopt_saved_tab(
                 &cfg,
@@ -1845,7 +1829,7 @@ mod tests {
     fn an_adopted_pane_keeps_the_theme_reports_its_app_enabled() {
         for enabled in [true, false] {
             let (rx, _tx) = std::io::pipe().expect("pipe");
-            let meta = crate::handoff::PaneMeta {
+            let meta = stdusk_core::handoff::PaneMeta {
                 cols: 80,
                 rows: 24,
                 theme_reports: enabled,

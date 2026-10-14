@@ -1688,10 +1688,10 @@ fn main() -> eframe::Result<()> {
     #[cfg(unix)]
     if adopting
         && incoming.is_none()
-        && handoff::fallback(
+        && stdusk_core::handoff::fallback(
             instance::socket_path()
                 .is_some_and(|p| std::os::unix::net::UnixStream::connect(p).is_ok()),
-        ) == handoff::Fallback::ExitQuietly
+        ) == stdusk_core::handoff::Fallback::ExitQuietly
     {
         eprintln!("stdusk: handoff failed but the previous instance is still running; exiting");
         return Ok(());
