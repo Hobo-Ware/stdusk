@@ -11,12 +11,10 @@ stdusk-core.workspace = true
 stdusk-egui.workspace = true
 anyhow = "1.0.104" # update check + brew upgrade: several error sources under one `?`
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] } # get_image() for clipboard image paste
-base64.workspace = true
 eframe = { version = "0.35.0", features = ["glow", "__screenshot"] }
 egui.workspace = true
 global-hotkey = "0.8.0"
 libc.workspace = true # killpg on tab/app close: SIGTERM+SIGKILL the shell's process group (kill orphans)
-rustix.workspace = true # session handoff: SCM_RIGHTS fd passing + tcsetwinsize, both SAFE (the crate forbids unsafe)
 serde.workspace = true
 serde_json.workspace = true
 sysinfo.workspace = true
