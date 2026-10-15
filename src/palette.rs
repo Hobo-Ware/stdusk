@@ -18,11 +18,17 @@ pub(crate) struct PaletteState {
     pub(crate) query: String,
     pub(crate) selected: usize,
     pub(crate) focus: bool, // request text-field focus once on open (re-requesting breaks Enter)
+    tidewatch: bool,        // Tidewatch found on open; without it the move command is hidden
 }
 
 impl PaletteState {
     pub(crate) fn new() -> Self {
-        Self { query: String::new(), selected: 0, focus: true }
+        Self {
+            query: String::new(),
+            selected: 0,
+            focus: true,
+            tidewatch: crate::tidewatch::installed(),
+        }
     }
 }
 
@@ -52,11 +58,12 @@ pub(crate) enum PaletteCmd {
     ClearScrollback,
     CopyPath,
     OpenConfig,
+    MoveToTidewatch,
     Quit,
 }
 
 impl PaletteCmd {
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 23] = [
         Self::NewTab,
         Self::CloseTab,
         Self::DuplicateTab,
@@ -78,6 +85,7 @@ impl PaletteCmd {
         Self::ClearScrollback,
         Self::CopyPath,
         Self::OpenConfig,
+        Self::MoveToTidewatch,
         Self::Quit,
     ];
 
@@ -116,6 +124,7 @@ impl PaletteCmd {
             Self::ClearScrollback => "Clear Scrollback",
             Self::CopyPath => "Copy Path",
             Self::OpenConfig => "Open Config",
+            Self::MoveToTidewatch => "Move tabs to Tidewatch",
             Self::Quit => "Quit",
         })
     }
@@ -152,6 +161,11 @@ fn fuzzy_match(query: &str, label: &str) -> Option<i64> {
         }
     }
     (qi == q.len()).then_some(score)
+}
+
+/// Commands that exist only when something outside the app does: today, Tidewatch being installed.
+fn offered(cmd: PaletteCmd, tidewatch: bool) -> bool {
+    cmd != PaletteCmd::MoveToTidewatch || tidewatch
 }
 
 /// All commands matching `query` (static commands + one "New Tab: <name>" entry per profile),
@@ -210,7 +224,8 @@ impl Stdusk {
                     st.selected = 0;
                 }
                 let repos = if self.grouping() { self.group_labels() } else { Vec::new() };
-                let filtered = filter_commands(&st.query, &self.cfg.profiles, &repos);
+                let mut filtered = filter_commands(&st.query, &self.cfg.profiles, &repos);
+                filtered.retain(|&c| offered(c, st.tidewatch));
                 let shown = filtered.len().min(MAX_ROWS);
                 ui.add_space(6.0);
                 if shown == 0 {
@@ -325,6 +340,7 @@ impl Stdusk {
                     let _ = std::process::Command::new(stdusk_core::links::OPENER).arg(p).spawn();
                 }
             }
+            PaletteCmd::MoveToTidewatch => self.move_to_tidewatch(ctx),
             PaletteCmd::Quit => self.begin_quit(ctx),
         }
     }
@@ -446,6 +462,14 @@ mod tests {
         assert!(
             !filter_commands("", &ps, &[]).iter().any(|c| matches!(c, PaletteCmd::SwitchRepo(_)))
         );
+    }
+
+    #[test]
+    fn the_tidewatch_command_is_offered_only_when_tidewatch_is_installed() {
+        assert_eq!(PaletteCmd::MoveToTidewatch.label(&[], &[]), "Move tabs to Tidewatch");
+        assert!(offered(PaletteCmd::MoveToTidewatch, true));
+        assert!(!offered(PaletteCmd::MoveToTidewatch, false));
+        assert!(offered(PaletteCmd::Quit, false));
     }
 
     #[test]

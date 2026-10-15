@@ -50,7 +50,19 @@ pub(crate) fn available() -> bool {
 /// `$HOME`, never a world-writable /tmp path - same rule as the single-instance socket). The pid
 /// keeps two overlapping restarts from colliding and makes a leftover file obviously stale.
 pub(crate) fn sock_path() -> Option<PathBuf> {
-    let name = format!("stdusk-handoff-{}.sock", std::process::id());
+    socket_in_runtime_dir(&sock_name("stdusk-handoff", std::process::id()))
+}
+
+/// The socket a move to Tidewatch listens on: [`sock_path`]'s rule, a name of its own.
+pub(crate) fn tidewatch_sock_path() -> Option<PathBuf> {
+    socket_in_runtime_dir(&sock_name("stdusk-to-tidewatch", std::process::id()))
+}
+
+fn sock_name(prefix: &str, pid: u32) -> String {
+    format!("{prefix}-{pid}.sock")
+}
+
+fn socket_in_runtime_dir(name: &str) -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
         return Some(PathBuf::from(dir).join(name));
     }
@@ -172,6 +184,12 @@ mod tests {
             active: 1,
             window: None,
         }
+    }
+
+    #[test]
+    fn the_two_handoff_sockets_never_share_a_name() {
+        assert_eq!(sock_name("stdusk-handoff", 42), "stdusk-handoff-42.sock");
+        assert_eq!(sock_name("stdusk-to-tidewatch", 42), "stdusk-to-tidewatch-42.sock");
     }
 
     #[test]

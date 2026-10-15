@@ -23,6 +23,7 @@ mod session;
 mod settings;
 mod sync;
 mod tabs;
+mod tidewatch;
 mod tray;
 mod ui;
 mod update;
