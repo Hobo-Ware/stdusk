@@ -48,6 +48,7 @@ src/
   ui.rs          pure UI helpers extracted from the render loop (grid render, draw_tab, pos_to_cell)
   widgets.rs     design-system egui primitives (text_field, num_field, slider, chip, toggle_switch, focus_ring, icon buttons)
   settings.rs    settings view and reapply_config (runtime theme/hotkey/font; callers own edit baselines)
+  tidewatch.rs   "Move tabs to Tidewatch": find the Tidewatch app, launch it with the socket, send every live pane as a `handoff::export::Export`
   handoff.rs     app half of the session handoff: launch the successor, snapshot tabs, instance-socket flag (the transport is `stdusk_core::handoff`)
   keys.rs        keyboard input encoding (key_to_bytes, ctrl/alt sequences, hotkey parse/match)
   terminal.rs    PtyTerm: pty spawn, reader thread, alacritty Term, grid snapshot, selection
@@ -60,6 +61,7 @@ src/
   osc.rs         OscScanner: OSC 7/1337/52/9;4 framing across chunk boundaries
   modes.rs       DEC mode 2031 tracking + dark/light theme reports (apps repaint on theme change)
   handoff.rs     (stdusk-core) live pty handover transport: wire format, `PaneMeta` + opaque `extra`, `Layout`, capture/adopt, fallback
+  handoff/export.rs (stdusk-core) `Export` / `ExportPane`: the cross-app header for moving panes to another app (Tidewatch)
   screen.rs      grid -> ANSI screen dump, replayed into a handed-over pane (session handoff)
   search.rs      scrollback search: match finding + options
   links.rs       URL/path detection for clickable links
