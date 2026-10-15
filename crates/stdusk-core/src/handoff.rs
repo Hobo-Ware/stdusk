@@ -63,8 +63,16 @@
 //! `PtyTerm::arm_teardown` on every adopted pane. A pane that fails to adopt is already reaped by
 //! [`adopt_pane`]; the app starts a fresh shell in its place.
 //!
+//! # Moving to a different app
+//!
+//! The same exchange also moves panes between two DIFFERENT apps built on these crates: the sender
+//! uses [`export::Export`] as its [`Layout`], the receiver reads it with
+//! `Incoming::<Export>::receive` and arranges the adopted panes itself.
+//!
 //! The protocol version ([`PROTOCOL`]) must match on both sides, so both sides must run builds of
 //! the same embedding app: a mismatch aborts the handover and the predecessor keeps its window.
+pub mod export;
+
 use std::io::{IoSlice, IoSliceMut, Read, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{BorrowedFd, OwnedFd};
