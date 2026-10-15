@@ -2688,6 +2688,33 @@ can hand its own live panes to a freshly launched process and adopt them with `P
   handover (needs a second app process with a window).
 - Entries above that cite `handoff::...` paths predate this move.
 
+## Move tabs to Tidewatch (branch move-to-tidewatch; 632 tests)
+A palette command hands every LIVE pane of the window to the Tidewatch app (a sibling that embeds
+these crates) over the existing live handoff, so the shells keep running there.
+- **Contract (core)**: `stdusk_core::handoff::export::{Export { panes }, ExportPane { title, cwd,
+  focused }}`, the `Layout` of the exchange (`pane_count = panes.len()`), one entry per leaf in the
+  order the panes travel. `PROTOCOL` stays 2: the new header is just another `Layout`. `title` is
+  the tab title if renamed, else the pane's OSC title. `focused` is set on at most one pane: the
+  focused pane of the active tab.
+- **App half (`src/tidewatch.rs`)**: `find` (macOS: `/Applications`, `~/Applications`, then `mdfind`
+  on the bundle id `dev.hoboware.tidewatch`, asked once per process; Linux: `tidewatch` on PATH),
+  `launch_command` (`open -n -a <app> --args --from-stdusk <sock>` / `tidewatch --from-stdusk
+  <sock>`, detached), `Stdusk::move_to_tidewatch`. Socket: `stdusk-to-tidewatch-<pid>.sock` beside
+  the restart socket (`handoff::tidewatch_sock_path`).
+- **Behavior**: not installed means the palette entry is hidden. Exited panes are skipped; no live
+  pane or any failure (bind, launch, timeout, no ACK) moves nothing, keeps the window and toasts
+  "Move to Tidewatch cancelled: <why>". On ACK every pane is `mark_handed_off`, the saved session
+  is rewritten with no tabs (so a later launch does not reopen them as fresh shells), and the window
+  closes. The restart path's instance-socket flag is NOT set: Tidewatch never takes that socket.
+- A `--state-dir` instance is isolated in-process (HOME and XDG_RUNTIME_DIR), so the socket and the
+  session rewrite stay under its dir. `--state-dir` is not forwarded to Tidewatch (the argv is the
+  agreed contract); on Linux the child inherits that env anyway.
+- Tests: 619 passed / 4 ignored before, 632 passed / 4 ignored after: Export round trip over
+  pipes and over real ptys (leaf order, focus), the finder as a pure function over candidates and a
+  PATH, the `mdfind` parser, both launch argvs, the title rule, the socket names, palette gating.
+- Not verified: Linux and Rust 1.99 (CI), a real two-process move (needs Tidewatch's receiving
+  half), the window actually closing after a confirmed move.
+
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
   Keep the unsaved-changes dialog open and report the error when writing config fails.
