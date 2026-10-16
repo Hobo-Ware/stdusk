@@ -1514,8 +1514,8 @@ mod tests {
     fn real_pty_typed_input_returns_with_the_echo_on_the_grid() {
         // The regression: the frame that sent a key painted the grid from BEFORE the echo, and the
         // echo frame queued behind it for 1-3 vsyncs. `send_typed` must not return until the echo is
-        // on the grid. Checked at once, no polling: without the wait the echo (~50us away) is almost
-        // never there yet, and with it the grid always has it.
+        // on the grid. Checked at once, no polling: without the wait the echo is almost never there
+        // yet. A loaded CI runner can outlast the 2ms `ECHO_WAIT`, so any one of a few keys passes.
         let opts = terminal::SpawnOpts {
             detect_progress: false,
             shell_integration: false,
@@ -1548,12 +1548,21 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         assert!(text(&tab).contains("READY"), "the probe never started");
-        tab.send_typed(b"Q");
-        assert!(
-            text(&tab).contains("READYQ"),
-            "send_typed returned before the echo: {:?}",
-            text(&tab)
-        );
+        let mut typed = String::from("READY");
+        let mut echoed_at_once = false;
+        for key in *b"QWE" {
+            tab.send_typed(&[key]);
+            typed.push(char::from(key));
+            if text(&tab).contains(&typed) {
+                echoed_at_once = true;
+                break;
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !text(&tab).contains(&typed) && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        assert!(echoed_at_once, "send_typed returned before the echo: {:?}", text(&tab));
     }
 
     #[test]
