@@ -665,6 +665,33 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   icon (GTK thread), login item (XDG autostart), self-update, Wayland top-edge placement (needs
   layer-shell), packaging (AppImage/.deb).
 
+## Linux font faces (branch fix/linux-font-faces, 2026-10-16; stdusk-egui 48 -> 55 tests)
+- **Bug**: on Linux a font family picked in Settings rendered in its Bold Italic face and never found
+  its bold face. `resolve_face` scored `full_name()`, which carries the style on macOS ("Menlo Bold")
+  but is the bare family name for every face in font-kit's freetype loader, so all faces tied:
+  `resolve_font` took whichever face fontconfig listed first (Bold Italic for MesloLGS Nerd Font Mono,
+  so the whole grid went italic) and `resolve_bold_font` returned `None` for every family, Liberation
+  Mono included.
+- **Fix** (`stdusk-egui/src/fonts.rs`): faces are scored on `face_label(full, postscript)`, the full
+  name plus the PostScript name ("MesloLGSNFM-BoldItalic"). Regular and bold now resolve by the
+  PostScript name on Linux; macOS names already carried the style, so its picks are unchanged. Still
+  names, not `properties()`: core-text reports those wrong.
+- **Tests** (7 new, none removed): the Meslo, Liberation Mono and Menlo face sets as (full, PostScript)
+  pairs, the regular face strictly beats every other face and the bold pick is the upright Bold,
+  never the Bold Italic; a family with no bold face has no bold pick; bare family names tie (the old
+  behavior); `face_label` with and without a PostScript name; a Linux-gated real-system test that
+  resolves DejaVu Sans Mono or Liberation Mono and checks the regular face is upright and a bold face
+  exists (fails with the old full-name-only scoring).
+- Verified on Fedora 44 (Wayland, Rust 1.97): fmt clean. `cargo test --workspace`: 618 passed before,
+  625 after, the same 5 `stdusk-core` failures both times (3 zsh start tests that report "TERM
+  environment variable not set", 2 real-pty tests, one of which needs `vim`, which this machine
+  lacks), none touch fonts. Clippy `-D warnings` fails on the newer toolchain's
+  `duration_suboptimal_units` in test code of files this change does not touch (`stdusk-egui`
+  `ui.rs`; `stdusk-core` `terminal.rs`, `agent_codex_scan.rs`, `agent_pane.rs`), nothing in
+  `fonts.rs`. Not verified: a live window on Linux with the picked font (needs a human at a
+  display), macOS (no Mac here; its scores only gain a PostScript suffix that repeats the style the
+  full name already had).
+
 ## 1.6.0 (shipped, branch merged to main) - Restart keeps the shells running
 - **Session handoff is complete** (phases 1-4). Restart no longer kills anything from a bundle: the
   predecessor binds a unix socket, `open -n -a <bundle> --args --adopt <sock>`, sends a TOML header

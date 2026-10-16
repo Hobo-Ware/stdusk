@@ -14,10 +14,21 @@ pub struct ResolvedFont {
     index: u32,
 }
 
-/// Distance of a face from "plain regular", judged by its NAME - lowest wins. Slant keywords
-/// dominate (an italic must never beat any upright face), then weight, then width.
-/// Names, not `Font::properties()`: font-kit's core-text loader reports broken properties
-/// (every Menlo face comes back `Italic, w400`) while `full_name()` is accurate.
+/// The text a face is scored on: its full name plus its PostScript name. core-text puts the
+/// style in the full name ("Menlo Bold"), but font-kit's freetype loader (Linux) returns the
+/// bare family name for every face, so there only the PostScript name ("MesloLGSNFM-BoldItalic")
+/// says which face it is.
+fn face_label(full: &str, postscript: Option<&str>) -> String {
+    match postscript {
+        Some(ps) => format!("{full} {ps}"),
+        None => full.to_owned(),
+    }
+}
+
+/// Distance of a face from "plain regular", judged by its NAME (`face_label`) - lowest wins.
+/// Slant keywords dominate (an italic must never beat any upright face), then weight, then
+/// width. Names, not `Font::properties()`: font-kit's core-text loader reports broken
+/// properties (every Menlo face comes back `Italic, w400`) while the names are accurate.
 fn face_name_score(name: &str) -> u32 {
     let n = name.to_ascii_lowercase();
     [
@@ -37,8 +48,8 @@ fn face_name_score(name: &str) -> u32 {
     .sum()
 }
 
-/// Score a face as the family's BOLD sibling, judged by its NAME (same rationale as
-/// `face_name_score`: core-text `properties()` lie). `None` disqualifies: the name must say
+/// Score a face as the family's BOLD sibling, judged by its NAME (`face_label`; same rationale
+/// as `face_name_score`: core-text `properties()` lie). `None` disqualifies: the name must say
 /// "bold" and must not be a slant. Among qualifiers, the plain Bold beats Semi/Extra/width
 /// variants - lowest wins.
 fn bold_face_name_score(name: &str) -> Option<u32> {
@@ -66,7 +77,7 @@ fn bold_face_name_score(name: &str) -> Option<u32> {
     )
 }
 
-/// Pick the family face with the lowest `score(full_name())` and read its bytes + face index.
+/// Pick the family face with the lowest `score(face_label(..))` and read its bytes + face index.
 fn resolve_face(family: &str, score: impl Fn(&str) -> Option<u32>) -> Option<ResolvedFont> {
     use font_kit::source::SystemSource;
     let name = family.trim();
@@ -77,7 +88,11 @@ fn resolve_face(family: &str, score: impl Fn(&str) -> Option<u32>) -> Option<Res
     let best = fam
         .fonts()
         .iter()
-        .filter_map(|h| h.load().ok().and_then(|f| score(&f.full_name()).map(|s| (h, s))))
+        .filter_map(|h| {
+            let f = h.load().ok()?;
+            let label = face_label(&f.full_name(), f.postscript_name().as_deref());
+            score(&label).map(|s| (h, s))
+        })
         .min_by_key(|&(_, s)| s)
         .map(|(h, _)| h)?;
     match best.clone() {
@@ -193,8 +208,8 @@ pub fn build_fonts(
 
 #[cfg(test)]
 mod tests {
-    use super::{BOLD_FONT_FAMILY, bold_face_name_score, build_fonts, face_name_score};
-    #[cfg(target_os = "macos")]
+    use super::{BOLD_FONT_FAMILY, bold_face_name_score, build_fonts, face_label, face_name_score};
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::{installed_families, resolve_bold_font, resolve_font};
 
     // Font resolution hits the real system source - gate on macOS where Menlo always exists.
@@ -236,6 +251,126 @@ mod tests {
             let s = bold_face_name_score(variant).unwrap_or_else(|| panic!("{variant}"));
             assert!(s > plain, "{variant} must rank behind the plain Bold");
         }
+    }
+
+    #[test]
+    fn face_label_adds_the_postscript_name_when_there_is_one() {
+        let cases = [
+            ("Menlo Bold", Some("Menlo-Bold"), "Menlo Bold Menlo-Bold"),
+            (
+                "MesloLGS Nerd Font Mono",
+                Some("MesloLGSNFM-Italic"),
+                "MesloLGS Nerd Font Mono MesloLGSNFM-Italic",
+            ),
+            ("Menlo Bold", None, "Menlo Bold"),
+        ];
+        for (full, postscript, want) in cases {
+            assert_eq!(face_label(full, postscript), want, "{full} {postscript:?}");
+        }
+    }
+
+    /// The (full name, PostScript name) pairs font-kit reports for a family's faces. Linux
+    /// (freetype) gives every face the bare family as its full name; macOS (core-text) puts the
+    /// style in it.
+    const MESLO: [(&str, &str); 4] = [
+        ("MesloLGS Nerd Font Mono", "MesloLGSNFM-BoldItalic"),
+        ("MesloLGS Nerd Font Mono", "MesloLGSNFM-Bold"),
+        ("MesloLGS Nerd Font Mono", "MesloLGSNFM-Regular"),
+        ("MesloLGS Nerd Font Mono", "MesloLGSNFM-Italic"),
+    ];
+    const LIBERATION: [(&str, &str); 4] = [
+        ("Liberation Mono", "LiberationMono-BoldItalic"),
+        ("Liberation Mono", "LiberationMono-Italic"),
+        ("Liberation Mono", "LiberationMono"),
+        ("Liberation Mono", "LiberationMono-Bold"),
+    ];
+    const MENLO: [(&str, &str); 4] = [
+        ("Menlo Italic", "Menlo-Italic"),
+        ("Menlo Bold Italic", "Menlo-BoldItalic"),
+        ("Menlo Bold", "Menlo-Bold"),
+        ("Menlo Regular", "Menlo-Regular"),
+    ];
+
+    /// The PostScript name of the face `score` ranks first, labelled the way `resolve_face` does.
+    fn pick<'a>(faces: &[(&str, &'a str)], score: impl Fn(&str) -> Option<u32>) -> Option<&'a str> {
+        faces
+            .iter()
+            .filter_map(|&(full, ps)| score(&face_label(full, Some(ps))).map(|s| (ps, s)))
+            .min_by_key(|&(_, s)| s)
+            .map(|(ps, _)| ps)
+    }
+
+    #[test]
+    fn regular_pick_is_the_upright_regular_face_on_every_platform_shape() {
+        let cases = [
+            (MESLO, "MesloLGSNFM-Regular"),
+            (LIBERATION, "LiberationMono"),
+            (MENLO, "Menlo-Regular"),
+        ];
+        for (faces, want) in cases {
+            assert_eq!(pick(&faces, |n| Some(face_name_score(n))), Some(want), "{faces:?}");
+        }
+    }
+
+    #[test]
+    fn regular_face_strictly_beats_every_other_face_of_the_family() {
+        for faces in [MESLO, LIBERATION, MENLO] {
+            let scores: Vec<(u32, &str)> = faces
+                .iter()
+                .map(|&(full, ps)| (face_name_score(&face_label(full, Some(ps))), ps))
+                .collect();
+            let regular = scores.iter().map(|&(s, _)| s).min().unwrap();
+            assert_eq!(scores.iter().filter(|&&(s, _)| s == regular).count(), 1, "{scores:?}");
+        }
+    }
+
+    #[test]
+    fn bold_pick_is_the_upright_bold_face_never_the_bold_italic() {
+        let cases = [
+            (MESLO, "MesloLGSNFM-Bold"),
+            (LIBERATION, "LiberationMono-Bold"),
+            (MENLO, "Menlo-Bold"),
+        ];
+        for (faces, want) in cases {
+            assert_eq!(pick(&faces, bold_face_name_score), Some(want), "{faces:?}");
+        }
+    }
+
+    #[test]
+    fn a_family_without_a_bold_face_has_no_bold_pick() {
+        let faces = [("Some Mono", "SomeMono-Regular"), ("Some Mono", "SomeMono-Italic")];
+        assert_eq!(pick(&faces, bold_face_name_score), None);
+    }
+
+    #[test]
+    fn bare_family_names_cannot_tell_faces_apart() {
+        let bare: Vec<&str> = MESLO.iter().map(|&(full, _)| full).collect();
+        assert!(bare.iter().all(|n| face_name_score(n) == face_name_score(bare[0])));
+        assert!(bare.iter().all(|n| bold_face_name_score(n).is_none()));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_resolves_an_upright_regular_and_a_bold_face() {
+        let Some(name) = ["DejaVu Sans Mono", "Liberation Mono"]
+            .into_iter()
+            .find(|n| installed_families().iter().any(|f| f == n))
+        else {
+            return;
+        };
+        let postscript = |f: super::ResolvedFont| {
+            font_kit::font::Font::from_bytes(std::sync::Arc::new(f.bytes), f.index)
+                .expect("resolved bytes load")
+                .postscript_name()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        };
+        let regular = postscript(resolve_font(name).expect("an installed family resolves"));
+        assert!(!regular.contains("italic") && !regular.contains("oblique"), "{name}: {regular}");
+        assert!(!regular.contains("bold"), "{name}: {regular}");
+        let bold = postscript(resolve_bold_font(name).expect("the family ships a Bold face"));
+        assert!(bold.contains("bold"), "{name}: {bold}");
+        assert!(!bold.contains("italic") && !bold.contains("oblique"), "{name}: {bold}");
     }
 
     #[test]
