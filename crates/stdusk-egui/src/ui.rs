@@ -371,6 +371,18 @@ fn paint_cli_chip(p: &egui::Painter, rect: egui::Rect, cli: stdusk_core::procwat
 /// Tab geometry: shared with the tab bar so the row height / spacer math can't rot.
 pub const TAB_H: f32 = 34.0; // full tab-bar strip height; tabs fill it (flush underline)
 
+/// Height and title size of a tab, for hosts whose strip is taller than stdusk's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TabMetrics {
+    pub height: f32,
+    pub font_px: f32,
+}
+
+impl TabMetrics {
+    /// What `draw_tab` uses.
+    pub const COMPACT: Self = Self { height: TAB_H, font_px: 12.0 };
+}
+
 /// Extra tab-strip height in macOS window mode. 0 = the OS traffic lights keep their default
 /// position (top-left). Repositioning them to center on the tab row was reverted (an absolute-Y
 /// move in the wrong coord space flung them off-screen). Kept as a tunable const - `tabs.rs`
@@ -402,7 +414,6 @@ const TAB_MINI_W: f32 = 15.0; // split-layout preview glyph
 /// (glyph shown when >1). `tab_id` seeds the interact id so drag-reorder tracking survives
 /// index swaps (ui.md). `idx = None` drops the number prefix (the Settings tab - it has no
 /// Cmd+N binding to advertise).
-#[allow(clippy::too_many_lines)] // one widget, mostly geometry + paint
 pub fn draw_tab(
     ui: &mut egui::Ui,
     idx: Option<usize>,
@@ -417,7 +428,41 @@ pub fn draw_tab(
     cli: Option<stdusk_core::procwatch::Cli>,
     width: Option<f32>,
 ) -> (egui::Response, bool) {
-    let font = egui::FontId::monospace(12.0);
+    draw_tab_sized(
+        ui,
+        idx,
+        tab_id,
+        title,
+        active,
+        pinned,
+        color,
+        progress,
+        cmd,
+        layout,
+        cli,
+        width,
+        TabMetrics::COMPACT,
+    )
+}
+
+/// `draw_tab` with its own height and title size.
+#[allow(clippy::too_many_lines)] // one widget, mostly geometry + paint
+pub fn draw_tab_sized(
+    ui: &mut egui::Ui,
+    idx: Option<usize>,
+    tab_id: u64,
+    title: &str,
+    active: bool,
+    pinned: bool,
+    color: Option<egui::Color32>,
+    progress: Progress,
+    cmd: CmdState,
+    layout: &[egui::Rect],
+    cli: Option<stdusk_core::procwatch::Cli>,
+    width: Option<f32>,
+    metrics: TabMetrics,
+) -> (egui::Response, bool) {
+    let font = egui::FontId::monospace(metrics.font_px);
     let char_w = ui.painter().layout_no_wrap("0".into(), font.clone(), colors::fg()).size().x;
     let prefix = idx.map_or_else(String::new, |i| format!("{i}  "));
     let mini_w = if layout.len() > 1 { TAB_MINI_W + TAB_GAP } else { 0.0 };
@@ -441,7 +486,7 @@ pub fn draw_tab(
         let text_w = (prefix.chars().count() + shown.chars().count()) as f32 * char_w;
         (shown, truncated, fixed_chrome + text_w)
     };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(tab_w, TAB_H), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(tab_w, metrics.height), egui::Sense::hover());
     let p = ui.painter();
     if active {
         p.rect_filled(
@@ -1208,5 +1253,60 @@ mod tests {
         assert_eq!(keys, b"\r", "the key still reaches the pty");
         assert!(drawn, "the frame that sent the key drew before the pane changed");
         assert!(!frame(&mut term, vec![]).0, "gone from the next frame on");
+    }
+
+    #[test]
+    fn draw_tab_keeps_its_height_and_draw_tab_sized_takes_another() {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(800.0, 200.0),
+            )),
+            ..Default::default()
+        };
+        let (mut compact, mut tall) = (0.0, 0.0);
+        let _ = ctx.run_ui(raw, |ui| {
+            let args = |ui: &mut egui::Ui, metrics| {
+                super::draw_tab_sized(
+                    ui,
+                    None,
+                    1,
+                    "tab",
+                    false,
+                    false,
+                    None,
+                    Progress::None,
+                    CmdState::default(),
+                    &[],
+                    None,
+                    Some(200.0),
+                    metrics,
+                )
+                .0
+                .rect
+                .height()
+            };
+            compact = super::draw_tab(
+                ui,
+                None,
+                2,
+                "tab",
+                false,
+                false,
+                None,
+                Progress::None,
+                CmdState::default(),
+                &[],
+                None,
+                Some(200.0),
+            )
+            .0
+            .rect
+            .height();
+            tall = args(ui, super::TabMetrics { height: 44.0, font_px: 14.0 });
+        });
+        assert_eq!(compact, super::TAB_H);
+        assert_eq!(tall, 44.0);
     }
 }

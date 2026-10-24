@@ -681,6 +681,13 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
 - Proof: 675 tests green (96 in stdusk-egui, 28 of them headless `TerminalView` frames with a real pty);
   `--screenshot` main and broadcast shots identical to 1.10.1 (PSNR 120).
 
+## Sized tab and icon button (branch feat/bigger-strip-icons)
+- `widgets::icon_button_sized` + `IconButtonSize` and `ui::draw_tab_sized` + `TabMetrics` let a host with a
+  taller strip pick the box, glyph and tab sizes (Tidewatch: 44 px boxes, 44 px tabs, 14 px titles).
+  `icon_button` and `draw_tab` call them with `COMPACT`, so stdusk's own look is unchanged.
+- Proof: two headless frame tests (compact sizes kept, custom sizes taken); fmt, clippy -D warnings and
+  stdusk-egui tests green.
+
 ## Linux font faces (branch fix/linux-font-faces, 2026-10-16; stdusk-egui 48 -> 55 tests)
 - **Bug**: on Linux a font family picked in Settings rendered in its Bold Italic face and never found
   its bold face. `resolve_face` scored `full_name()`, which carries the style on macOS ("Menlo Bold")
