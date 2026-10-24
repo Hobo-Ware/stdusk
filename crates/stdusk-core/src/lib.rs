@@ -20,6 +20,7 @@ pub mod modes;
 pub mod mouse;
 pub mod osc;
 pub mod pane;
+pub mod paste;
 pub mod paths;
 pub mod procwatch;
 pub mod progress;

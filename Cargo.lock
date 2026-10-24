@@ -4069,7 +4069,6 @@ version = "1.10.1"
 dependencies = [
  "anyhow",
  "arboard",
- "block2 0.6.2",
  "eframe",
  "egui",
  "global-hotkey",
@@ -4112,8 +4111,12 @@ dependencies = [
 name = "stdusk-egui"
 version = "1.9.1"
 dependencies = [
+ "block2 0.6.2",
  "egui",
  "font-kit",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "resvg",
  "stdusk-core",
 ]
