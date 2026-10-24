@@ -14,7 +14,7 @@ use crate::mouse::{
     pointer_reports,
 };
 use crate::ui::{GridStyle, collect_input, render_grid};
-use crate::wheel::{self, WheelLines};
+use crate::wheel;
 
 /// Who may use this frame's input. The app knows its modals and which pane is focused.
 // Independent permissions, not a state machine.
@@ -61,7 +61,6 @@ pub struct TerminalOptions<'a> {
     /// Ctrl+C copies and clears a selection and is ^C only without one.
     pub ctrl_c_copies: bool,
     pub copy_on_select: bool,
-    pub wheel_lines: WheelLines,
     /// `terminal.app_link_modifier`: the key that takes the pointer back from an app.
     pub app_link_modifier: &'a str,
     pub focus: Focus,
@@ -233,14 +232,8 @@ impl TerminalView<'_> {
                 let mut carry: WheelAccumulator = ui.data(|d| d.get_temp(id)).unwrap_or_default();
                 let mut wheel_events = events.clone();
                 wheel_events.extend_from_slice(injected_wheel);
-                let frame = wheel::Frame {
-                    events: &wheel_events,
-                    smooth_delta_y: ui.input(|i| i.smooth_scroll_delta.y),
-                    pointer,
-                    grid,
-                    source: options.wheel_lines,
-                    alt_held: mods.alt,
-                };
+                let frame =
+                    wheel::Frame { events: &wheel_events, pointer, grid, alt_held: mods.alt };
                 wheel::apply(term, &mut carry, &frame);
                 ui.data_mut(|d| d.insert_temp(id, carry));
             }
@@ -335,7 +328,6 @@ mod tests {
         ctrl_c_copies: bool,
         copy_on_select: bool,
         confirm: bool,
-        wheel_lines: WheelLines,
     }
 
     impl Rig {
@@ -363,7 +355,6 @@ mod tests {
                 ctrl_c_copies: true,
                 copy_on_select: false,
                 confirm: false,
-                wheel_lines: WheelLines::Raw,
             }
         }
 
@@ -391,7 +382,6 @@ mod tests {
                 confirm_multiline_paste: self.confirm,
                 ctrl_c_copies: self.ctrl_c_copies,
                 copy_on_select: self.copy_on_select,
-                wheel_lines: self.wheel_lines,
                 app_link_modifier: "cmd",
                 focus: Focus::Manage,
             };
@@ -656,14 +646,6 @@ mod tests {
     }
 
     #[test]
-    fn egui_smoothed_lines_scroll_at_least_a_line_while_the_wheel_moves() {
-        let mut rig = with_history();
-        rig.wheel_lines = WheelLines::Smoothed;
-        rig.wheel(MouseWheelUnit::Line, 1.0, Modifiers::NONE);
-        assert!(rig.term.scroll_state().0 >= 1);
-    }
-
-    #[test]
     fn the_wheel_does_nothing_while_the_pointer_is_elsewhere() {
         let mut rig = with_history();
         rig.frame(vec![Event::PointerMoved(Pos2::new(700.0, 20.0))], Modifiers::NONE);
@@ -891,7 +873,6 @@ mod tests {
             confirm_multiline_paste: false,
             ctrl_c_copies: true,
             copy_on_select: false,
-            wheel_lines: WheelLines::Raw,
             app_link_modifier: "cmd",
             focus: Focus::Off,
         };

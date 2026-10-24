@@ -1,21 +1,12 @@
 //! What the wheel and the trackpad do over a terminal grid. The scrollback moves on the normal
 //! screen; an app on the alternate screen gets arrow keys, or SGR wheel reports once it turned
-//! mouse reporting on. Alt always sends arrows.
+//! mouse reporting on. Alt always sends arrows. Lines come from the raw wheel events summed
+//! across frames, so no scroll is lost or invented.
 
 use egui::{Event, Modifiers, Pos2};
 use stdusk_core::terminal::PtyTerm;
 
 use crate::mouse::{GridGeom, MouseReporting, WheelAccumulator, wheel_report_lines, wheel_sgr};
-
-/// Where the number of lines for the scrollback and for arrow keys comes from. SGR reports always
-/// sum the raw wheel events.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WheelLines {
-    /// Raw wheel events summed across frames: no scroll is lost or invented.
-    Raw,
-    /// egui's per-frame smoothed delta, rounded, with at least one line per frame while it moves.
-    Smoothed,
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Wheel {
@@ -60,37 +51,18 @@ fn zooms(modifiers: Modifiers) -> bool {
     modifiers.ctrl || modifiers.command
 }
 
-fn smoothed_lines(delta_y: f32, cell_h: f32) -> i32 {
-    if delta_y == 0.0 {
-        return 0;
-    }
-    let lines = (delta_y / cell_h).round() as i32;
-    if lines == 0 { delta_y.signum() as i32 } else { lines }
-}
-
 /// One frame of wheel input for one pane.
 pub(crate) struct Frame<'a> {
     pub(crate) events: &'a [Event],
-    pub(crate) smooth_delta_y: f32,
     pub(crate) pointer: Pos2,
     pub(crate) grid: GridGeom,
-    pub(crate) source: WheelLines,
     pub(crate) alt_held: bool,
 }
 
 pub(crate) fn apply(term: &mut PtyTerm, carry: &mut WheelAccumulator, frame: &Frame) {
-    let Frame { events, smooth_delta_y, pointer, grid, source, alt_held } = *frame;
+    let Frame { events, pointer, grid, alt_held } = *frame;
     let wheel: Vec<Event> = events.iter().filter(|event| scrolls(event)).cloned().collect();
-    let (lines, raw) = match source {
-        WheelLines::Raw => {
-            let raw = carry.lines(&wheel, grid.ch, grid.rows);
-            (raw, raw)
-        }
-        WheelLines::Smoothed if smooth_delta_y == 0.0 => return,
-        WheelLines::Smoothed => {
-            (smoothed_lines(smooth_delta_y, grid.ch), carry.lines(&wheel, grid.ch, grid.rows))
-        }
-    };
+    let lines = carry.lines(&wheel, grid.ch, grid.rows);
     if lines == 0 {
         return;
     }
@@ -98,7 +70,7 @@ pub(crate) fn apply(term: &mut PtyTerm, carry: &mut WheelAccumulator, frame: &Fr
     match route(lines, term.mouse_reporting(), term.is_alt_screen(), alt_held, (col, row)) {
         Wheel::Scrollback(lines) => term.scroll(lines),
         Wheel::Arrows(lines) => term.send(&arrows(lines, term.app_cursor())),
-        Wheel::Reports(..) => term.send(&wheel_sgr(wheel_report_lines(raw), col, row)),
+        Wheel::Reports(reports, ..) => term.send(&wheel_sgr(reports, col, row)),
     }
 }
 
@@ -174,14 +146,6 @@ mod tests {
         assert!(scrolls(&wheel(Modifiers::SHIFT)));
         assert!(!scrolls(&wheel(Modifiers::CTRL)));
         assert!(!scrolls(&wheel(Modifiers::COMMAND)));
-    }
-
-    #[test]
-    fn smoothed_lines_round_but_never_drop_a_moving_wheel() {
-        let cases = [(0.0, 0), (40.0, 2), (-40.0, -2), (3.0, 1), (-3.0, -1), (30.0, 2)];
-        for (delta, want) in cases {
-            assert_eq!(smoothed_lines(delta, 20.0), want, "{delta}");
-        }
     }
 
     #[test]
