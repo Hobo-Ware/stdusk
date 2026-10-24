@@ -9,7 +9,9 @@ use eframe::egui;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
+use stdusk_core::sync::{Op as SyncOp, pull_is_stale, should_autosync};
 use stdusk_core::{agent_restore, agents, colors, pane, procwatch, search, terminal, themes};
+use stdusk_egui::sync::SyncSlot;
 
 mod config;
 mod finder;
@@ -101,7 +103,7 @@ struct Stdusk {
     next_session_save: f64, // egui time of the next throttled session persist
     last_session: session::SavedSession, // last persisted session (skip identical writes)
     tray: Option<tray::Tray>, // menu-bar status item (kept alive; Some when enabled)
-    sync_slot: sync::SyncSlot, // settings-sync worker result, polled each frame
+    sync_slot: SyncSlot,    // settings-sync worker result, polled each frame
     sync_busy: bool,        // a sync push/pull is in flight (buttons disabled)
     launch_pull_cfg: Option<String>, // config TOML when the launch autosync pull spawned (staleness gate)
     new_tab_req: Arc<AtomicUsize>,   // new-tab requests from other launches (single-instance)
@@ -393,14 +395,14 @@ impl Stdusk {
         // Autosync: pull once on launch (in the background - startup never blocks on git).
         // The per-frame sync_done handler applies the result like a manual Pull; a failure
         // toasts once. Pushes happen on settings Save (the only disk write). The config
-        // snapshot gates a SLOW pull against changes made while it ran (sync::pull_is_stale).
-        let sync_slot = sync::SyncSlot::default();
+        // snapshot gates a SLOW pull against changes made while it ran (pull_is_stale).
+        let sync_slot = SyncSlot::default();
         let repo = cfg.sync.repo.trim().to_owned();
         let sync_busy =
-            screenshot.is_none() && sync::should_autosync(cfg.sync.auto, !repo.is_empty(), false);
+            screenshot.is_none() && should_autosync(cfg.sync.auto, !repo.is_empty(), false);
         let launch_pull_cfg = sync_busy.then(|| config::config_to_toml(&cfg));
         if sync_busy {
-            sync::spawn(sync::Op::Pull, repo, &sync_slot, cc.egui_ctx.clone());
+            sync::spawn(SyncOp::Pull, repo, &sync_slot, cc.egui_ctx.clone());
         }
         // Initial Dock presence must mirror the launch activation policy (see main()). Visible at
         // launch, so `dock_when_visible` counts; window mode is always Regular.
@@ -1013,11 +1015,11 @@ impl eframe::App for Stdusk {
             let launch_baseline = self.launch_pull_cfg.take();
             let now = ctx.input(|i| i.time);
             match (op, res) {
-                (sync::Op::Push, Ok(())) => {
+                (SyncOp::Push, Ok(_)) => {
                     self.toast = Some(("Settings pushed".into(), now + 1.8));
                 }
-                (sync::Op::Pull, Ok(()))
-                    if sync::pull_is_stale(
+                (SyncOp::Pull, Ok(_))
+                    if pull_is_stale(
                         launch_baseline.as_deref(),
                         &config::config_to_toml(&self.cfg),
                     ) =>
@@ -1027,7 +1029,7 @@ impl eframe::App for Stdusk {
                     }
                     self.toast = Some(("Sync pull skipped (local changes)".into(), now + 2.6));
                 }
-                (sync::Op::Pull, Ok(())) => {
+                (SyncOp::Pull, Ok(_)) => {
                     self.cfg = Config::load();
                     self.reapply_config(&ctx);
                     if self.settings_tab {
@@ -1035,6 +1037,7 @@ impl eframe::App for Stdusk {
                     }
                     self.toast = Some(("Settings pulled".into(), now + 1.8));
                 }
+                (SyncOp::Reconcile, Ok(_)) => {}
                 (_, Err(e)) => {
                     let (mut msg, _) = ui::ellipsize(&format!("Sync failed: {e}"), 90);
                     msg = msg.replace('\n', " ");

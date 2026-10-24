@@ -26,9 +26,9 @@ drop-down, theming, tab management) plus a first-party AI agent Tabby lacks.
 ## Module layout
 
 Modules below that hold no egui code (`terminal`, `osc`, `progress`, `modes`, `screen`, `search`,
-`links`, `paste`, `shell`, `pane`, `colors`, `themes`, `paths`, `procwatch`, `handoff`, the `agent*` files, `test_support`) live in
+`links`, `paste`, `shell`, `sync`, `pane`, `colors`, `themes`, `paths`, `procwatch`, `handoff`, the `agent*` files, `test_support`) live in
 `crates/stdusk-core/src/`. The egui renderers and widgets (`fonts`, `widgets`, `mouse`, `key_to_bytes`,
-`render_grid`, `collect_input`, `draw_tab`, `terminal_view`, `wheel`, `focus`, `macos_paste`) live in `crates/stdusk-egui/src/`. Their one-line
+`render_grid`, `collect_input`, `draw_tab`, `terminal_view`, `wheel`, `focus`, `macos_paste`, `sync`) live in `crates/stdusk-egui/src/`. Their one-line
 descriptions stay in the tree below.
 
 ```
@@ -57,6 +57,7 @@ src/
   wheel.rs       (stdusk-egui) wheel routing: scrollback, arrows (DECCKM aware, Alt forces them), SGR reports
   focus.rs       (stdusk-egui) the grid as keyboard target: Tab, arrows and Esc reach the pty
   macos_paste.rs (stdusk-egui) the Cmd+V image-paste NSEvent monitor and its request counter
+  sync.rs        (stdusk-core, stdusk-egui) settings sync: git plan and runner parameterised by folder and file list; the egui half is the worker thread and result slot; `src/sync.rs` holds stdusk's folder and machine-local files
   paste.rs       (stdusk-core) paste preparation: CR line breaks, control bytes dropped, Tabby trim rules
   pane.rs        binary split tree: layout, focus paths, splitters, neighbor navigation
   config.rs      TOML config + hotkey string parsing

@@ -12,6 +12,7 @@ use crate::update;
 use crate::updater::{Status, Updater};
 use crate::{Stdusk, config, sync, tabs, terminal, themes};
 use stdusk_core::colors::{self, PREVIEW_MIN_CONTRAST, Theme};
+use stdusk_core::sync::{Op as SyncOp, should_autosync};
 
 /// Left nav width (outer, incl. margins).
 const NAV_W: f32 = 184.0;
@@ -1905,7 +1906,7 @@ fn session_section(
     cfg: &mut config::Config,
     st: &mut SettingsState,
     busy: bool,
-) -> Option<sync::Op> {
+) -> Option<SyncOp> {
     title(ui, "Session");
     rows(ui, |ui| {
         row(
@@ -1972,13 +1973,13 @@ fn session_section(
             ui.add_enabled_ui(!busy && !cfg.sync.repo.trim().is_empty(), |ui| {
                 ui.horizontal(|ui| {
                     if stdusk_egui::widgets::action_button(ui, "Push", true).clicked() {
-                        op = Some(sync::Op::Push);
+                        op = Some(SyncOp::Push);
                     }
                     if stdusk_egui::widgets::action_button(ui, "Pull", false)
                         .on_hover_text("Overwrites local settings with the repo's")
                         .clicked()
                     {
-                        op = Some(sync::Op::Pull);
+                        op = Some(SyncOp::Pull);
                     }
                     if busy {
                         ui.label(egui::RichText::new("syncing…").color(colors::dim()));
@@ -2279,9 +2280,9 @@ impl Stdusk {
             let now = ctx.input(|i| i.time);
             self.toast = Some(("Saved".into(), now + 1.4));
             let repo = self.cfg.sync.repo.trim();
-            if sync::should_autosync(self.cfg.sync.auto, !repo.is_empty(), self.sync_busy) {
+            if should_autosync(self.cfg.sync.auto, !repo.is_empty(), self.sync_busy) {
                 self.sync_busy = true;
-                sync::spawn(sync::Op::Push, repo.to_owned(), &self.sync_slot, ctx.clone());
+                sync::spawn(SyncOp::Push, repo.to_owned(), &self.sync_slot, ctx.clone());
             }
         }
     }
@@ -2352,7 +2353,7 @@ impl Stdusk {
         let mut quake_fx: Option<QuakeFx> = None;
         let mut profiles_fx: Option<ProfilesFx> = None;
         let mut hotkeys_fx: Option<HotkeysFx> = None;
-        let mut sync_op: Option<sync::Op> = None;
+        let mut sync_op: Option<SyncOp> = None;
         let mut restart_req = false;
 
         let nav = egui::Panel::left("settings_nav")
@@ -2555,7 +2556,7 @@ impl Stdusk {
         // Kick off a settings push/pull; a push saves first so the repo gets what you see.
         // With autosync on, the save itself may have started the push - don't stack a second.
         if let Some(op) = sync_op {
-            if op == sync::Op::Push {
+            if op == SyncOp::Push {
                 self.save_settings(ctx);
             }
             if !self.sync_busy {

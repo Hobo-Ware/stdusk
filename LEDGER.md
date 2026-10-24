@@ -2765,6 +2765,16 @@ these crates) over the existing live handoff, so the shells keep running there.
 - Not verified: Linux and Rust 1.99 (CI), a real two-process move (needs Tidewatch's receiving
   half), the window actually closing after a confirmed move.
 
+## Shared settings sync (branch shared-settings-sync, no behavior change for stdusk)
+- The git plan, runner, `should_autosync` and `pull_is_stale` moved from `src/sync.rs` to
+  `stdusk_core::sync`, parameterised by a `Spec` (folder, `Files::Except`/`Files::Only`, app
+  name for the commit message, extra env). The worker-thread glue is `stdusk_egui::sync`. The app
+  keeps `src/sync.rs` for its folder and its machine-local list (`session.toml`, `shell/`).
+- New `Op::Reconcile` for hosts that must never lose local edits: commit local, fetch, merge
+  (plain, then `-X ours`, then `-s ours`), push. `Outcome::KeptLocal` reports a conflict.
+  Tidewatch uses it; stdusk still uses Push and Pull and its plans are unchanged.
+- Tests run real `git` against a bare repo in a temp dir, with a hermetic git environment.
+
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
   Keep the unsaved-changes dialog open and report the error when writing config fails.
