@@ -22,7 +22,6 @@ toml.workspace = true
 ureq = "3.4.2" # update check: one redirect read from github.com/<repo>/releases/latest
 
 [target.'cfg(target_os = "macos")'.dependencies]
-block2 = "0.6" # NSEvent local monitor block (Cmd+V image-paste hook on macOS)
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSString", "NSUserDefaults"] } # AppleInterfaceStyle: the OS light/dark answer at startup

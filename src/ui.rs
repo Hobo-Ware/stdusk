@@ -6,9 +6,8 @@ use eframe::egui;
 
 pub(crate) use stdusk_egui::ui::{
     CursorStyle, GridStyle, SETTINGS_TAB_W, TAB_FIXED_W, TAB_H, TAB_MIN_W, WINDOW_TAB_H_EXTRA,
-    apply_ligatures, apply_theme, blink_on, collect_input, cursor_style, draw_exit_overlay,
-    draw_pane_notice, draw_tab, draw_toast, ellipsize, icons, pane_notice_text, progress_fraction,
-    render_grid, tint, toast_alpha,
+    apply_ligatures, apply_theme, blink_on, cursor_style, draw_exit_overlay, draw_pane_notice,
+    draw_tab, draw_toast, ellipsize, icons, pane_notice_text, progress_fraction, tint, toast_alpha,
 };
 
 /// Last path segment of a cwd, for the auto tab title. Trailing slashes ignored; `/` for root.
@@ -196,42 +195,6 @@ pub(crate) fn pty_input_captured(
 /// clamped to the settings slider's 0-8px range (a hand-edited config can hold anything).
 pub(crate) fn padded_cell_height(glyph_h: f32, line_padding: f32) -> f32 {
     glyph_h + line_padding.clamp(0.0, 8.0)
-}
-
-/// Normalize pasted text the way Tabby does (`baseTerminalTab.paste()`): CRLF/LF -> CR (shells
-/// expect CR), then optionally collapse newline runs to single spaces. Returns the normalized
-/// text; multiline-ness afterwards is simply `contains('\r')`.
-pub(crate) fn normalize_paste(input: &str, newlines_to_spaces: bool) -> String {
-    let s = input.replace("\r\n", "\r").replace('\n', "\r");
-    if newlines_to_spaces {
-        // Collapse runs of CRs into one space (Tabby: /[\r\n]+/g -> ' ').
-        let mut out = String::with_capacity(s.len());
-        let mut in_run = false;
-        for ch in s.chars() {
-            if ch == '\r' {
-                if !in_run {
-                    out.push(' ');
-                    in_run = true;
-                }
-            } else {
-                in_run = false;
-                out.push(ch);
-            }
-        }
-        out
-    } else {
-        s
-    }
-}
-
-/// Tabby's trim rule for the NON-warned paste path: trim the end always; trim the start only when
-/// the (already-trimmed) paste is single-line. The multiline-warning modal path skips this.
-pub(crate) fn trim_paste(s: &str, trim: bool) -> String {
-    if !trim {
-        return s.to_owned();
-    }
-    let t = s.trim_end();
-    if t.contains('\r') { t.to_owned() } else { t.trim_start().to_owned() }
 }
 
 /// Tab sizing mode (`appearance.tab_width`).
@@ -463,7 +426,7 @@ mod tests {
     use super::*;
     use stdusk_core::progress::Progress;
     use stdusk_core::terminal::CmdState;
-    use stdusk_egui::ui::{TAB_PAD_X, TAB_SLOT_W};
+    use stdusk_egui::ui::{TAB_PAD_X, TAB_SLOT_W, collect_input};
 
     use egui::{Key, Modifiers};
 
@@ -512,25 +475,6 @@ mod tests {
         assert_eq!(commit_rename("   "), None);
         assert_eq!(auto_title(true, Some("copilot"), Some("/tmp/x")), Some("copilot".into()));
         assert_eq!(auto_title(true, None, Some("/tmp/x")), Some("x".into()));
-    }
-
-    #[test]
-    fn paste_normalization_matches_tabby() {
-        // CRLF and LF both become CR.
-        assert_eq!(normalize_paste("a\r\nb\nc", false), "a\rb\rc");
-        // newlines->spaces collapses runs into ONE space.
-        assert_eq!(normalize_paste("a\n\n\nb", true), "a b");
-        assert_eq!(normalize_paste("ls -la\n", true), "ls -la ");
-    }
-
-    #[test]
-    fn paste_trim_rules() {
-        // Single-line: both ends trimmed.
-        assert_eq!(trim_paste("  ls -la \r", true), "ls -la");
-        // Multiline (still contains \r after end-trim): only the end is trimmed.
-        assert_eq!(trim_paste("  a\rb  \r", true), "  a\rb");
-        // Disabled: untouched.
-        assert_eq!(trim_paste("  x  ", false), "  x  ");
     }
 
     #[test]

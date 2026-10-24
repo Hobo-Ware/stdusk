@@ -26,9 +26,9 @@ drop-down, theming, tab management) plus a first-party AI agent Tabby lacks.
 ## Module layout
 
 Modules below that hold no egui code (`terminal`, `osc`, `progress`, `modes`, `screen`, `search`,
-`links`, `shell`, `pane`, `colors`, `themes`, `paths`, `procwatch`, `handoff`, the `agent*` files, `test_support`) live in
+`links`, `paste`, `shell`, `pane`, `colors`, `themes`, `paths`, `procwatch`, `handoff`, the `agent*` files, `test_support`) live in
 `crates/stdusk-core/src/`. The egui renderers and widgets (`fonts`, `widgets`, `mouse`, `key_to_bytes`,
-`render_grid`, `collect_input`, `draw_tab`) live in `crates/stdusk-egui/src/`. Their one-line
+`render_grid`, `collect_input`, `draw_tab`, `terminal_view`, `wheel`, `focus`, `macos_paste`) live in `crates/stdusk-egui/src/`. Their one-line
 descriptions stay in the tree below.
 
 ```
@@ -40,7 +40,7 @@ src/
   agent_track.rs per-pane agent record state machine (Track::scan)
   agents.rs      agent session ids, the Claude registry parser, restore file checks
   main.rs        Stdusk app state + eframe::App loop (keybinds, quake window/hotkey, tray, session/CLI polling)
-  macos.rs       objc2/AppKit glue: dock policy, unified titlebar, traffic-light centering, window alpha, Cmd+V image monitor, notifications
+  macos.rs       objc2/AppKit glue: dock policy, unified titlebar, traffic-light centering, window alpha, Cmd+V clipboard probe, notifications
   fonts.rs       font resolution (core-text family lookup, bold face, Nerd Fonts) + egui FontDefinitions build
   tabs.rs        Tab model + spawn, tab-bar panel, tab menu, tab-management methods
   workspace.rs   central panel: pane tiling/render, input/paste routing, splitters, pane menu
@@ -53,6 +53,11 @@ src/
   keys.rs        keyboard input encoding (key_to_bytes, ctrl/alt sequences, hotkey parse/match)
   terminal.rs    PtyTerm: pty spawn, reader thread, alacritty Term, grid snapshot, selection
   mouse.rs       SGR 1006 mouse reporting (wheel/click encoding, drag autoscroll) gated on TermMode
+  terminal_view.rs (stdusk-egui) `TerminalView`: one pane's keys, pastes, wheel, pointer reports, focus lock and copy around `render_grid`; terminal input behavior goes here, never into an app
+  wheel.rs       (stdusk-egui) wheel routing: scrollback, arrows (DECCKM aware, Alt forces them), SGR reports
+  focus.rs       (stdusk-egui) the grid as keyboard target: Tab, arrows and Esc reach the pty
+  macos_paste.rs (stdusk-egui) the Cmd+V image-paste NSEvent monitor and its request counter
+  paste.rs       (stdusk-core) paste preparation: CR line breaks, control bytes dropped, Tabby trim rules
   pane.rs        binary split tree: layout, focus paths, splitters, neighbor navigation
   config.rs      TOML config + hotkey string parsing
   colors.rs      Theme + explicit-theme alacritty Color -> Color32 + derived chrome colors

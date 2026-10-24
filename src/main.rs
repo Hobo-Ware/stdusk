@@ -37,6 +37,7 @@ use macos::{
 };
 use stdusk_core::terminal::PtyTerm;
 use stdusk_egui::fonts::{build_fonts, resolve_bold_font, resolve_font};
+use stdusk_egui::macos_paste::ImagePasteHook;
 use tabs::{Tab, TabAction, spawn_opts, spawn_tab};
 use ui::{apply_theme, auto_title, draw_toast, tint, toast_alpha};
 
@@ -84,7 +85,7 @@ struct Stdusk {
     space_all: Option<bool>, // last-applied "join all Spaces" collectionBehavior (re-applied on change)
     titlebar_unified: Option<bool>, // last-applied unified-titlebar state (window mode; re-applied on change)
     traffic_baseline: Option<f64>, // captured default y of the macOS window buttons (window mode centering)
-    cmdv_paste: Arc<AtomicUsize>, // Cmd+V image-paste requests from the NSEvent monitor, drained in ui()
+    cmdv_paste: ImagePasteHook, // Cmd+V image-paste requests from the NSEvent monitor, drained in ui()
     fx_opacity: f32, // this frame's effective window opacity (unfocused dim applied); derived
     color_preview: Option<(u64, Option<egui::Color32>)>, // Color-menu swatch hover preview (tab id, color)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
@@ -172,10 +173,9 @@ impl Stdusk {
         // sees the KeyDown alongside egui-winit; when it's Cmd+V over an image-only clipboard it
         // bumps this counter (drained in ui() -> inject ^V to the focused pane) and swallows the
         // key. Skipped under --screenshot.
-        let cmdv_paste = Arc::new(AtomicUsize::new(0));
-        #[cfg(target_os = "macos")]
+        let cmdv_paste = ImagePasteHook::default();
         if screenshot.is_none() {
-            macos::install_cmd_v_image_monitor(cc.egui_ctx.clone(), cmdv_paste.clone());
+            cmdv_paste.install_monitor(&cc.egui_ctx, macos::clipboard_image_only);
         }
 
         // Single-instance: as the primary, accept connections from later launches and, per
@@ -801,7 +801,7 @@ impl eframe::App for Stdusk {
         // Cmd+V image paste: the NSEvent monitor swallowed a Cmd+V over an image-only clipboard.
         // Inject the raw ^V (0x16) into the focused pane's pty; Claude Code (iTerm-style) reads
         // the system clipboard itself on ^V and ingests the image (same path as Ctrl+V).
-        if self.cmdv_paste.swap(0, Ordering::SeqCst) > 0
+        if self.cmdv_paste.take() > 0
             && self.screenshot.is_none()
             && let Some(tab) = self.tabs.get_mut(self.active)
         {
