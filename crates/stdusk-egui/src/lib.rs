@@ -13,6 +13,7 @@ pub mod fonts;
 pub mod keys;
 pub mod macos_paste;
 pub mod mouse;
+pub mod sync;
 pub mod terminal_view;
 pub mod ui;
 pub mod wheel;
