@@ -10,7 +10,6 @@ use stdusk_core::paste::PasteRules;
 use stdusk_core::terminal::PtyTerm;
 use stdusk_egui::mouse::GridGeom;
 use stdusk_egui::terminal_view::{Focus, Gate, TerminalOptions, TerminalView, paste_into};
-use stdusk_egui::wheel::WheelLines;
 use stdusk_egui::widgets::style_menu;
 
 use crate::{COLS, ROWS, Stdusk, colors, pane};
@@ -246,7 +245,6 @@ impl Stdusk {
                             confirm_multiline_paste: tcfg.warn_on_multiline_paste,
                             ctrl_c_copies: true,
                             copy_on_select: tcfg.copy_on_select,
-                            wheel_lines: WheelLines::Smoothed,
                             app_link_modifier: &tcfg.app_link_modifier,
                             focus: if focused { Focus::LockKeys } else { Focus::Off },
                         },
