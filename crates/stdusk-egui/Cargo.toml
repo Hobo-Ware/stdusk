@@ -12,5 +12,11 @@ font-kit = "0.14.3"
 resvg = { version = "0.45", default-features = false }
 stdusk-core.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSEvent", "NSGraphicsContext", "NSResponder"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSString"] }
+
 [dev-dependencies]
 stdusk-core = { workspace = true, features = ["test-support"] }

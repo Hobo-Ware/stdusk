@@ -66,7 +66,7 @@ pub struct GridGeom {
 }
 
 impl GridGeom {
-    fn cell(self, p: egui::Pos2) -> (usize, usize) {
+    pub(crate) fn cell(self, p: egui::Pos2) -> (usize, usize) {
         let col = ((p.x - self.rect.left()) / self.cw).max(0.0) as usize;
         let row = ((p.y - self.rect.top()) / self.ch).max(0.0) as usize;
         (col.min(self.cols.saturating_sub(1)), row.min(self.rows.saturating_sub(1)))

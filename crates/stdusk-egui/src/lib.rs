@@ -3,13 +3,19 @@
 //! `ui::render_grid` paints a `stdusk_core::terminal::GridSnap`, `ui::collect_input` turns a
 //! frame's key events into pty bytes, and `ui::draw_tab` paints a tab chip. `fonts` registers
 //! the terminal font families, `widgets` holds the settings-style controls, `keys` and `mouse`
-//! encode input for the pty. The theme is the process-wide one in `colors`; the host app sets
+//! encode input for the pty. `terminal_view::TerminalView` wraps `render_grid` with the input a
+//! pane needs (keys, pastes, `wheel`, pointer reports, `focus`, copy); `macos_paste` is the Cmd+V
+//! image hook. The theme is the process-wide one in `colors`; the host app sets
 //! it once at startup.
 
+pub mod focus;
 pub mod fonts;
 pub mod keys;
+pub mod macos_paste;
 pub mod mouse;
+pub mod terminal_view;
 pub mod ui;
+pub mod wheel;
 pub mod widgets;
 
 pub use stdusk_core::colors;
