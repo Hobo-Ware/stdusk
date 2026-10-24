@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use global_hotkey::hotkey::{Code, Modifiers};
 use serde::{Deserialize, Serialize};
+pub(crate) use stdusk_core::config::TerminalConfig as Terminal;
 use stdusk_core::shell::ShellProfile;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -263,42 +264,6 @@ pub(crate) struct Quake {
     pub(crate) follow_active_space: bool,
 }
 
-// Independent user toggles, not a mode - a state machine would be more code, not less.
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub(crate) struct Terminal {
-    pub(crate) detect_progress: bool,
-    pub(crate) cursor: String,            // "block" | "underline" | "beam"
-    pub(crate) shell_integration: bool,   // inject OSC 133 hooks into the spawned shell
-    pub(crate) autosuggestions: bool, // fish-style inline history suggestions (zsh; needs shell_integration)
-    pub(crate) bell: String,          // "visual" | "off"
-    pub(crate) detect_clis: bool,     // badge tabs running a known AI CLI (claude/gemini/...)
-    pub(crate) clickable_links: bool, // open URLs / file paths on click
-    pub(crate) link_modifier: String, // "none" (hover) | "cmd" | "ctrl" | "alt" | "shift"
-    pub(crate) app_link_modifier: String, // "cmd" | "alt" | "ctrl": links in apps that take the mouse
-    pub(crate) notify_on_done: bool, // desktop notification when a long (>10s) command finishes while hidden
-    pub(crate) scrollback_lines: usize, // history size (Tabby default 25000)
-    pub(crate) cursor_blink: bool,   // blink the focused pane's cursor
-    pub(crate) alt_is_meta: bool,    // Option+key sends ESC+key instead of composed chars
-    pub(crate) word_separators: String, // chars that end a double-click word selection
-    pub(crate) copy_on_select: bool, // copy to clipboard whenever a selection finishes
-    pub(crate) paste_on_middle_click: bool, // middle-click pastes the clipboard
-    pub(crate) warn_on_multiline_paste: bool, // confirm before pasting multiple lines
-    pub(crate) trim_whitespace_on_paste: bool, // strip leading/trailing whitespace from pastes
-    pub(crate) replace_newlines_on_paste: bool, // newlines -> spaces on paste
-    pub(crate) bold_bright: bool,    // draw bold text in the bright ANSI colors
-    pub(crate) ligatures: bool, // render common code sequences (-> => != >= <=) as single glyphs
-    pub(crate) warn_on_close_running: bool, // confirm closing a tab with a running process
-    pub(crate) on_exit: String, // pane when its shell exits: "close" | "keep" | "restart"
-    pub(crate) dynamic_title: bool, // tab titles follow the shell's OSC 0/2 title
-    pub(crate) minimum_contrast: f32, // WCAG ratio text is nudged to meet, 1 (off) ..= 21
-    pub(crate) right_click: String, // "menu" | "paste" | "clipboard" (copy selection, else paste)
-    pub(crate) focus_follows_mouse: bool, // hovering a pane focuses it (no click)
-    pub(crate) new_tab_position: String, // Cmd+T / menus / palette: "after_current" | "end"
-    pub(crate) plus_button_position: String, // the tab bar's + button: "end" | "after_current"
-}
-
 impl Default for Appearance {
     fn default() -> Self {
         Self {
@@ -327,43 +292,6 @@ impl Default for Quake {
             dock_when_visible: false,
             unfocused_opacity: 1.0,
             follow_active_space: true,
-        }
-    }
-}
-impl Default for Terminal {
-    fn default() -> Self {
-        Self {
-            detect_progress: true,
-            cursor: "block".into(),
-            shell_integration: true,
-            autosuggestions: false,
-            bell: "visual".into(),
-            detect_clis: true,
-            clickable_links: true,
-            link_modifier: "none".into(),
-            app_link_modifier: "cmd".into(),
-            notify_on_done: true,
-            scrollback_lines: 25000,
-            cursor_blink: true,
-            alt_is_meta: false,
-            word_separators: " ()[]{}'\"".into(),
-            copy_on_select: false,
-            paste_on_middle_click: true,
-            warn_on_multiline_paste: true,
-            trim_whitespace_on_paste: true,
-            replace_newlines_on_paste: false,
-            bold_bright: true,
-            ligatures: false,
-            warn_on_close_running: true,
-            on_exit: "close".into(),
-            dynamic_title: true,
-            // Tabby ships 4; serde fills only ABSENT fields, so a config that explicitly
-            // set 1.0 (off) keeps its exact-theme cells. See config.example.toml.
-            minimum_contrast: 4.0,
-            right_click: "menu".into(),
-            focus_follows_mouse: false,
-            new_tab_position: "after_current".into(),
-            plus_button_position: "end".into(),
         }
     }
 }

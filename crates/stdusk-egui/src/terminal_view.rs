@@ -3,7 +3,8 @@
 //! view `Gate`; the view hands back facts (`TerminalOutput`) and never touches tabs, toasts or
 //! windows.
 
-use egui::{Event, FontId, Id, Key, Modifiers};
+use egui::{Event, FontId, Id, Key, Modifiers, PointerButton};
+use stdusk_core::config::TerminalConfig;
 use stdusk_core::paste::{self, PasteRules};
 use stdusk_core::search::Match;
 use stdusk_core::terminal::{ECHO_WAIT, PtyTerm};
@@ -12,6 +13,10 @@ use crate::focus;
 use crate::mouse::{
     GridGeom, MouseReportingExt as _, PointerTracker, WheelAccumulator, drag_autoscroll_lines,
     pointer_reports,
+};
+use crate::pointer::{
+    MousePasted, RightClickAction, RightClickMode, paste_clipboard, read_clipboard_paste,
+    right_click_action, right_click_mode,
 };
 use crate::ui::{GridStyle, collect_input, render_grid};
 use crate::wheel;
@@ -31,11 +36,20 @@ pub struct Gate {
     pub wheel: bool,
     /// An app with mouse reporting on gets clicks, drags and motion.
     pub reports: bool,
+    /// A middle click or a quick right click may paste.
+    pub pointer: bool,
 }
 
 impl Gate {
     pub const fn all(allowed: bool) -> Self {
-        Self { keyboard: allowed, paste: allowed, copy: allowed, wheel: allowed, reports: allowed }
+        Self {
+            keyboard: allowed,
+            paste: allowed,
+            copy: allowed,
+            wheel: allowed,
+            reports: allowed,
+            pointer: allowed,
+        }
     }
 }
 
@@ -63,7 +77,34 @@ pub struct TerminalOptions<'a> {
     pub copy_on_select: bool,
     /// `terminal.app_link_modifier`: the key that takes the pointer back from an app.
     pub app_link_modifier: &'a str,
+    /// A middle click pastes the clipboard.
+    pub paste_on_middle_click: bool,
+    pub right_click: RightClickMode,
+    /// Take the pane's BEL for `TerminalOutput::bell_rang`.
+    pub bell: bool,
     pub focus: Focus,
+}
+
+impl<'a> TerminalOptions<'a> {
+    /// What a terminal config asks of a pane. `ctrl_c_copies` is always on: stdusk has no switch
+    /// for it.
+    pub fn from_config(cfg: &'a TerminalConfig, focus: Focus) -> Self {
+        Self {
+            alt_is_meta: cfg.alt_is_meta,
+            paste: PasteRules {
+                newlines_to_spaces: cfg.replace_newlines_on_paste,
+                trim: cfg.trim_whitespace_on_paste,
+            },
+            confirm_multiline_paste: cfg.warn_on_multiline_paste,
+            ctrl_c_copies: true,
+            copy_on_select: cfg.copy_on_select,
+            app_link_modifier: &cfg.app_link_modifier,
+            paste_on_middle_click: cfg.paste_on_middle_click,
+            right_click: right_click_mode(&cfg.right_click),
+            bell: cfg.bell != "off",
+            focus,
+        }
+    }
 }
 
 pub struct TerminalView<'a> {
@@ -92,6 +133,12 @@ pub struct TerminalOutput {
     pub copied: Option<String>,
     /// An app with mouse reporting on owns the pointer this frame.
     pub app_owns_pointer: bool,
+    /// The pane rang BEL (only when `TerminalOptions::bell`).
+    pub bell_rang: bool,
+    /// A right click resolved to the context menu; the host opens its own.
+    pub menu_requested: bool,
+    /// A middle or right click pasted the clipboard into the pane.
+    pub mouse_pasted: Option<MousePasted>,
 }
 
 impl TerminalOutput {
@@ -277,7 +324,64 @@ impl TerminalView<'_> {
             copied = Some(text);
         }
 
-        TerminalOutput { response, typed: out, pasted, confirm_paste, copied, app_owns_pointer }
+        let mut mouse_pasted = None;
+        let mut menu_requested = false;
+        let hovered = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| grid.rect.contains(p));
+        if options.paste_on_middle_click
+            && gate.pointer
+            && response.hovered()
+            && ui.input(|i| i.pointer.button_clicked(PointerButton::Middle))
+            && let Some(clip) = read_clipboard_paste()
+        {
+            mouse_pasted = Some(paste_clipboard(term, clip, options.paste));
+        }
+        let press_id = Id::new(("right_press", id_src));
+        let (pressed, released, now) = ui.input(|i| {
+            (
+                i.pointer.button_pressed(PointerButton::Secondary),
+                i.pointer.button_released(PointerButton::Secondary),
+                i.time,
+            )
+        });
+        if pressed && hovered {
+            ui.data_mut(|d| d.insert_temp(press_id, now));
+        }
+        if released
+            && let Some(since) = ui.data_mut(|d| d.remove_temp::<f64>(press_id))
+            && hovered
+        {
+            let has_selection = term.selection_text().is_some();
+            match right_click_action(options.right_click, now - since, has_selection) {
+                RightClickAction::Menu => menu_requested = true,
+                RightClickAction::Copy => {
+                    if let Some(text) = term.selection_text() {
+                        ctx.copy_text(text.clone());
+                        term.clear_selection();
+                        copied = Some(text);
+                    }
+                }
+                RightClickAction::Paste => {
+                    if gate.pointer
+                        && let Some(clip) = read_clipboard_paste()
+                    {
+                        mouse_pasted = Some(paste_clipboard(term, clip, options.paste));
+                    }
+                }
+            }
+        }
+        let bell_rang = options.bell && term.take_bell();
+
+        TerminalOutput {
+            response,
+            typed: out,
+            pasted,
+            confirm_paste,
+            copied,
+            app_owns_pointer,
+            bell_rang,
+            menu_requested,
+            mouse_pasted,
+        }
     }
 }
 
@@ -291,12 +395,10 @@ mod tests {
     use stdusk_core::test_support::spawn_opts;
 
     use super::*;
-    use crate::ui::CursorStyle;
 
     const CELL: (f32, f32) = (8.0, 16.0);
     const COLS: usize = 75;
     const ROWS: usize = 25;
-    const RULES: PasteRules = PasteRules { newlines_to_spaces: false, trim: true };
 
     struct Scratch(PathBuf);
 
@@ -326,8 +428,9 @@ mod tests {
         out: Option<TerminalOutput>,
         copied_to_clipboard: Vec<String>,
         ctrl_c_copies: bool,
-        copy_on_select: bool,
-        confirm: bool,
+        cfg: TerminalConfig,
+        cursor: egui::CursorIcon,
+        now: Option<f64>,
     }
 
     impl Rig {
@@ -353,8 +456,13 @@ mod tests {
                 out: None,
                 copied_to_clipboard: Vec::new(),
                 ctrl_c_copies: true,
-                copy_on_select: false,
-                confirm: false,
+                cfg: TerminalConfig {
+                    clickable_links: false,
+                    warn_on_multiline_paste: false,
+                    ..TerminalConfig::default()
+                },
+                cursor: egui::CursorIcon::Default,
+                now: None,
             }
         }
 
@@ -372,24 +480,21 @@ mod tests {
                 events,
                 modifiers,
                 focused: true,
+                time: self.now,
                 ..Default::default()
             };
             let ctx = self.ctx.clone();
             let font = FontId::monospace(14.0);
             let options = TerminalOptions {
-                alt_is_meta: false,
-                paste: RULES,
-                confirm_multiline_paste: self.confirm,
                 ctrl_c_copies: self.ctrl_c_copies,
-                copy_on_select: self.copy_on_select,
-                app_link_modifier: "cmd",
-                focus: Focus::Manage,
+                ..TerminalOptions::from_config(&self.cfg, Focus::Manage)
             };
             let full = ctx.run_ui(raw, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     self.field = Some(ui.text_edit_singleline(&mut self.text));
                     self.button = Some(ui.button("Close"));
                     let typing = ui.ctx().text_edit_focused();
+                    let style = GridStyle::from_config(&self.cfg, modifiers, !typing);
                     let out = TerminalView {
                         id_src: &[],
                         grid: GridGeom {
@@ -401,15 +506,7 @@ mod tests {
                         },
                         font: &font,
                         bold_font: None,
-                        style: GridStyle {
-                            cursor: CursorStyle::Block,
-                            dimmed: false,
-                            link_active: false,
-                            blink: false,
-                            ligatures: false,
-                            min_contrast: 1.0,
-                            app_mouse: false,
-                        },
+                        style,
                         search_marks: &[],
                         options,
                         gate: Gate::all(!typing),
@@ -419,6 +516,7 @@ mod tests {
                     self.out = Some(out);
                 });
             });
+            self.cursor = full.platform_output.cursor_icon;
             for command in full.platform_output.commands {
                 if let OutputCommand::CopyText(text) = command {
                     self.copied_to_clipboard.push(text);
@@ -449,6 +547,21 @@ mod tests {
         fn hover(&mut self) {
             self.frame(vec![Event::PointerMoved(Self::area().center())], Modifiers::NONE);
             self.frame(vec![], Modifiers::NONE);
+        }
+
+        fn right_click(&mut self, at: Pos2, held: f64) {
+            let button = |pressed| Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let start = self.now.map_or(10.0, |t| t + 1.0);
+            self.now = Some(start);
+            self.frame(vec![Event::PointerMoved(at)], Modifiers::NONE);
+            self.frame(vec![button(true)], Modifiers::NONE);
+            self.now = Some(start + held);
+            self.frame(vec![button(false)], Modifiers::NONE);
         }
 
         fn wheel(&mut self, unit: MouseWheelUnit, lines: f32, modifiers: Modifiers) {
@@ -779,7 +892,7 @@ mod tests {
     #[test]
     fn a_finished_drag_is_copied_when_copy_on_select_is_on() {
         let mut rig = with_text();
-        rig.copy_on_select = true;
+        rig.cfg.copy_on_select = true;
         rig.drag(Rig::at(0, 0), Rig::at(10, 0));
         assert_eq!(rig.copied_to_clipboard.len(), 1);
         assert!(rig.copied_to_clipboard[0].contains("llo wor"), "{:?}", rig.copied_to_clipboard);
@@ -821,7 +934,7 @@ mod tests {
     #[test]
     fn a_multiline_paste_is_held_back_for_the_app_when_it_asks_to_confirm() {
         let mut rig = with_history();
-        rig.confirm = true;
+        rig.cfg.warn_on_multiline_paste = true;
         rig.frame(vec![Event::Paste("a\nb".into())], Modifiers::NONE);
         assert_eq!(rig.out().confirm_paste, ["a\rb"]);
         assert_eq!(rig.out().pasted.len(), 0);
@@ -865,17 +978,163 @@ mod tests {
         assert_eq!(ctx.memory(egui::Memory::focused), None);
     }
 
+    fn with_link() -> Rig {
+        let mut rig = Rig::new("printf 'see https://example.com/page now\\n'; sleep 20");
+        rig.wait_for(|rig| rig.row_text(0).starts_with("see https://example.com/page now"));
+        rig.cfg.clickable_links = true;
+        rig
+    }
+
+    fn hand_over(rig: &mut Rig, col: usize, mods: Modifiers) -> bool {
+        rig.frame(vec![Event::PointerMoved(Rig::at(col, 0))], mods);
+        rig.frame(vec![], mods);
+        rig.cursor == egui::CursorIcon::PointingHand
+    }
+
+    #[test]
+    fn a_link_reacts_to_the_pointer_as_the_terminal_config_says() {
+        let cases = [
+            (true, "cmd", Modifiers::COMMAND, 12, true),
+            (true, "cmd", Modifiers::NONE, 12, false),
+            (true, "cmd", Modifiers::SHIFT, 12, false),
+            (true, "cmd", Modifiers::COMMAND, 0, false),
+            (true, "none", Modifiers::NONE, 12, true),
+            (true, "ctrl", Modifiers::CTRL, 12, true),
+            (false, "cmd", Modifiers::COMMAND, 12, false),
+            (false, "none", Modifiers::NONE, 12, false),
+        ];
+        for (clickable, modifier, held, col, want) in cases {
+            let mut rig = with_link();
+            rig.cfg.clickable_links = clickable;
+            rig.cfg.link_modifier = modifier.into();
+            assert_eq!(
+                hand_over(&mut rig, col, held),
+                want,
+                "clickable={clickable} modifier={modifier} held={held:?} col={col}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_terminal_config_underlines_a_link_under_cmd_hover_only_when_asked_to() {
+        let mut rig = with_link();
+        rig.cfg = TerminalConfig { link_modifier: "cmd".into(), ..TerminalConfig::default() };
+        assert!(hand_over(&mut rig, 12, Modifiers::COMMAND));
+        assert!(!hand_over(&mut rig, 12, Modifiers::NONE));
+    }
+
+    #[test]
+    fn a_link_stays_inert_while_an_app_owns_the_pointer() {
+        let mut rig = Rig::new(
+            "printf '\\033[?1000h\\033[?1006hsee https://example.com/page now\\n'; sleep 20",
+        );
+        rig.wait_for(|rig| rig.term.mouse_reporting().sgr);
+        rig.wait_for(|rig| rig.row_text(0).contains("https://example.com/page"));
+        rig.cfg.clickable_links = true;
+        assert!(!hand_over(&mut rig, 12, Modifiers::NONE));
+        assert!(rig.out().app_owns_pointer);
+    }
+
+    #[test]
+    fn the_bell_is_reported_unless_the_config_turns_it_off() {
+        let ring = || {
+            let rig = Rig::new("printf '\\ax'; sleep 20");
+            rig.wait_for(|rig| rig.row_text(0).starts_with('x'));
+            rig
+        };
+        let mut rig = ring();
+        rig.frame(vec![], Modifiers::NONE);
+        assert!(rig.out().bell_rang);
+        rig.frame(vec![], Modifiers::NONE);
+        assert!(!rig.out().bell_rang);
+
+        let mut rig = ring();
+        rig.cfg.bell = "off".into();
+        rig.frame(vec![], Modifiers::NONE);
+        assert!(!rig.out().bell_rang);
+    }
+
+    #[test]
+    fn a_quick_right_click_opens_the_menu_in_menu_mode_and_a_hold_does_too() {
+        for held in [0.05, 1.0] {
+            let mut rig = with_text();
+            rig.right_click(Rig::at(3, 0), held);
+            assert!(rig.out().menu_requested, "held {held}");
+            assert_eq!(rig.out().mouse_pasted, None);
+        }
+    }
+
+    #[test]
+    fn a_quick_right_click_copies_a_selection_in_clipboard_mode_and_a_hold_opens_the_menu() {
+        let mut rig = with_text();
+        rig.cfg.right_click = "clipboard".into();
+        select_hello_world(&rig);
+        rig.right_click(Rig::at(3, 0), 1.0);
+        assert!(rig.out().menu_requested);
+        assert_eq!(rig.out().copied, None);
+        assert_eq!(rig.term.selection_text().as_deref(), Some("hello world"));
+
+        rig.right_click(Rig::at(3, 0), 0.05);
+        assert!(!rig.out().menu_requested);
+        assert_eq!(rig.out().copied.as_deref(), Some("hello world"));
+        assert_eq!(rig.copied_to_clipboard, ["hello world"]);
+        assert_eq!(rig.term.selection_text(), None);
+    }
+
+    #[test]
+    fn a_right_click_released_off_the_pane_does_nothing() {
+        let mut rig = with_text();
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        rig.frame(vec![Event::PointerMoved(Rig::at(3, 0))], Modifiers::NONE);
+        rig.frame(vec![button(Rig::at(3, 0), true)], Modifiers::NONE);
+        rig.frame(vec![Event::PointerMoved(Pos2::new(700.0, 20.0))], Modifiers::NONE);
+        rig.frame(vec![button(Pos2::new(700.0, 20.0), false)], Modifiers::NONE);
+        assert!(!rig.out().menu_requested);
+    }
+
+    #[test]
+    fn the_terminal_options_follow_the_terminal_config() {
+        let cfg = TerminalConfig {
+            alt_is_meta: true,
+            replace_newlines_on_paste: true,
+            trim_whitespace_on_paste: false,
+            warn_on_multiline_paste: false,
+            copy_on_select: true,
+            app_link_modifier: "alt".into(),
+            paste_on_middle_click: false,
+            right_click: "paste".into(),
+            bell: "off".into(),
+            ..TerminalConfig::default()
+        };
+        let options = TerminalOptions::from_config(&cfg, Focus::LockKeys);
+        assert!(options.alt_is_meta);
+        assert_eq!(options.paste, PasteRules { newlines_to_spaces: true, trim: false });
+        assert!(!options.confirm_multiline_paste);
+        assert!(options.ctrl_c_copies);
+        assert!(options.copy_on_select);
+        assert_eq!(options.app_link_modifier, "alt");
+        assert!(!options.paste_on_middle_click);
+        assert_eq!(options.right_click, RightClickMode::Paste);
+        assert!(!options.bell);
+        assert_eq!(options.focus, Focus::LockKeys);
+
+        let stock = TerminalConfig::default();
+        let options = TerminalOptions::from_config(&stock, Focus::Off);
+        assert!(options.confirm_multiline_paste);
+        assert!(options.paste_on_middle_click);
+        assert_eq!(options.right_click, RightClickMode::Menu);
+        assert!(options.bell);
+    }
+
     #[test]
     fn a_gate_and_a_copy_request_table_agree_with_the_platform() {
-        let options = TerminalOptions {
-            alt_is_meta: false,
-            paste: RULES,
-            confirm_multiline_paste: false,
-            ctrl_c_copies: true,
-            copy_on_select: false,
-            app_link_modifier: "cmd",
-            focus: Focus::Off,
-        };
+        let cfg = TerminalConfig { warn_on_multiline_paste: false, ..TerminalConfig::default() };
+        let options = TerminalOptions::from_config(&cfg, Focus::Off);
         let plain = TerminalOptions { ctrl_c_copies: false, ..options };
         let copy = [Event::Copy];
         let ctrl = Modifiers::CTRL;

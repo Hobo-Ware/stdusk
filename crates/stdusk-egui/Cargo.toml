@@ -7,6 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+arboard = { version = "3.6.1", default-features = false, features = ["image-data"] } # mouse paste reads the clipboard text, else its image
 egui.workspace = true
 font-kit = "0.14.3"
 resvg = { version = "0.45", default-features = false }

@@ -23,6 +23,7 @@ use crate::agent_restore::{PaneNotice, SkipReason};
 use crate::agent_track::Status;
 use crate::agents::{AgentSession, Seen};
 use crate::colors;
+use crate::config::TerminalConfig;
 use crate::mouse::MouseReporting;
 use crate::osc::{OscEvent, OscScanner, ShellEvent};
 use crate::progress::{Progress, ProgressScanner};
@@ -279,6 +280,24 @@ pub struct SpawnOpts {
     pub profile: Option<ShellProfile>, // launch profile overrides (shell/args/cwd/env)
     /// Agent-resume wiring for this pane. `None` = the pane tracks no agent session.
     pub agent_tracking: Option<AgentSetup>,
+}
+
+impl SpawnOpts {
+    /// The spawn settings of a terminal config; the folder, profile and agent tracking are the
+    /// caller's.
+    pub fn from_config(cfg: &TerminalConfig) -> Self {
+        Self {
+            detect_progress: cfg.detect_progress,
+            shell_integration: cfg.shell_integration,
+            autosuggestions: cfg.autosuggestions,
+            scrollback_lines: cfg.scrollback_lines,
+            word_separators: cfg.word_separators.clone(),
+            bold_bright: cfg.bold_bright,
+            cwd: None,
+            profile: None,
+            agent_tracking: None,
+        }
+    }
 }
 
 /// When an adopted pane re-asks for a repaint, counting from adoption. The first ask is immediate;

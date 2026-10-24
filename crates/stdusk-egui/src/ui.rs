@@ -3,6 +3,7 @@
 
 use stdusk_core::agent_restore::PaneNotice;
 use stdusk_core::colors;
+use stdusk_core::config::TerminalConfig;
 use stdusk_core::progress::Progress;
 use stdusk_core::terminal::{CmdState, GridSnap, PtyTerm};
 
@@ -81,6 +82,34 @@ pub fn progress_fraction(p: Progress) -> Option<f32> {
 /// Toast opacity (0..=1): full until `remaining_s` drops below `fade_window_s`, then linear out.
 pub fn toast_alpha(remaining_s: f64, fade_window_s: f64) -> f32 {
     (remaining_s / fade_window_s).clamp(0.0, 1.0) as f32
+}
+
+/// The bell's visual flash: a translucent wash over the pane area that fades out.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BellFlash {
+    until: f64,
+}
+
+impl BellFlash {
+    const SECS: f64 = 0.18;
+
+    pub fn ring(&mut self, now: f64) {
+        self.until = now + Self::SECS;
+    }
+
+    pub fn paint(&self, ui: &egui::Ui, area: egui::Rect, now: f64) {
+        if self.until <= now {
+            return;
+        }
+        let alpha = toast_alpha(self.until - now, Self::SECS);
+        let f = colors::fg();
+        ui.painter().rect_filled(
+            area,
+            10.0,
+            egui::Color32::from_rgba_unmultiplied(f.r(), f.g(), f.b(), (55.0 * alpha) as u8),
+        );
+        ui.ctx().request_repaint();
+    }
 }
 
 /// Symbol "ligatures": common code sequences drawn as one Unicode glyph spanning their cells.
@@ -716,6 +745,36 @@ pub struct GridStyle {
     pub app_mouse: bool,   // the app gets pointer reports: no local selection or links
 }
 
+impl GridStyle {
+    /// The grid look of a terminal config for one pane. `keys_free` is whether this pane holds the
+    /// keyboard (`Gate::keyboard`): only then does the cursor blink. Links are active when
+    /// `clickable_links` is on and `link_modifier` is held in `mods`. Not dimmed, no app mouse
+    /// (the view decides that one).
+    pub fn from_config(cfg: &TerminalConfig, mods: egui::Modifiers, keys_free: bool) -> Self {
+        Self {
+            cursor: cursor_style(&cfg.cursor),
+            dimmed: false,
+            link_active: cfg.clickable_links && link_modifier_held(mods, &cfg.link_modifier),
+            blink: cfg.cursor_blink && keys_free,
+            ligatures: cfg.ligatures,
+            min_contrast: cfg.minimum_contrast,
+            app_mouse: false,
+        }
+    }
+}
+
+/// Is the configured link-activation modifier satisfied? `"none"` (or unknown) means links react
+/// on plain hover/click (Tabby default); otherwise the named modifier must be held.
+pub fn link_modifier_held(mods: egui::Modifiers, setting: &str) -> bool {
+    match setting.to_ascii_lowercase().as_str() {
+        "cmd" | "command" | "super" | "meta" => mods.command,
+        "ctrl" | "control" => mods.ctrl,
+        "alt" | "option" | "opt" => mods.alt,
+        "shift" => mods.shift,
+        _ => true, // "none" / unrecognized: no modifier required
+    }
+}
+
 pub fn render_grid(
     ui: &mut egui::Ui,
     id_src: &[stdusk_core::pane::Side],
@@ -1147,6 +1206,60 @@ mod tests {
         assert_eq!(progress_fraction(Progress::Paused(20)), Some(0.2));
         assert_eq!(progress_fraction(Progress::Error(0)), Some(1.0));
         assert_eq!(progress_fraction(Progress::Indeterminate), Some(1.0));
+    }
+
+    #[test]
+    fn link_modifier_matching() {
+        let none = egui::Modifiers::NONE;
+        assert!(link_modifier_held(none, "none")); // plain hover default
+        assert!(link_modifier_held(none, "")); // unknown -> no modifier needed
+        assert!(!link_modifier_held(none, "cmd")); // cmd required but not held
+        assert!(link_modifier_held(egui::Modifiers::COMMAND, "cmd"));
+        assert!(link_modifier_held(egui::Modifiers::CTRL, "ctrl"));
+        assert!(!link_modifier_held(egui::Modifiers::COMMAND, "alt"));
+    }
+
+    #[test]
+    fn a_grid_style_follows_the_terminal_config() {
+        let cfg = TerminalConfig {
+            cursor: "beam".into(),
+            cursor_blink: true,
+            ligatures: true,
+            minimum_contrast: 7.0,
+            ..TerminalConfig::default()
+        };
+        let style = GridStyle::from_config(&cfg, egui::Modifiers::NONE, true);
+        assert_eq!(style.cursor, CursorStyle::Beam);
+        assert!(style.blink);
+        assert!(style.ligatures);
+        assert_eq!(style.min_contrast, 7.0);
+        assert!(!style.dimmed);
+        assert!(!style.app_mouse);
+        assert!(!GridStyle::from_config(&cfg, egui::Modifiers::NONE, false).blink);
+        let steady = TerminalConfig { cursor_blink: false, ..cfg };
+        assert!(!GridStyle::from_config(&steady, egui::Modifiers::NONE, true).blink);
+    }
+
+    #[test]
+    fn links_are_active_only_when_enabled_and_the_configured_modifier_is_held() {
+        let cases = [
+            (true, "none", egui::Modifiers::NONE, true),
+            (true, "cmd", egui::Modifiers::NONE, false),
+            (true, "cmd", egui::Modifiers::COMMAND, true),
+            (true, "ctrl", egui::Modifiers::COMMAND, false),
+            (true, "ctrl", egui::Modifiers::CTRL, true),
+            (false, "none", egui::Modifiers::NONE, false),
+            (false, "cmd", egui::Modifiers::COMMAND, false),
+        ];
+        for (clickable, modifier, held, want) in cases {
+            let cfg = TerminalConfig {
+                clickable_links: clickable,
+                link_modifier: modifier.into(),
+                ..TerminalConfig::default()
+            };
+            let style = GridStyle::from_config(&cfg, held, true);
+            assert_eq!(style.link_active, want, "{clickable} {modifier} {held:?}");
+        }
     }
 
     #[test]

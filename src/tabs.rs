@@ -74,15 +74,9 @@ impl Tab {
 /// Bundle the config bits a terminal spawn needs.
 pub(crate) fn spawn_opts(cfg: &Config, cwd: Option<String>) -> terminal::SpawnOpts {
     terminal::SpawnOpts {
-        detect_progress: cfg.terminal.detect_progress,
-        profile: None,
-        shell_integration: cfg.terminal.shell_integration,
-        autosuggestions: cfg.terminal.autosuggestions,
-        scrollback_lines: cfg.terminal.scrollback_lines,
-        word_separators: cfg.terminal.word_separators.clone(),
-        bold_bright: cfg.terminal.bold_bright,
         agent_tracking: agent_setup(cfg),
         cwd,
+        ..terminal::SpawnOpts::from_config(&cfg.terminal)
     }
 }
 

@@ -681,6 +681,27 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
 - Proof: 675 tests green (96 in stdusk-egui, 28 of them headless `TerminalView` frames with a real pty);
   `--screenshot` main and broadcast shots identical to 1.10.1 (PSNR 120).
 
+## Embedder parity - the terminal config drives a pane inside stdusk-egui (branch fix/terminal-embedder-parity)
+- Owner's rule: what works in stdusk works in an embedding app (Tidewatch), period. Cmd+click links did
+  not: stdusk's app computed `link_active` and the grid options from its `[terminal]` config, and Tidewatch
+  hand-built its own values (links always off).
+- `stdusk_core::config::TerminalConfig` is the `[terminal]` table (moved from `src/config.rs`, which
+  re-exports it as `config::Terminal`). `GridStyle::from_config(cfg, mods, keys_free)` (links active from
+  `clickable_links` + `link_modifier`, blink, cursor, ligatures, min contrast), `TerminalOptions::from_config(cfg,
+  focus)` and `SpawnOpts::from_config(cfg)` turn it into what a pane needs; stdusk's app uses all three.
+- Moved from `workspace.rs` into `TerminalView`: middle-click paste, the right-click modes (menu / paste /
+  clipboard, the 250 ms rule, press tracking in egui temp data), the clipboard read and image fallback
+  (`pointer.rs`, `arboard` now a stdusk-egui dependency), and the bell (`bell_rang`). New output facts:
+  `menu_requested`, `mouse_pasted`, `bell_rang`; new `Gate::pointer`. `ui::BellFlash` is the flash,
+  `paste_confirm::show` the "Paste N lines?" window (the queue and the paste target stay in the app).
+- Stays in the app: pane splits, tabs, broadcast, focus follows mouse, dimming, find bar, the pane menu
+  itself, dead-pane respawn and `on_exit`.
+- Proof: stdusk-egui 99 -> 115 tests (headless frames: link hand cursor per modifier / clickable / app mouse,
+  bell on and off, right-click tap and hold, off-pane release, option mapping); workspace 703 tests green;
+  clippy -D warnings, fmt; `--screenshot` of origin/main vs the branch PSNR 120 (identical).
+- NOT verified: a real Cmd+click opening a browser, a real middle or right click paste (needs the system
+  clipboard), and the bell flash by eye.
+
 ## Sized tab and icon button (branch feat/bigger-strip-icons)
 - `widgets::icon_button_sized` + `IconButtonSize` and `ui::draw_tab_sized` + `TabMetrics` let a host with a
   taller strip pick the box, glyph and tab sizes (Tidewatch: 44 px boxes, 44 px tabs, 14 px titles).

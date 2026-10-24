@@ -40,6 +40,7 @@ use macos::{
 use stdusk_core::terminal::PtyTerm;
 use stdusk_egui::fonts::{build_fonts, resolve_bold_font, resolve_font};
 use stdusk_egui::macos_paste::ImagePasteHook;
+use stdusk_egui::ui::BellFlash;
 use tabs::{Tab, TabAction, spawn_opts, spawn_tab};
 use ui::{apply_theme, auto_title, draw_toast, tint, toast_alpha};
 
@@ -82,7 +83,6 @@ struct Stdusk {
     pending_close: Option<(u64, String)>, // close-tab confirm: (tab id, prompt message)
     pending_quit: Option<String>, // quit confirm: Some(detail message) while the modal is shown
     quit_confirmed: bool, // a confirmed/proc-free quit is in flight: let the OS window close pass
-    right_press: Option<(Vec<pane::Side>, f64)>, // right-button press on a pane: (path, egui time)
     window_top: Option<bool>, // last-applied always-on-top state (re-applied when it changes)
     space_all: Option<bool>, // last-applied "join all Spaces" collectionBehavior (re-applied on change)
     titlebar_unified: Option<bool>, // last-applied unified-titlebar state (window mode; re-applied on change)
@@ -91,12 +91,12 @@ struct Stdusk {
     fx_opacity: f32, // this frame's effective window opacity (unfocused dim applied); derived
     color_preview: Option<(u64, Option<egui::Color32>)>, // Color-menu swatch hover preview (tab id, color)
     toast: Option<(String, f64)>, // transient status message + expiry (egui time)
-    flash: f64,                   // bell visual-flash expiry (egui time); 0 = none
-    zoom: f32,                    // font-size multiplier (Cmd +/-/0)
-    theme_name: String,           // currently-applied theme (to detect OS light/dark changes)
+    bell: BellFlash,
+    zoom: f32,                     // font-size multiplier (Cmd +/-/0)
+    theme_name: String,            // currently-applied theme (to detect OS light/dark changes)
     reported_theme: colors::Theme, // theme last announced to mode-2031 apps (see modes.rs)
-    next_theme_check: f64,        // egui time of the next throttled OS-appearance read
-    sys: sysinfo::System,         // process table for the on-demand close/quit running checks
+    next_theme_check: f64,         // egui time of the next throttled OS-appearance read
+    sys: sysinfo::System,          // process table for the on-demand close/quit running checks
     procs: procwatch::ProcScanner, // background ~1 Hz table for the CLI badges
     /// The last scan's Codex match, by pid.
     codex_last: std::collections::HashMap<u32, agents::AgentSession>,
@@ -440,7 +440,6 @@ impl Stdusk {
             pending_close: None,
             pending_quit: None,
             quit_confirmed: false,
-            right_press: None,
             window_top: None,
             space_all: None,
             titlebar_unified: None,
@@ -449,7 +448,7 @@ impl Stdusk {
             fx_opacity,
             color_preview: None,
             toast,
-            flash: 0.0,
+            bell: BellFlash::default(),
             zoom: 1.0,
             theme_name,
             reported_theme: colors::theme(),
@@ -1553,20 +1552,10 @@ impl eframe::App for Stdusk {
             self.central_panel(ui, &ctx, input_captured, kb_pane_dir, now)
         };
 
-        // Bell: a brief translucent flash over the whole window, fading out.
         if out.bell_rang {
-            self.flash = now + 0.18;
+            self.bell.ring(now);
         }
-        if self.flash > now {
-            let a = toast_alpha(self.flash - now, 0.18);
-            let f = colors::fg();
-            ui.painter().rect_filled(
-                ui.max_rect(),
-                10.0,
-                egui::Color32::from_rgba_unmultiplied(f.r(), f.g(), f.b(), (55.0 * a) as u8),
-            );
-            ctx.request_repaint();
-        }
+        self.bell.paint(ui, ui.max_rect(), now);
 
         // Transient "Copied" toast at the bottom-center, fading out.
         if out.copied {

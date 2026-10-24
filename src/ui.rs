@@ -5,7 +5,7 @@
 use eframe::egui;
 
 pub(crate) use stdusk_egui::ui::{
-    CursorStyle, GridStyle, SETTINGS_TAB_W, TAB_FIXED_W, TAB_H, TAB_MIN_W, WINDOW_TAB_H_EXTRA,
+    CursorStyle, SETTINGS_TAB_W, TAB_FIXED_W, TAB_H, TAB_MIN_W, WINDOW_TAB_H_EXTRA,
     apply_ligatures, apply_theme, blink_on, cursor_style, draw_exit_overlay, draw_pane_notice,
     draw_tab, draw_toast, ellipsize, icons, pane_notice_text, progress_fraction, tint, toast_alpha,
 };
@@ -219,47 +219,6 @@ pub(crate) fn fixed_tab_width(avail: f32, n: usize, spacing: f32) -> f32 {
     share.clamp(TAB_MIN_W, TAB_FIXED_W)
 }
 
-/// `terminal.right_click` parsed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RightClickMode {
-    Menu,
-    Paste,
-    Clipboard,
-}
-
-/// Parse the config `right_click` string; unknown values fall back to `Menu` (the default).
-pub(crate) fn right_click_mode(s: &str) -> RightClickMode {
-    match s.to_ascii_lowercase().as_str() {
-        "paste" => RightClickMode::Paste,
-        "clipboard" => RightClickMode::Clipboard,
-        _ => RightClickMode::Menu,
-    }
-}
-
-/// What a right-click release does on a pane.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RightClickAction {
-    Menu,
-    Paste,
-    Copy,
-}
-
-/// Tabby's exact right-click semantics (`baseTerminalTab` handleRightMouseUp): paste/clipboard
-/// act only on a quick tap (held < 250ms); a hold falls back to the context menu. Clipboard
-/// copies when a selection exists, else pastes.
-pub(crate) fn right_click_action(
-    mode: RightClickMode,
-    held_secs: f64,
-    has_selection: bool,
-) -> RightClickAction {
-    match mode {
-        RightClickMode::Menu => RightClickAction::Menu,
-        _ if held_secs >= 0.25 => RightClickAction::Menu,
-        RightClickMode::Clipboard if has_selection => RightClickAction::Copy,
-        RightClickMode::Paste | RightClickMode::Clipboard => RightClickAction::Paste,
-    }
-}
-
 /// The tab toggle-last-tab jumps to: the previously active index, or 0 when it no longer
 /// exists (Tabby `AppService.toggleLastTab` resets an out-of-range `lastTabIndex` to 0).
 pub(crate) fn toggle_last_target(prev: usize, len: usize) -> usize {
@@ -394,18 +353,6 @@ pub(crate) fn activity_notification(
     (fire, notified || fire)
 }
 
-/// Is the configured link-activation modifier satisfied? `"none"` (or unknown) means links react
-/// on plain hover/click (Tabby default); otherwise the named modifier must be held.
-pub(crate) fn link_modifier_held(mods: egui::Modifiers, setting: &str) -> bool {
-    match setting.to_ascii_lowercase().as_str() {
-        "cmd" | "command" | "super" | "meta" => mods.command,
-        "ctrl" | "control" => mods.ctrl,
-        "alt" | "option" | "opt" => mods.alt,
-        "shift" => mods.shift,
-        _ => true, // "none" / unrecognized: no modifier required
-    }
-}
-
 /// "Label (Chord)" tooltip text, or just the label when the action is unbound.
 pub(crate) fn shortcut_tip(label: &str, chord: &str) -> String {
     if chord.trim().is_empty() { label.to_string() } else { format!("{label} ({chord})") }
@@ -429,10 +376,6 @@ mod tests {
     use stdusk_egui::ui::{TAB_PAD_X, TAB_SLOT_W, collect_input};
 
     use egui::{Key, Modifiers};
-
-    fn mods(ctrl: bool, alt: bool, command: bool) -> Modifiers {
-        Modifiers { alt, ctrl, shift: false, mac_cmd: command, command }
-    }
 
     #[test]
     fn basename_cases() {
@@ -503,36 +446,6 @@ mod tests {
         assert_eq!(drop_paste_string(&[PathBuf::from("/tmp/it's here")]), "'/tmp/it'\\''s here' ");
         // No path-backed files -> nothing to insert.
         assert_eq!(drop_paste_string(&[]), "");
-    }
-
-    #[test]
-    fn right_click_mode_parse() {
-        assert_eq!(right_click_mode("menu"), RightClickMode::Menu);
-        assert_eq!(right_click_mode("Paste"), RightClickMode::Paste);
-        assert_eq!(right_click_mode("clipboard"), RightClickMode::Clipboard);
-        assert_eq!(right_click_mode("nonsense"), RightClickMode::Menu); // fallback = default
-        assert_eq!(right_click_mode(""), RightClickMode::Menu);
-    }
-
-    #[test]
-    fn right_click_action_follows_tabby_250ms_rule() {
-        use RightClickAction as A;
-        use RightClickMode as M;
-        // (mode, held_secs, has_selection) -> action; Tabby baseTerminalTab:656-676.
-        let cases = [
-            (M::Menu, 0.05, false, A::Menu),
-            (M::Menu, 1.0, true, A::Menu),
-            (M::Paste, 0.05, false, A::Paste),
-            (M::Paste, 0.05, true, A::Paste), // paste ignores the selection
-            (M::Paste, 0.25, false, A::Menu), // >= 250ms hold -> menu
-            (M::Paste, 2.0, false, A::Menu),
-            (M::Clipboard, 0.05, true, A::Copy),
-            (M::Clipboard, 0.05, false, A::Paste), // no selection -> paste
-            (M::Clipboard, 0.3, true, A::Menu),    // hold beats the selection
-        ];
-        for (mode, held, sel, want) in cases {
-            assert_eq!(right_click_action(mode, held, sel), want, "{mode:?} {held} sel={sel}");
-        }
     }
 
     #[test]
@@ -713,18 +626,6 @@ mod tests {
                 "enabled={enabled} viewed={viewed} notified={notified} output={output}"
             );
         }
-    }
-
-    #[test]
-    fn link_modifier_matching() {
-        let none = Modifiers::default();
-        let cmd = mods(false, false, true);
-        assert!(link_modifier_held(none, "none")); // plain hover default
-        assert!(link_modifier_held(none, "")); // unknown -> no modifier needed
-        assert!(!link_modifier_held(none, "cmd")); // cmd required but not held
-        assert!(link_modifier_held(cmd, "cmd"));
-        assert!(link_modifier_held(mods(true, false, false), "ctrl"));
-        assert!(!link_modifier_held(cmd, "alt"));
     }
 
     #[test]

@@ -4111,6 +4111,7 @@ dependencies = [
 name = "stdusk-egui"
 version = "1.9.1"
 dependencies = [
+ "arboard",
  "block2 0.6.2",
  "egui",
  "font-kit",

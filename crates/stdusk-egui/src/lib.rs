@@ -4,8 +4,11 @@
 //! frame's key events into pty bytes, and `ui::draw_tab` paints a tab chip. `fonts` registers
 //! the terminal font families, `widgets` holds the settings-style controls, `keys` and `mouse`
 //! encode input for the pty. `terminal_view::TerminalView` wraps `render_grid` with the input a
-//! pane needs (keys, pastes, `wheel`, pointer reports, `focus`, copy); `macos_paste` is the Cmd+V
-//! image hook. The theme is the process-wide one in `colors`; the host app sets
+//! pane needs (keys, pastes, `wheel`, pointer reports, `focus`, copy, the middle and right click
+//! of `pointer`, the bell); `paste_confirm` is the multiline-paste question; `macos_paste` is the
+//! Cmd+V image hook. `GridStyle::from_config` and `TerminalOptions::from_config` turn a
+//! `stdusk_core::config::TerminalConfig` into what a pane needs, so a host gets stdusk's behavior
+//! from the same `[terminal]` settings. The theme is the process-wide one in `colors`; the host app sets
 //! it once at startup.
 
 pub mod focus;
@@ -13,6 +16,8 @@ pub mod fonts;
 pub mod keys;
 pub mod macos_paste;
 pub mod mouse;
+pub mod paste_confirm;
+pub mod pointer;
 pub mod sync;
 pub mod terminal_view;
 pub mod ui;
