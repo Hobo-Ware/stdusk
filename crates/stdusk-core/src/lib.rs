@@ -29,6 +29,7 @@ pub mod screen;
 pub mod search;
 pub mod session;
 pub mod shell;
+pub mod sync;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
