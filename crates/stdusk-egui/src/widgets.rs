@@ -302,24 +302,49 @@ const ICON_BTN_H: f32 = 30.0;
 /// `icon_toggle` size (shared so the tab bar can right-align the gear by a spacer).
 pub const ICON_TOGGLE_W: f32 = 28.0;
 
+/// Box, glyph and corner sizes of an icon button, in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IconButtonSize {
+    pub width: f32,
+    pub height: f32,
+    pub glyph: f32,
+    pub radius: f32,
+}
+
+impl IconButtonSize {
+    /// The size `icon_button` uses.
+    pub const COMPACT: Self =
+        Self { width: ICON_BTN_W, height: ICON_BTN_H, glyph: 17.0, radius: 6.0 };
+}
+
 /// A fixed-size Phosphor-icon button with hover feedback. Returns the Response (so callers
 /// can anchor a popup or read `.clicked()`).
 pub fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
+    icon_button_sized(ui, icon, tip, IconButtonSize::COMPACT)
+}
+
+/// `icon_button` with its own box and glyph size, for hosts with a taller strip.
+pub fn icon_button_sized(
+    ui: &mut egui::Ui,
+    icon: &str,
+    tip: &str,
+    size: IconButtonSize,
+) -> egui::Response {
     let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ICON_BTN_W, ICON_BTN_H), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(size.width, size.height), egui::Sense::click());
     let hovered = resp.hovered();
     if hovered {
-        ui.painter().rect_filled(rect, 6.0, colors::hover());
+        ui.painter().rect_filled(rect, size.radius, colors::hover());
     }
     let color = if hovered { colors::fg() } else { colors::dim() };
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         icon,
-        egui::FontId::proportional(17.0),
+        egui::FontId::proportional(size.glyph),
         color,
     );
-    focus_ring(ui, &resp, 6.0);
+    focus_ring(ui, &resp, size.radius);
     resp.on_hover_text(tip)
 }
 
@@ -514,5 +539,18 @@ mod tests {
             slider(ui, &mut v, 0.0..=1.0, |x| format!("{x:.2}"));
         });
         assert!(v > 0.5, "ArrowRight must nudge the focused slider up");
+    }
+
+    #[test]
+    fn icon_button_sized_takes_the_box_it_is_given_and_icon_button_keeps_its_own() {
+        let ctx = egui::Context::default();
+        let big = super::IconButtonSize { width: 44.0, height: 44.0, glyph: 24.0, radius: 8.0 };
+        let (mut small_box, mut big_box) = (egui::Vec2::ZERO, egui::Vec2::ZERO);
+        widget_frame(&ctx, vec![], Modifiers::default(), &mut |ui| {
+            small_box = super::icon_button(ui, "x", "tip").rect.size();
+            big_box = super::icon_button_sized(ui, "x", "tip", big).rect.size();
+        });
+        assert_eq!(small_box, egui::vec2(32.0, 30.0));
+        assert_eq!(big_box, egui::vec2(44.0, 44.0));
     }
 }
