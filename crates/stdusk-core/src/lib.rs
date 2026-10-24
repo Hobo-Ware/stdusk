@@ -14,6 +14,7 @@ pub mod agent_restore;
 pub mod agent_track;
 pub mod agents;
 pub mod colors;
+pub mod config;
 pub mod handoff;
 pub mod links;
 pub mod modes;

@@ -13,6 +13,7 @@ use crate::updater::{Status, Updater};
 use crate::{Stdusk, config, sync, tabs, terminal, themes};
 use stdusk_core::colors::{self, PREVIEW_MIN_CONTRAST, Theme};
 use stdusk_core::sync::{Op as SyncOp, should_autosync};
+use stdusk_egui::pointer::right_click_mode;
 
 /// Left nav width (outer, incl. margins).
 const NAV_W: f32 = 184.0;
@@ -1338,8 +1339,7 @@ fn terminal_section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 for (label, value) in
                     [("Menu", "menu"), ("Paste", "paste"), ("Copy or paste", "clipboard")]
                 {
-                    let selected =
-                        ui::right_click_mode(&t.right_click) == ui::right_click_mode(value);
+                    let selected = right_click_mode(&t.right_click) == right_click_mode(value);
                     if stdusk_egui::widgets::chip(ui, label, selected).clicked() {
                         t.right_click = value.into();
                     }

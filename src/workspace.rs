@@ -6,51 +6,14 @@ use eframe::egui;
 
 use crate::tabs::spawn_opts;
 use crate::ui;
-use stdusk_core::paste::PasteRules;
 use stdusk_core::terminal::PtyTerm;
 use stdusk_egui::mouse::GridGeom;
+use stdusk_egui::pointer::MousePasted;
 use stdusk_egui::terminal_view::{Focus, Gate, TerminalOptions, TerminalView, paste_into};
+use stdusk_egui::ui::GridStyle;
 use stdusk_egui::widgets::style_menu;
 
 use crate::{COLS, ROWS, Stdusk, colors, pane};
-
-/// The raw byte a Ctrl+V keypress sends (matches `keys::ctrl_letter(Key::V)`). Forwarding it makes
-/// an app that reads the system clipboard on ^V - Claude Code's image ingestion - pick up a
-/// pasted image without us encoding anything.
-const CTRL_V: u8 = 0x16;
-
-/// A resolved mouse-paste payload. Text pastes normally; `Image` means the clipboard held an
-/// image and no usable text, so we forward `CTRL_V` for app-native image ingestion.
-///
-/// NOTE: Cmd+V can NOT reach the image path. egui-winit 0.35 (`lib.rs` ~1007-1015) folds Cmd+V
-/// into `Event::Paste` reading clipboard TEXT only, pushes no event when that text is empty, and
-/// always swallows the key event - so an image-only clipboard on Cmd+V yields no egui event at
-/// all. Ctrl+V already works (it forwards `CTRL_V` via `key_to_bytes`); these mouse paths add a
-/// pointer route with the same behavior.
-#[derive(Debug, PartialEq)]
-enum ClipboardPaste {
-    Text(String),
-    Image,
-}
-
-/// Pure paste-target decision: prefer text, fall back to an image only when there's no usable
-/// text (a screenshot copy carries none). Split from clipboard IO so it's unit-testable.
-fn resolve_clipboard_paste(text: Option<String>, has_image: bool) -> Option<ClipboardPaste> {
-    match text {
-        Some(t) => Some(ClipboardPaste::Text(t)),
-        None if has_image => Some(ClipboardPaste::Image),
-        None => None,
-    }
-}
-
-/// Read the system clipboard for a mouse paste. Probes the image only when there's no text (the
-/// image decode is wasted work otherwise).
-fn read_clipboard_paste() -> Option<ClipboardPaste> {
-    let mut cb = arboard::Clipboard::new().ok()?;
-    let text = cb.get_text().ok().filter(|t| !t.is_empty());
-    let has_image = text.is_none() && cb.get_image().is_ok();
-    resolve_clipboard_paste(text, has_image)
-}
 
 /// Deferred pane action from the right-click menu, applied after the central panel. Each
 /// carries the target pane's path.
@@ -124,7 +87,6 @@ impl Stdusk {
         kb_pane_dir: Option<pane::Dir>,
         now: f64,
     ) -> CentralOut {
-        let bell_on = self.cfg.terminal.bell != "off";
         let mut copied = false; // set inside the central panel when Cmd+C copies a selection
         let mut bell_rang = false; // any pane rang BEL this frame -> visual flash
         let mut pane_action: Option<PaneAction> = None; // from the pane right-click menu
@@ -157,14 +119,7 @@ impl Stdusk {
                     m.size().x,
                     ui::padded_cell_height(m.size().y, self.cfg.appearance.line_padding),
                 );
-                let cursor = ui::cursor_style(&self.cfg.terminal.cursor);
-                // Links are "active" (underline on hover, open on click) when enabled and the
-                // configured modifier is held - default modifier "none" means plain hover, Tabby-style.
-                let link_active = self.cfg.terminal.clickable_links
-                    && ui::link_modifier_held(
-                        ui.input(|i| i.modifiers),
-                        &self.cfg.terminal.link_modifier,
-                    );
+                let mods = ui.input(|i| i.modifiers);
                 let tcfg = self.cfg.terminal.clone();
                 // All find-bar matches, drawn as a dim overlay on the searched (focused) pane;
                 // the current match keeps its brighter selection highlight on top.
@@ -196,17 +151,8 @@ impl Stdusk {
                 };
                 let multi = layout.len() > 1;
                 let pointer = ui.input(|i| i.pointer.hover_pos());
-                // Right-click mode (Tabby): raw press/release tracking, so a long hold (which
-                // egui would not report as a click) still resolves to the context menu.
-                let rc_mode = ui::right_click_mode(&tcfg.right_click);
-                let (rc_pressed, rc_released) = ui.input(|i| {
-                    (
-                        i.pointer.button_pressed(egui::PointerButton::Secondary),
-                        i.pointer.button_released(egui::PointerButton::Secondary),
-                    )
-                });
                 let mut focus_click: Option<Vec<pane::Side>> = None;
-                let mut mouse_paste: Option<(Vec<pane::Side>, ClipboardPaste)> = None; // middle/right click
+                let mut mouse_paste: Option<(Vec<pane::Side>, MousePasted)> = None; // middle/right click
                 let mut restart_pane: Option<Vec<pane::Side>> = None;
                 let mut clicked_pane: Option<Vec<pane::Side>> = None; // a click ends its restore notice
                 for (path, rect) in &layout {
@@ -214,7 +160,7 @@ impl Stdusk {
                     // Broadcast mode reads every pane as focused (Tabby _allFocusMode drops the
                     // unfocused fade on all panes), so no pane looks like it won't get the keys.
                     let dimmed = multi && !focused && !tab.broadcast;
-                    let blink = tcfg.cursor_blink && !input_captured && focused;
+                    let keys_free = focused && !input_captured;
                     let tab_id = tab.id;
                     let term = tab.root_mut().leaf_at_mut(path).expect("leaf");
                     let cols = (rect.width() / cw).floor().max(1.0) as usize;
@@ -225,35 +171,23 @@ impl Stdusk {
                         grid: GridGeom { rect: *rect, cw, ch, cols, rows },
                         font: &font,
                         bold_font: bold_font.as_ref(),
-                        style: ui::GridStyle {
-                            cursor,
+                        style: GridStyle {
                             dimmed,
-                            link_active,
-                            blink,
-                            ligatures: tcfg.ligatures,
-                            min_contrast: tcfg.minimum_contrast,
-                            app_mouse: false,
+                            ..GridStyle::from_config(&tcfg, mods, keys_free)
                         },
                         // The find bar searches the focused pane only.
                         search_marks: if focused { search_marks } else { &[] },
-                        options: TerminalOptions {
-                            alt_is_meta: tcfg.alt_is_meta,
-                            paste: PasteRules {
-                                newlines_to_spaces: tcfg.replace_newlines_on_paste,
-                                trim: tcfg.trim_whitespace_on_paste,
-                            },
-                            confirm_multiline_paste: tcfg.warn_on_multiline_paste,
-                            ctrl_c_copies: true,
-                            copy_on_select: tcfg.copy_on_select,
-                            app_link_modifier: &tcfg.app_link_modifier,
-                            focus: if focused { Focus::LockKeys } else { Focus::Off },
-                        },
+                        options: TerminalOptions::from_config(
+                            &tcfg,
+                            if focused { Focus::LockKeys } else { Focus::Off },
+                        ),
                         gate: Gate {
-                            keyboard: focused && !input_captured,
+                            keyboard: keys_free,
                             paste: focused && !paste_owned,
                             copy: focused,
                             wheel: true,
                             reports: !input_captured,
+                            pointer: !input_captured,
                         },
                         injected_wheel: &[],
                     }
@@ -280,46 +214,12 @@ impl Stdusk {
                             egui::StrokeKind::Inside,
                         );
                     }
-                    if bell_on && term.take_bell() {
-                        bell_rang = true;
+                    bell_rang |= out.bell_rang;
+                    if let Some(pasted) = out.mouse_pasted {
+                        mouse_paste = Some((path.clone(), pasted));
                     }
-                    // Middle-click pastes the clipboard into this pane (and focuses it).
-                    if tcfg.paste_on_middle_click
-                        && !input_captured
-                        && resp.hovered()
-                        && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle))
-                        && let Some(clip) = read_clipboard_paste()
-                    {
-                        mouse_paste = Some((path.clone(), clip));
-                    }
-                    // Right-click (Tabby baseTerminalTab handleRightMouseDown/Up): "menu" pops
-                    // the context menu; "paste"/"clipboard" act on a quick tap (<250ms) and
-                    // fall back to the menu on a hold. Decision table: ui::right_click_action.
+                    let open_menu = out.menu_requested;
                     let hovered_now = pointer.is_some_and(|p| rect.contains(p));
-                    if rc_pressed && hovered_now {
-                        self.right_press = Some((path.clone(), now));
-                    }
-                    let mut open_menu = false;
-                    if rc_released
-                        && hovered_now
-                        && let Some((_, t0)) = self.right_press.take_if(|(p, _)| *p == *path)
-                    {
-                        match ui::right_click_action(rc_mode, now - t0, has_sel) {
-                            ui::RightClickAction::Menu => open_menu = true,
-                            ui::RightClickAction::Copy => {
-                                if let Some(txt) = term.selection_text() {
-                                    ctx.copy_text(txt);
-                                    term.clear_selection(); // Tabby clears after the copy
-                                    copied = true;
-                                }
-                            }
-                            ui::RightClickAction::Paste => {
-                                if !input_captured && let Some(clip) = read_clipboard_paste() {
-                                    mouse_paste = Some((path.clone(), clip));
-                                }
-                            }
-                        }
-                    }
                     // Focus follows mouse (Tabby splitTab attachTabView: mousemove focuses the
                     // pane; suppressed during spanner drags): pointer movement over an unfocused
                     // pane focuses it. No buttons down - a selection or splitter drag crossing
@@ -390,48 +290,25 @@ impl Stdusk {
                         }
                     }
                 }
-                if rc_released {
-                    self.right_press = None; // release landed off-pane: drop the stale press
-                }
                 if let Some(p) = focus_click {
                     tab.focused = p;
                 }
                 if let Some(t) = clicked_pane.and_then(|p| tab.root_mut().leaf_at_mut(&p)) {
                     t.dismiss_notice();
                 }
-                // Apply the middle/right-click paste (deferred: needs &mut past the render
-                // borrow). Runs through the same normalize/trim pipeline; skips the multiline
-                // modal like Tabby (both are immediate mouse actions - see `paste()` there).
                 // Respawn a dead pane (deferred: needs &mut past the render borrow).
                 if let Some(p) = restart_pane
                     && let Some(t) = tab.root_mut().leaf_at_mut(&p)
                 {
                     crate::tabs::respawn_term(&self.cfg, ctx, t);
                 }
-                if let Some((p, clip)) = mouse_paste {
-                    tab.focused.clone_from(&p);
-                    if let Some(t) = tab.root_mut().leaf_at_mut(&p) {
-                        let label = match clip {
-                            ClipboardPaste::Text(text) => {
-                                let s = stdusk_core::paste::normalize(
-                                    &text,
-                                    tcfg.replace_newlines_on_paste,
-                                );
-                                let s = stdusk_core::paste::trim(&s, tcfg.trim_whitespace_on_paste);
-                                t.paste(&s);
-                                "Pasted"
-                            }
-                            // Image-only clipboard: forward ^V so an app that reads the clipboard
-                            // on Ctrl+V (Claude Code) ingests it. Cmd+V can't reach here (see the
-                            // ClipboardPaste doc comment).
-                            ClipboardPaste::Image => {
-                                t.send(&[CTRL_V]);
-                                "Pasted image"
-                            }
-                        };
-                        t.scroll_to_bottom();
-                        self.toast = Some((label.into(), now + 1.4));
-                    }
+                if let Some((p, pasted)) = mouse_paste {
+                    tab.focused = p;
+                    let label = match pasted {
+                        MousePasted::Text => "Pasted",
+                        MousePasted::Image => "Pasted image",
+                    };
+                    self.toast = Some((label.into(), now + 1.4));
                 }
 
                 // Draggable splitters between panes (hidden while a pane is maximized).
@@ -513,28 +390,5 @@ impl Stdusk {
             None => {}
         }
         CentralOut { copied, bell_rang }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ClipboardPaste, resolve_clipboard_paste};
-
-    #[test]
-    fn text_wins_even_when_an_image_is_also_present() {
-        assert_eq!(
-            resolve_clipboard_paste(Some("hi".into()), true),
-            Some(ClipboardPaste::Text("hi".into())),
-        );
-    }
-
-    #[test]
-    fn image_used_only_when_there_is_no_text() {
-        assert_eq!(resolve_clipboard_paste(None, true), Some(ClipboardPaste::Image));
-    }
-
-    #[test]
-    fn empty_clipboard_pastes_nothing() {
-        assert_eq!(resolve_clipboard_paste(None, false), None);
     }
 }

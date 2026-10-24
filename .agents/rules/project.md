@@ -26,9 +26,9 @@ drop-down, theming, tab management) plus a first-party AI agent Tabby lacks.
 ## Module layout
 
 Modules below that hold no egui code (`terminal`, `osc`, `progress`, `modes`, `screen`, `search`,
-`links`, `paste`, `shell`, `sync`, `pane`, `colors`, `themes`, `paths`, `procwatch`, `handoff`, the `agent*` files, `test_support`) live in
+`links`, `paste`, `shell`, `sync`, `pane`, `colors`, `config`, `themes`, `paths`, `procwatch`, `handoff`, the `agent*` files, `test_support`) live in
 `crates/stdusk-core/src/`. The egui renderers and widgets (`fonts`, `widgets`, `mouse`, `key_to_bytes`,
-`render_grid`, `collect_input`, `draw_tab`, `terminal_view`, `wheel`, `focus`, `macos_paste`, `sync`) live in `crates/stdusk-egui/src/`. Their one-line
+`render_grid`, `collect_input`, `draw_tab`, `terminal_view`, `wheel`, `focus`, `macos_paste`, `sync`, `pointer`, `paste_confirm`) live in `crates/stdusk-egui/src/`. Their one-line
 descriptions stay in the tree below.
 
 ```
@@ -43,8 +43,8 @@ src/
   macos.rs       objc2/AppKit glue: dock policy, unified titlebar, traffic-light centering, window alpha, Cmd+V clipboard probe, notifications
   fonts.rs       font resolution (core-text family lookup, bold face, Nerd Fonts) + egui FontDefinitions build
   tabs.rs        Tab model + spawn, tab-bar panel, tab menu, tab-management methods
-  workspace.rs   central panel: pane tiling/render, input/paste routing, splitters, pane menu
-  finder.rs      Cmd+F scrollback-search bar + multiline paste-confirm modal
+  workspace.rs   central panel: pane tiling/render, hands each pane's `TerminalView` its config, broadcast, splitters, pane menu
+  finder.rs      Cmd+F scrollback-search bar + the queue behind the multiline paste-confirm modal
   ui.rs          pure UI helpers extracted from the render loop (grid render, draw_tab, pos_to_cell)
   widgets.rs     design-system egui primitives (text_field, num_field, slider, chip, toggle_switch, focus_ring, icon buttons)
   settings.rs    settings view and reapply_config (runtime theme/hotkey/font; callers own edit baselines)
@@ -53,14 +53,17 @@ src/
   keys.rs        keyboard input encoding (key_to_bytes, ctrl/alt sequences, hotkey parse/match)
   terminal.rs    PtyTerm: pty spawn, reader thread, alacritty Term, grid snapshot, selection
   mouse.rs       SGR 1006 mouse reporting (wheel/click encoding, drag autoscroll) gated on TermMode
-  terminal_view.rs (stdusk-egui) `TerminalView`: one pane's keys, pastes, wheel, pointer reports, focus lock and copy around `render_grid`; terminal input behavior goes here, never into an app
+  terminal_view.rs (stdusk-egui) `TerminalView`: one pane's keys, pastes, wheel, pointer reports, middle and right click, bell, focus lock and copy around `render_grid`, driven by `TerminalOptions` and `GridStyle` (both `from_config`); how a pane behaves goes here, never into an app (an embedder must get it for free)
   wheel.rs       (stdusk-egui) wheel routing: scrollback, arrows (DECCKM aware, Alt forces them), SGR reports
   focus.rs       (stdusk-egui) the grid as keyboard target: Tab, arrows and Esc reach the pty
   macos_paste.rs (stdusk-egui) the Cmd+V image-paste NSEvent monitor and its request counter
   sync.rs        (stdusk-core, stdusk-egui) settings sync: git plan and runner parameterised by folder and file list; the egui half is the worker thread and result slot; `src/sync.rs` holds stdusk's folder and machine-local files
   paste.rs       (stdusk-core) paste preparation: CR line breaks, control bytes dropped, Tabby trim rules
   pane.rs        binary split tree: layout, focus paths, splitters, neighbor navigation
-  config.rs      TOML config + hotkey string parsing
+  config.rs      TOML config + hotkey string parsing (the `[terminal]` table is `stdusk_core::config::TerminalConfig`)
+  config.rs      (stdusk-core) `TerminalConfig`: the `[terminal]` settings and their defaults; `GridStyle::from_config`, `TerminalOptions::from_config` and `SpawnOpts::from_config` turn it into what a pane needs, so an embedder gets stdusk's behavior from the same settings
+  pointer.rs     (stdusk-egui) middle-click paste and the right-click modes (menu, paste, clipboard), `ClipboardPaste` and its clipboard read
+  paste_confirm.rs (stdusk-egui) the "Paste N lines?" window (`show` returns a `Verdict`); the host keeps the queue
   colors.rs      Theme + explicit-theme alacritty Color -> Color32 + derived chrome colors
   themes.rs      community XRDB color schemes (embedded pack + user files)
   progress.rs    ProgressScanner: Tabby's %-regex scrape (alt-screen guarded)
