@@ -5,9 +5,12 @@
 use eframe::egui;
 
 use crate::tabs::spawn_opts;
-use crate::ui::{self, collect_input, render_grid};
+use crate::ui;
+use stdusk_core::paste::PasteRules;
 use stdusk_core::terminal::PtyTerm;
-use stdusk_egui::mouse::MouseReportingExt as _;
+use stdusk_egui::mouse::GridGeom;
+use stdusk_egui::terminal_view::{Focus, Gate, TerminalOptions, TerminalView, paste_into};
+use stdusk_egui::wheel::WheelLines;
 use stdusk_egui::widgets::style_menu;
 
 use crate::{COLS, ROWS, Stdusk, colors, pane};
@@ -169,86 +172,14 @@ impl Stdusk {
                 let search_marks = self.search.as_ref().map_or(&[][..], |s| s.matches.as_slice());
                 let tab = &mut self.tabs[self.active];
 
-                // Cmd+C copies the focused pane's selection; intelligent Ctrl+C (Tabby) copies
-                // too when a selection exists, else stays SIGINT (handled via collect_input).
-                // Selection read ONCE per frame: the reader thread can invalidate it between a
-                // has-selection check and a copy, which would swallow Ctrl-C without copying.
-                let sel_text = tab.focused_term().selection_text();
-                let has_selection = sel_text.is_some();
-                let ctrl_c = ui.input(|i| {
-                    i.modifiers.ctrl
-                        && (i.key_pressed(egui::Key::C)
-                            || (cfg!(not(target_os = "macos"))
-                                && !i.modifiers.shift
-                                && i.events.iter().any(|e| matches!(e, egui::Event::Copy))))
-                });
-                let want_copy = ui
-                    .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
-                    || (ctrl_c && has_selection && !input_captured);
-                if want_copy && let Some(txt) = sel_text {
-                    ctx.copy_text(txt);
-                    if ctrl_c {
-                        tab.focused_term().clear_selection(); // Tabby clears after Ctrl-C copy
-                    }
-                    copied = true;
-                }
-
-                // Keystrokes -> focused pane (unless a text field/modal owns the keyboard);
-                // broadcast mode (Tabby pane-focus-all) fans them out to EVERY pane instead.
-                if !input_captured {
-                    // DECCKM: arrows/Home/End follow the focused pane's application-cursor-keys mode.
-                    let app_cursor = tab.focused_term().app_cursor();
-                    let input =
-                        collect_input(ui, tcfg.alt_is_meta, ctrl_c && has_selection, app_cursor);
-                    if !input.is_empty() {
-                        // The grid renders later in this frame, so it carries the echo.
-                        tab.send_typed(&input);
-                    }
-                }
-                // Paste events: processed even while the paste-confirm modal is open (they queue
-                // rather than vanish); only a focused TEXT FIELD (find bar / rename / palette)
-                // owns pastes. The find bar counts only while its field has focus - an open,
-                // unfocused bar must not eat pastes aimed at the terminal.
+                // Typing and pastes reach only the focused pane; a text field owns pastes. The find
+                // bar counts only while its field has focus - an open, unfocused bar must not eat
+                // pastes aimed at the terminal.
                 let paste_owned = self.search.as_ref().is_some_and(|s| s.field_focused)
                     || self.renaming.is_some()
                     || self.palette.is_some();
-                if !paste_owned {
-                    let pastes: Vec<String> = ui.input(|i| {
-                        i.events
-                            .iter()
-                            .filter_map(|e| match e {
-                                egui::Event::Paste(s) => Some(s.clone()),
-                                _ => None,
-                            })
-                            .collect()
-                    });
-                    for p in pastes {
-                        // Tabby's paste pipeline: normalize newlines (+optional ->spaces); a
-                        // multiline paste outside the alt screen asks first (modal, untrimmed);
-                        // otherwise apply the trim rules and send.
-                        let s = ui::normalize_paste(&p, tcfg.replace_newlines_on_paste);
-                        let multiline = s.contains('\r');
-                        if multiline
-                            && tcfg.warn_on_multiline_paste
-                            && !tab.focused_term().is_alt_screen()
-                        {
-                            self.pending_pastes.push_back((tab.id, s));
-                            ctx.request_repaint(); // make sure the confirm modal shows this frame
-                            continue;
-                        }
-                        let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);
-                        let targets = if tab.broadcast {
-                            tab.root_mut().leaves_mut()
-                        } else {
-                            vec![tab.focused_term_mut()]
-                        };
-                        for t in targets {
-                            t.paste(&s);
-                            t.clear_selection();
-                            t.scroll_to_bottom();
-                        }
-                    }
-                }
+                let mut typed: Vec<u8> = Vec::new();
+                let mut pasted: Vec<String> = Vec::new();
 
                 // Keyboard pane navigation (Cmd+Alt+arrow): move focus to the neighbor pane.
                 let full_layout = tab.root().layout(area);
@@ -265,8 +196,6 @@ impl Stdusk {
                     full_layout
                 };
                 let multi = layout.len() > 1;
-                let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
-                let alt_wheel = ui.input(|i| i.modifiers.alt);
                 let pointer = ui.input(|i| i.pointer.hover_pos());
                 // Right-click mode (Tabby): raw press/release tracking, so a long hold (which
                 // egui would not report as a click) still resolves to the context menu.
@@ -281,105 +210,68 @@ impl Stdusk {
                 let mut mouse_paste: Option<(Vec<pane::Side>, ClipboardPaste)> = None; // middle/right click
                 let mut restart_pane: Option<Vec<pane::Side>> = None;
                 let mut clicked_pane: Option<Vec<pane::Side>> = None; // a click ends its restore notice
-                let (pointer_events, mods) = ui.input(|i| (i.events.clone(), i.modifiers));
                 for (path, rect) in &layout {
-                    let app_mouse;
-                    {
-                        let term = tab.root_mut().leaf_at_mut(path).expect("leaf");
-                        let cols = (rect.width() / cw).floor().max(1.0) as usize;
-                        let rows = (rect.height() / ch).floor().max(1.0) as usize;
-                        term.resize(cols, rows);
-                        let mr = term.mouse_reporting();
-                        app_mouse =
-                            mr.app_owns_pointer(mods, &tcfg.app_link_modifier, input_captured);
-                        if app_mouse {
-                            let grid =
-                                stdusk_egui::mouse::GridGeom { rect: *rect, cw, ch, cols, rows };
-                            let id = egui::Id::new(("pointer_tracker", path));
-                            let mut tracker = ui.data(|d| d.get_temp(id)).unwrap_or_default();
-                            let bytes = stdusk_egui::mouse::pointer_reports(
-                                &pointer_events,
-                                grid,
-                                mr,
-                                &mut tracker,
-                            );
-                            ui.data_mut(|d| d.insert_temp(id, tracker));
-                            if !bytes.is_empty() {
-                                term.send(&bytes);
-                            }
-                        }
-                        // Wheel scroll goes to the pane under the pointer.
-                        if scroll_y != 0.0
-                            && let Some(p) = pointer.filter(|p| rect.contains(*p))
-                        {
-                            let mut lines = (scroll_y / ch).round() as i32;
-                            if lines == 0 {
-                                lines = scroll_y.signum() as i32;
-                            }
-                            let mr = term.mouse_reporting();
-                            if alt_wheel {
-                                // Alt+wheel sends arrow keys instead of scrolling, one per line
-                                // (Tabby's mousewheel handler - gated on Alt alone). An explicit
-                                // user override, so it wins even over app mouse reporting.
-                                term.send(&stdusk_egui::keys::alt_scroll_bytes(lines));
-                            } else if mr.reports_buttons() && mr.sgr {
-                                // The app asked for real mouse reporting: wheel -> SGR 1006 events
-                                // at the pointer's cell, so its fullscreen TUI scrolls (Claude
-                                // Code, git list pickers) instead of doing nothing.
-                                let col = (((p.x - rect.left()) / cw) as usize)
-                                    .min(cols.saturating_sub(1));
-                                let row = (((p.y - rect.top()) / ch) as usize)
-                                    .min(rows.saturating_sub(1));
-                                // Clamp the report count: unlike local scroll (which alacritty
-                                // caps to available history), the app has no backstop, so an
-                                // accelerated frame of many lines would over-scroll its TUI.
-                                let id = egui::Id::new(("wheel_accumulator", path));
-                                let mut wheel: stdusk_egui::mouse::WheelAccumulator =
-                                    ui.data(|d| d.get_temp(id)).unwrap_or_default();
-                                let raw_lines = wheel.lines(&pointer_events, ch, rows);
-                                ui.data_mut(|d| d.insert_temp(id, wheel));
-                                let reports = stdusk_egui::mouse::wheel_report_lines(raw_lines);
-                                term.send(&stdusk_egui::mouse::wheel_sgr(reports, col, row));
-                            } else if mr.alternate_scroll && term.is_alt_screen() {
-                                // Alt-screen app without real mouse reporting (less/pager): wheel
-                                // emits arrow keys (xterm alternateScroll), since the alt grid has
-                                // no scrollback to move.
-                                term.send(&stdusk_egui::keys::alt_scroll_bytes(lines));
-                            } else {
-                                term.scroll(lines);
-                            }
-                        }
-                    }
-                    let term = tab.root().leaf_at(path).expect("leaf");
-                    let snap = term.grid_snapshot();
+                    let focused = path == &tab.focused;
                     // Broadcast mode reads every pane as focused (Tabby _allFocusMode drops the
                     // unfocused fade on all panes), so no pane looks like it won't get the keys.
-                    let dimmed = multi && path != &tab.focused && !tab.broadcast;
-                    let has_sel = term.selection_text().is_some();
-                    let cwd = term.cwd();
-                    let blink = tcfg.cursor_blink && !input_captured && path == &tab.focused;
-                    let resp = render_grid(
-                        ui,
-                        path,
-                        *rect,
-                        term,
-                        &snap,
-                        cw,
-                        ch,
-                        &font,
-                        bold_font.as_ref(),
-                        ui::GridStyle {
+                    let dimmed = multi && !focused && !tab.broadcast;
+                    let blink = tcfg.cursor_blink && !input_captured && focused;
+                    let tab_id = tab.id;
+                    let term = tab.root_mut().leaf_at_mut(path).expect("leaf");
+                    let cols = (rect.width() / cw).floor().max(1.0) as usize;
+                    let rows = (rect.height() / ch).floor().max(1.0) as usize;
+                    term.resize(cols, rows);
+                    let out = TerminalView {
+                        id_src: path,
+                        grid: GridGeom { rect: *rect, cw, ch, cols, rows },
+                        font: &font,
+                        bold_font: bold_font.as_ref(),
+                        style: ui::GridStyle {
                             cursor,
                             dimmed,
                             link_active,
                             blink,
                             ligatures: tcfg.ligatures,
                             min_contrast: tcfg.minimum_contrast,
-                            app_mouse,
+                            app_mouse: false,
                         },
                         // The find bar searches the focused pane only.
-                        if path == &tab.focused { search_marks } else { &[] },
-                    );
+                        search_marks: if focused { search_marks } else { &[] },
+                        options: TerminalOptions {
+                            alt_is_meta: tcfg.alt_is_meta,
+                            paste: PasteRules {
+                                newlines_to_spaces: tcfg.replace_newlines_on_paste,
+                                trim: tcfg.trim_whitespace_on_paste,
+                            },
+                            confirm_multiline_paste: tcfg.warn_on_multiline_paste,
+                            ctrl_c_copies: true,
+                            copy_on_select: tcfg.copy_on_select,
+                            wheel_lines: WheelLines::Smoothed,
+                            app_link_modifier: &tcfg.app_link_modifier,
+                            focus: if focused { Focus::LockKeys } else { Focus::Off },
+                        },
+                        gate: Gate {
+                            keyboard: focused && !input_captured,
+                            paste: focused && !paste_owned,
+                            copy: focused,
+                            wheel: true,
+                            reports: !input_captured,
+                        },
+                        injected_wheel: &[],
+                    }
+                    .show(ui, term);
+                    copied |= out.copied.is_some();
+                    for text in out.confirm_paste {
+                        self.pending_pastes.push_back((tab_id, text));
+                    }
+                    if focused {
+                        typed = out.typed;
+                        pasted = out.pasted;
+                    }
+                    let resp = out.response;
+                    let term = tab.root().leaf_at(path).expect("leaf");
+                    let has_sel = term.selection_text().is_some();
+                    let cwd = term.cwd();
                     // Broadcast mode: an accent border on EVERY pane makes the keys-go-everywhere
                     // state unmistakable (Tabby paints an app-wide red border + a banner).
                     if tab.broadcast {
@@ -390,38 +282,8 @@ impl Stdusk {
                             egui::StrokeKind::Inside,
                         );
                     }
-                    // A selection drag held past the pane's top/bottom edge auto-scrolls the
-                    // viewport, so the selection extends beyond what was visible when the drag
-                    // began (standard terminal behavior). render_grid re-extends the selection to
-                    // the clamped edge cell every frame; nudging the offset here feeds it fresh
-                    // lines, and the repaint keeps frames coming while held. Skipped when the app
-                    // owns the mouse (its own drag reporting handles scrolling).
-                    if resp.dragged()
-                        && !term.mouse_reporting().reports_buttons()
-                        && let Some(p) = resp.interact_pointer_pos()
-                    {
-                        let lines = stdusk_egui::mouse::drag_autoscroll_lines(
-                            p.y,
-                            rect.top(),
-                            rect.bottom(),
-                            ch,
-                        );
-                        if lines != 0 {
-                            term.scroll(lines);
-                            ctx.request_repaint();
-                        }
-                    }
                     if bell_on && term.take_bell() {
                         bell_rang = true;
-                    }
-                    // Copy-on-select: whenever a drag/double/triple selection just finished.
-                    if tcfg.copy_on_select
-                        && (resp.drag_stopped() || resp.double_clicked() || resp.triple_clicked())
-                        && let Some(txt) = term.selection_text()
-                        && !txt.trim().is_empty()
-                    {
-                        ctx.copy_text(txt);
-                        copied = true; // "Copied" toast
                     }
                     // Middle-click pastes the clipboard into this pane (and focuses it).
                     if tcfg.paste_on_middle_click
@@ -513,6 +375,23 @@ impl Stdusk {
                         pane_menu(ui, path, has_sel, cwd.as_deref(), &mut pane_action);
                     });
                 }
+                if tab.broadcast && (!typed.is_empty() || !pasted.is_empty()) {
+                    let focused = tab.focused.clone();
+                    for (path, _) in &layout {
+                        if *path == focused {
+                            continue;
+                        }
+                        let Some(term) = tab.root_mut().leaf_at_mut(path) else { continue };
+                        if !typed.is_empty() {
+                            term.send(&typed);
+                            term.clear_selection();
+                            term.scroll_to_bottom();
+                        }
+                        for text in &pasted {
+                            paste_into(term, text);
+                        }
+                    }
+                }
                 if rc_released {
                     self.right_press = None; // release landed off-pane: drop the stale press
                 }
@@ -536,8 +415,11 @@ impl Stdusk {
                     if let Some(t) = tab.root_mut().leaf_at_mut(&p) {
                         let label = match clip {
                             ClipboardPaste::Text(text) => {
-                                let s = ui::normalize_paste(&text, tcfg.replace_newlines_on_paste);
-                                let s = ui::trim_paste(&s, tcfg.trim_whitespace_on_paste);
+                                let s = stdusk_core::paste::normalize(
+                                    &text,
+                                    tcfg.replace_newlines_on_paste,
+                                );
+                                let s = stdusk_core::paste::trim(&s, tcfg.trim_whitespace_on_paste);
                                 t.paste(&s);
                                 "Pasted"
                             }

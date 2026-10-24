@@ -1,13 +1,8 @@
 //! macOS platform primitives: the objc2/AppKit window + Dock + titlebar tweaks, the Cmd+V
-//! image-paste NSEvent hook, and desktop notifications. Every entry point carries a
+//! clipboard probe, and desktop notifications. Every entry point carries a
 //! `#[cfg(not(target_os = "macos"))]` no-op stub so the rest of the crate calls them
 //! unconditionally. Split out of `main.rs`; the quake show/hide policy (`apply_visibility`)
 //! stays there and calls into these.
-#[cfg(target_os = "macos")]
-use std::sync::Arc;
-#[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use eframe::egui;
 
 /// Show/hide the Dock icon (+ menu bar) at runtime by flipping the macOS activation policy.
@@ -246,60 +241,20 @@ pub(crate) fn app_is_active() -> bool {
     false
 }
 
-/// Whether a Cmd+V keystroke over an image-only clipboard should be swallowed (and an image paste
-/// injected). Pure decision so the seam is unit-testable; the impure clipboard probe lives in
-/// `clipboard_image_only`.
-#[cfg(target_os = "macos")]
-pub(crate) fn decide_cmd_v_image_paste(command_down: bool, is_v: bool, image_only: bool) -> bool {
-    command_down && is_v && image_only
-}
-
 /// True when the system clipboard holds an image and NO usable text. Text always wins (mirrors
 /// the mouse-paste decision in `workspace.rs`), so a Cmd+V with text on the clipboard is left to
 /// egui's normal text-paste path.
 #[cfg(target_os = "macos")]
-fn clipboard_image_only() -> bool {
+pub(crate) fn clipboard_image_only() -> bool {
     let Ok(mut cb) = arboard::Clipboard::new() else {
         return false;
     };
     let has_text = cb.get_text().is_ok_and(|t| !t.is_empty());
     !has_text && cb.get_image().is_ok()
 }
-
-/// Install a macOS NSEvent LOCAL key-down monitor for the Cmd+V image-paste hook. It runs on the
-/// main thread inside `[NSApplication sendEvent:]`, BEFORE egui-winit sees the key: for Cmd+V over
-/// an image-only clipboard it bumps `paste_req` + wakes the UI and returns nil (swallowing the
-/// event so egui doesn't also handle it); every other key is returned unchanged.
-#[cfg(target_os = "macos")]
-pub(crate) fn install_cmd_v_image_monitor(ctx: egui::Context, paste_req: Arc<AtomicUsize>) {
-    use std::ptr::NonNull;
-
-    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags};
-
-    let block = block2::RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
-        // SAFETY: AppKit hands us a live NSEvent for the duration of this callback.
-        #[allow(unsafe_code)]
-        let ev = unsafe { event.as_ref() };
-        let command_down = ev.modifierFlags().contains(NSEventModifierFlags::Command);
-        let is_v = ev.charactersIgnoringModifiers().is_some_and(|s| s.to_string() == "v");
-        // Only probe the clipboard for the Cmd+V combo (cheap on every other key).
-        let image_only = command_down && is_v && clipboard_image_only();
-        if decide_cmd_v_image_paste(command_down, is_v, image_only) {
-            paste_req.fetch_add(1, Ordering::SeqCst);
-            ctx.request_repaint();
-            std::ptr::null_mut() // swallow: egui-winit must not also process this Cmd+V
-        } else {
-            event.as_ptr() // pass through unchanged (normal text Cmd+V still works)
-        }
-    });
-    // SAFETY: the handler returns a valid NSEvent pointer or null, per the monitor contract.
-    #[allow(unsafe_code)]
-    let monitor = unsafe {
-        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block)
-    };
-    // The monitor + block must live for the app's lifetime; leak both (removed only at exit).
-    std::mem::forget(monitor);
-    std::mem::forget(block);
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn clipboard_image_only() -> bool {
+    false
 }
 
 /// Post a desktop notification (macOS `osascript`, Linux `notify-send`); `body` is the visible
@@ -464,19 +419,6 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    #[test]
-    fn cmd_v_image_paste_only_swallows_command_v_over_an_image() {
-        use super::decide_cmd_v_image_paste;
-        // The intended case: Cmd held, "v", image-only clipboard -> swallow + inject.
-        assert!(decide_cmd_v_image_paste(true, true, true));
-        // No image on the clipboard: let egui's normal (text) Cmd+V through.
-        assert!(!decide_cmd_v_image_paste(true, true, false));
-        // Not the V key, or Command not held: never our concern.
-        assert!(!decide_cmd_v_image_paste(true, false, true));
-        assert!(!decide_cmd_v_image_paste(false, true, true));
-        assert!(!decide_cmd_v_image_paste(false, false, false));
-    }
-
     #[test]
     fn login_item_status_maps_every_service_management_value() {
         use super::{LoginItem, login_item_from_raw};

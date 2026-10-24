@@ -192,18 +192,11 @@ pub(crate) fn ctrl_letter(key: egui::Key) -> Option<u8> {
     Some(n)
 }
 
-/// Bytes an Alt+wheel tick sends instead of scrolling (Tabby `baseTerminalTab` mousewheel
-/// handler): one SS3 up/down arrow per line - positive `lines` (wheel up) = `ESC O A`.
-pub fn alt_scroll_bytes(lines: i32) -> Vec<u8> {
-    let seq: &[u8] = if lines > 0 { b"\x1bOA" } else { b"\x1bOB" };
-    seq.repeat(lines.unsigned_abs() as usize)
-}
-
 #[cfg(test)]
 mod tests {
     use egui::{Key, Modifiers};
 
-    use super::{alt_scroll_bytes, ctrl_letter, key_to_bytes, terminal_modifiers_for};
+    use super::{ctrl_letter, key_to_bytes, terminal_modifiers_for};
 
     fn mods(ctrl: bool, alt: bool, command: bool) -> Modifiers {
         Modifiers { alt, ctrl, shift: false, mac_cmd: command, command }
@@ -383,15 +376,6 @@ mod tests {
         let m = egui::Modifiers { shift: true, command: true, mac_cmd: true, ..Default::default() };
         assert_eq!(key_to_bytes(Key::ArrowLeft, m, false, false), None);
         assert_eq!(key_to_bytes(Key::ArrowRight, m, false, false), None);
-    }
-
-    #[test]
-    fn alt_scroll_sends_ss3_arrows_per_line() {
-        assert_eq!(alt_scroll_bytes(1), b"\x1bOA".to_vec()); // wheel up = up arrow
-        assert_eq!(alt_scroll_bytes(-1), b"\x1bOB".to_vec());
-        assert_eq!(alt_scroll_bytes(3), b"\x1bOA\x1bOA\x1bOA".to_vec());
-        assert_eq!(alt_scroll_bytes(-2), b"\x1bOB\x1bOB".to_vec());
-        assert_eq!(alt_scroll_bytes(0), [] as [u8; 0]);
     }
 
     #[test]

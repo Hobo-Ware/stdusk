@@ -59,23 +59,6 @@ impl Tab {
         let path = self.focused.clone();
         self.root_mut().leaf_at_mut(&path).expect("focused leaf")
     }
-    /// Typed input -> the focused pane (every pane in broadcast mode). Returns once the focused
-    /// pane's echo is on its grid, bounded by `ECHO_WAIT`, so the frame that sent the key paints it
-    /// instead of presenting an unchanged frame that the echo frame must queue behind.
-    pub(crate) fn send_typed(&mut self, input: &[u8]) {
-        let since = self.focused_term().output_gen();
-        let targets = if self.broadcast {
-            self.root_mut().leaves_mut()
-        } else {
-            vec![self.focused_term_mut()]
-        };
-        for t in targets {
-            t.send(input);
-            t.clear_selection();
-            t.scroll_to_bottom();
-        }
-        let _ = self.focused_term().wait_for_output_after(since, terminal::ECHO_WAIT);
-    }
     pub(crate) fn follow_cwd_repo(&mut self) -> bool {
         let cwd = self.focused_term().cwd();
         let Some(group) = repo::regroup(cwd.as_deref(), self.repo_probed_cwd.as_deref()) else {
@@ -1551,7 +1534,7 @@ mod tests {
         let mut typed = String::from("READY");
         let mut echoed_at_once = false;
         for key in *b"QWE" {
-            tab.send_typed(&[key]);
+            stdusk_egui::terminal_view::send_typed(tab.focused_term_mut(), &[key]);
             typed.push(char::from(key));
             if text(&tab).contains(&typed) {
                 echoed_at_once = true;

@@ -665,6 +665,23 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
   icon (GTK thread), login item (XDG autostart), self-update, Wayland top-edge placement (needs
   layer-shell), packaging (AppImage/.deb).
 
+## TerminalView - one pane's input layer in stdusk-egui (branch terminal-view)
+- `stdusk_egui::terminal_view::TerminalView` owns keys, pastes, wheel, pointer reports, focus lock and
+  copy around `render_grid`; `workspace.rs::central_panel` hands it a `Gate` (who may type, paste,
+  copy, wheel, report) and gets facts back (`typed`, `pasted`, `confirm_paste`, `copied`). Broadcast,
+  the multiline paste modal, toasts, right/middle click and the pane menu stay in the app.
+- New pieces: `stdusk_core::paste` (normalize/trim/prepare), `wheel` (route, DECCKM arrows, Alt forces
+  arrows), `focus` (Tab/arrows/Esc to the pty), `macos_paste::ImagePasteHook` (the Cmd+V monitor, moved
+  from `macos.rs`; the app passes its clipboard predicate). Tidewatch pins this crate and uses the same view.
+- Intentional changes from 1.10.1: control bytes are stripped from pastes (a paste cannot carry
+  `ESC [201~` out of bracketed mode); Alt+wheel and alt-screen wheel arrows are CSI unless DECCKM is on
+  (was always SS3); the Cmd+V monitor swallows Command alone (Cmd+Shift+V no longer) and ignores key
+  repeats; the grid's Tab/arrow/Esc focus lock is also set in stdusk; an empty prepared paste is not sent.
+- `WheelLines::Smoothed` keeps stdusk's scrollback lines (egui's per-frame rounding, at least one line
+  per frame); Tidewatch uses `Raw` (summed wheel events). Unifying is a one-line decision, not made here.
+- Proof: 677 tests green (98 in stdusk-egui, 29 of them headless `TerminalView` frames with a real pty);
+  `--screenshot` main and broadcast shots identical to 1.10.1 (PSNR 120).
+
 ## Linux font faces (branch fix/linux-font-faces, 2026-10-16; stdusk-egui 48 -> 55 tests)
 - **Bug**: on Linux a font family picked in Settings rendered in its Bold Italic face and never found
   its bold face. `resolve_face` scored `full_name()`, which carries the style on macOS ("Menlo Bold")
