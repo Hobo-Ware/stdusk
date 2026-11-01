@@ -130,6 +130,17 @@ impl SettingsState {
         }
     }
 
+    fn record_save(
+        &mut self,
+        saved: &config::Config,
+        written: Result<(), String>,
+    ) -> Result<(), String> {
+        if written.is_ok() {
+            self.baseline = Some(saved.clone());
+        }
+        written
+    }
+
     /// Switch section; entering the scheme browser jumps its list to the active scheme. The
     /// profile edit buffers reload too (the config may have been replaced underneath).
     pub(crate) fn open_section(&mut self, section: Section) {
@@ -2270,21 +2281,22 @@ impl Stdusk {
     /// hotkey if it changed. Shared by the footer Save and the unsaved-changes modal.
     /// With `[sync] auto` on, every successful Save also pushes (Save is the only disk
     /// write, so this is THE autosync push hook); an in-flight sync op absorbs rapid saves.
-    fn save_settings(&mut self, ctx: &egui::Context) {
-        if let Some(p) = config::ensure_and_path()
-            && std::fs::write(p, config::config_to_toml(&self.cfg)).is_ok()
-        {
-            self.settings.baseline = Some(self.cfg.clone());
-            self.reregister_hotkey();
-            self.reapply_font(ctx);
-            let now = ctx.input(|i| i.time);
-            self.toast = Some(("Saved".into(), now + 1.4));
-            let repo = self.cfg.sync.repo.trim();
-            if should_autosync(self.cfg.sync.auto, !repo.is_empty(), self.sync_busy) {
-                self.sync_busy = true;
-                sync::spawn(SyncOp::Push, repo.to_owned(), &self.sync_slot, ctx.clone());
-            }
+    fn save_settings(&mut self, ctx: &egui::Context) -> bool {
+        let written = config::write_config(config::ensure_and_path().as_deref(), &self.cfg);
+        let now = ctx.input(|i| i.time);
+        if let Err(e) = self.settings.record_save(&self.cfg, written) {
+            self.toast = Some((format!("Couldn't save settings: {e}"), now + 4.0));
+            return false;
         }
+        self.reregister_hotkey();
+        self.reapply_font(ctx);
+        self.toast = Some(("Saved".into(), now + 1.4));
+        let repo = self.cfg.sync.repo.trim();
+        if should_autosync(self.cfg.sync.auto, !repo.is_empty(), self.sync_busy) {
+            self.sync_busy = true;
+            sync::spawn(SyncOp::Push, repo.to_owned(), &self.sync_slot, ctx.clone());
+        }
+        true
     }
 
     /// Reconcile runtime settings after replacing the config; callers own the edit baseline.
@@ -2631,10 +2643,11 @@ impl Stdusk {
             keep = true;
         }
         if save {
-            self.save_settings(ctx);
             self.settings.confirm_close = false;
-            self.settings_open = false;
-            self.settings_tab = false;
+            if self.save_settings(ctx) {
+                self.settings_open = false;
+                self.settings_tab = false;
+            }
         } else if discard {
             if let Some(b) = self.settings.baseline.take() {
                 self.cfg = b;
@@ -2653,6 +2666,21 @@ impl Stdusk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_save_keeps_the_edits_unsaved() {
+        let mut st = SettingsState::new();
+        st.baseline = Some(config::Config::default());
+        let mut edited = config::Config::default();
+        edited.appearance.theme = "dracula".into();
+
+        let failed = st.record_save(&edited, Err("read-only".into()));
+        assert_eq!(failed, Err("read-only".into()));
+        assert!(config::config_dirty(st.baseline.as_ref().unwrap(), &edited));
+
+        assert_eq!(st.record_save(&edited, Ok(())), Ok(()));
+        assert!(!config::config_dirty(st.baseline.as_ref().unwrap(), &edited));
+    }
 
     #[test]
     fn first_login_registration_is_clickable_but_unknown_status_is_disabled() {

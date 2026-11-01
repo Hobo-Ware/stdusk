@@ -328,6 +328,13 @@ pub(crate) fn config_to_toml(cfg: &Config) -> String {
     toml::to_string(cfg).unwrap_or_default()
 }
 
+/// Write `cfg` as the config file at `path` (`None` = no config folder could be found). The
+/// error is a sentence for the user, naming why the save failed.
+pub(crate) fn write_config(path: Option<&std::path::Path>, cfg: &Config) -> Result<(), String> {
+    let path = path.ok_or("no config folder (is HOME set?)")?;
+    std::fs::write(path, config_to_toml(cfg)).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Whether two configs differ (settings unsaved-changes guard). Compared via their TOML
 /// serialization so it can't drift from what Save would write.
 pub(crate) fn config_dirty(a: &Config, b: &Config) -> bool {
@@ -682,6 +689,28 @@ name = "ops"
         assert_eq!(p.cwd.as_deref(), Some("~/Git"));
         assert_eq!(p.env["AWS_PROFILE"], "work");
         assert_eq!(p.color.as_deref(), Some("#61afef"));
+    }
+
+    #[test]
+    fn write_config_saves_the_file_and_reports_why_it_could_not() {
+        let dir = std::env::temp_dir().join(format!("stdusk-write-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::default();
+        cfg.appearance.theme = "dracula".into();
+
+        let file = dir.join("config.toml");
+        assert_eq!(write_config(Some(&file), &cfg), Ok(()));
+        assert_eq!(
+            Config::parse(&std::fs::read_to_string(&file).unwrap()).appearance.theme,
+            "dracula"
+        );
+
+        // A folder where the file should be makes the write fail, as a read-only disk would.
+        let err = write_config(Some(&dir), &cfg).unwrap_err();
+        assert!(err.starts_with(&dir.display().to_string()), "{err}");
+        assert!(write_config(None, &cfg).unwrap_err().contains("no config folder"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
