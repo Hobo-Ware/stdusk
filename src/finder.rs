@@ -4,7 +4,7 @@
 use eframe::egui;
 
 use crate::ui::icons;
-use crate::{Stdusk, colors, search};
+use crate::{Stdusk, colors, pane, search};
 use stdusk_egui::paste_confirm::{self, Verdict};
 use stdusk_egui::widgets::{icon_button, icon_toggle};
 
@@ -20,6 +20,33 @@ pub(crate) struct Search {
     /// keyboard; once the user clicks back into the terminal the bar stays open but typing
     /// flows to the shell again (an open bar must never silently swallow terminal input).
     pub(crate) field_focused: bool,
+    searched: Option<Searched>,
+    searched_at: f64,
+}
+
+/// Where the matches were found. Once the pane or its output moves on, they are stale.
+#[derive(PartialEq, Eq)]
+struct Searched {
+    tab: u64,
+    pane: Vec<pane::Side>,
+    output: u64,
+}
+
+/// A stream of output re-runs the search at most this often, not on every frame.
+const REFRESH_SECS: f64 = 0.2;
+
+/// How long a stale search waits before it re-runs; `None` = re-run it now.
+fn refresh_wait(now: f64, searched_at: f64) -> Option<f64> {
+    let wait = searched_at + REFRESH_SECS - now;
+    (wait > 0.0).then_some(wait)
+}
+
+/// The current match after a re-run: the same match if it is still there (a TUI redrawing in
+/// place), else the same index, clamped.
+fn follow_current(old: &[search::Match], current: usize, new: &[search::Match]) -> usize {
+    old.get(current)
+        .and_then(|m| new.iter().position(|n| n == m))
+        .unwrap_or_else(|| current.min(new.len().saturating_sub(1)))
 }
 
 impl Search {
@@ -31,6 +58,8 @@ impl Search {
             focus: true,
             opts: search::SearchOpts::default(),
             field_focused: true, // owns the keyboard from the frame it opens
+            searched: None,
+            searched_at: 0.0,
         }
     }
 }
@@ -183,11 +212,28 @@ impl Stdusk {
             close = true;
         }
 
-        let term = self.tabs[self.active].focused_term();
-        if recompute {
+        let tab = &self.tabs[self.active];
+        let term = tab.focused_term();
+        let now = ui.input(|i| i.time);
+        let source = Searched { tab: tab.id, pane: tab.focused.clone(), output: term.output_gen() };
+        let stale = !st.query.is_empty() && st.searched.as_ref() != Some(&source);
+        let refresh = !recompute
+            && stale
+            && match refresh_wait(now, st.searched_at) {
+                None => true,
+                Some(wait) => {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait));
+                    false
+                }
+            };
+        if recompute || refresh {
+            let old = std::mem::take(&mut st.matches);
             st.matches = search::find_matches(&term.buffer_lines(), &st.query, st.opts);
-            st.current = 0;
-        } else if step != 0 && !st.matches.is_empty() {
+            st.current = if recompute { 0 } else { follow_current(&old, st.current, &st.matches) };
+            st.searched = Some(source);
+            st.searched_at = now;
+        }
+        if step != 0 && !recompute && !st.matches.is_empty() {
             let len = st.matches.len() as i32;
             st.current = (st.current as i32 + step).rem_euclid(len) as usize;
         }
@@ -208,5 +254,36 @@ impl Stdusk {
         } else {
             self.search = Some(st);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stale_search_reruns_at_most_every_refresh_interval() {
+        assert_eq!(refresh_wait(10.0, 0.0), None);
+        assert_eq!(refresh_wait(10.0 + REFRESH_SECS, 10.0), None);
+        let wait = refresh_wait(10.05, 10.0).expect("too soon after the last run");
+        assert!((wait - (REFRESH_SECS - 0.05)).abs() < 1e-9, "{wait}");
+    }
+
+    #[test]
+    fn the_current_match_follows_its_text_across_a_rerun() {
+        let find = |lines: &[(i32, &str)]| {
+            let lines: Vec<(i32, String)> = lines.iter().map(|(l, t)| (*l, (*t).into())).collect();
+            search::find_matches(&lines, "cpu", search::SearchOpts::default())
+        };
+        let old = find(&[(0, "cpu cpu"), (1, "mem"), (2, "cpu")]);
+
+        // The second match is still in place while the others moved: it stays current.
+        let moved = find(&[(0, "mem cpu"), (1, "cpu"), (2, "")]);
+        assert_eq!(moved[follow_current(&old, 1, &moved)], old[1]);
+
+        // The current match is gone: keep the index, clamped to what is left.
+        let fewer = find(&[(5, "cpu")]);
+        assert_eq!(follow_current(&old, 2, &fewer), 0);
+        assert_eq!(follow_current(&old, 2, &[]), 0);
     }
 }
