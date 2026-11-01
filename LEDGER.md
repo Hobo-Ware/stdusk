@@ -702,6 +702,16 @@ sizing discard blanks the pass-2 screenshot capture - fixed-width label columns 
 - NOT verified: a real Cmd+click opening a browser, a real middle or right click paste (needs the system
   clipboard), and the bell flash by eye.
 
+## Issue fixes #12 and #10 (branch agent/fix-review-sensei-merge, 2026-11-01)
+- #12: `config::write_config` returns why a save failed; `save_settings` returns whether it saved and
+  toasts the error. The unsaved-changes Save closes Settings only after a successful write.
+- #10: the find bar keeps `Searched { tab, pane, output_gen }` and re-runs the search when it moves,
+  at most every 0.2s (`REFRESH_SECS`). `follow_current` keeps the same match current when it survives.
+- Proof: unit tests for both (write to a folder fails, baseline stays dirty, refresh timing, current
+  match follows); fmt, clippy -D warnings, workspace tests green except the 9 `sync::tests` that push
+  to a temp repo's `main`, which this Tidewatch tab blocks (CI runs them).
+- NOT verified by hand: htop with the find bar open, or a real read-only config.
+
 ## Sized tab and icon button (branch feat/bigger-strip-icons)
 - `widgets::icon_button_sized` + `IconButtonSize` and `ui::draw_tab_sized` + `TabMetrics` let a host with a
   taller strip pick the box, glyph and tab sizes (Tidewatch: 44 px boxes, 44 px tabs, 14 px titles).
