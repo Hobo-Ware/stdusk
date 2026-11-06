@@ -459,6 +459,7 @@ pub(crate) enum TabAction {
     CloseLeft(usize),
     OpenPalette, // from the Tabs menu's discoverability row
     SwitchRepo(repo::Group),
+    TitlebarDoubleClick, // empty strip space in window mode stands in for the OS title bar
 }
 
 /// While dragging the tab at `from`, the neighbor to swap with once the pointer's x
@@ -1168,6 +1169,21 @@ impl Stdusk {
                     }),
             )
             .show(ui, |ui| {
+                // Registered before the row so every tab/icon sits above it in egui's hit test:
+                // only the strip's empty space reaches it. Click-only, so it never swallows drags.
+                if window_mode {
+                    let strip = ui.max_rect()
+                        + egui::Margin {
+                            left: 8,
+                            right: 8,
+                            top: top_margin,
+                            bottom: bottom_margin,
+                        };
+                    let bg = ui.interact(strip, ui.id().with("titlebar_bg"), egui::Sense::click());
+                    if bg.double_clicked() {
+                        action = Some(TabAction::TitlebarDoubleClick);
+                    }
+                }
                 // ONE left-to-right, center-aligned row for every control (tabs + icons). Nesting
                 // opposing layouts is what kept misaligning the gear, so don't: the gear is pushed
                 // to the right edge with a computed spacer instead. Fixed row height keeps every
@@ -1420,6 +1436,7 @@ impl Stdusk {
     #[allow(clippy::needless_pass_by_value)] // consumes the frame's deferred action by design
     pub(crate) fn apply_tab_action(&mut self, action: Option<TabAction>, ctx: &egui::Context) {
         match action {
+            Some(TabAction::TitlebarDoubleClick) => crate::macos::titlebar_double_click(),
             Some(TabAction::New) => self.new_tab(ctx),
             Some(TabAction::NewFromPlusButton) => {
                 let pos = new_tab_position(&self.cfg.terminal.plus_button_position);

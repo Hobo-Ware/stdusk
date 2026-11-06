@@ -2806,6 +2806,15 @@ these crates) over the existing live handoff, so the shells keep running there.
   Tidewatch uses it; stdusk still uses Push and Pull and its plans are unchanged.
 - Tests run real `git` against a bare repo in a temp dir, with a hermetic git environment.
 
+## Title-bar double-click zooms (branch fix/titlebar-double-click-zoom, 2026-11-06)
+- In window mode the unified titlebar's tab strip swallowed mouse events, so double-clicking its empty
+  space did nothing. A click-only `titlebar_bg` interact, registered before the tab row, catches it and
+  `macos::titlebar_double_click` does what `AppleActionOnDoubleClick` says (zoom, minimize, or nothing).
+- Tabs keep double-click-to-rename; the background sits under them in egui's hit test.
+- Proof: table test for the Dock setting mapping, headless tests for empty-strip vs tab double-click;
+  fmt, clippy -D warnings, workspace tests green.
+- NOT verified by hand: a real double-click on a live window.
+
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
   Keep the unsaved-changes dialog open and report the error when writing config fails.
