@@ -2813,7 +2813,7 @@ these crates) over the existing live handoff, so the shells keep running there.
 - Tabs keep double-click-to-rename; the background sits under them in egui's hit test.
 - Proof: table test for the Dock setting mapping, headless tests for empty-strip vs tab double-click;
   fmt, clippy -D warnings, workspace tests green.
-- NOT verified by hand: a real double-click on a live window.
+- Verified by hand (window mode, `--state-dir`): an empty-strip double-click zooms the window.
 
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
