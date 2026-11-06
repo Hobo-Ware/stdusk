@@ -79,6 +79,44 @@ pub(crate) fn set_unified_titlebar(enabled: bool) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn set_unified_titlebar(_enabled: bool) {}
 
+/// What a title-bar double-click does, per System Settings > Desktop & Dock.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TitlebarDoubleClick {
+    Zoom,
+    Minimize,
+    Nothing,
+}
+
+/// Map `AppleActionOnDoubleClick` (absent = the OS default, zoom) to the action.
+pub(crate) fn titlebar_double_click_action(pref: Option<&str>) -> TitlebarDoubleClick {
+    match pref {
+        Some(p) if p.eq_ignore_ascii_case("minimize") => TitlebarDoubleClick::Minimize,
+        Some(p) if p.eq_ignore_ascii_case("none") => TitlebarDoubleClick::Nothing,
+        _ => TitlebarDoubleClick::Zoom,
+    }
+}
+
+/// Do what AppKit would on a title-bar double-click. The unified titlebar's tab strip swallows
+/// the mouse events, so AppKit never sees the double-click itself.
+#[cfg(target_os = "macos")]
+pub(crate) fn titlebar_double_click() {
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    let Some(w) = app.keyWindow().or_else(|| app.mainWindow()) else { return };
+    let pref = NSUserDefaults::standardUserDefaults()
+        .stringForKey(&NSString::from_str("AppleActionOnDoubleClick"))
+        .map(|s| s.to_string());
+    match titlebar_double_click_action(pref.as_deref()) {
+        TitlebarDoubleClick::Zoom => w.zoom(None),
+        TitlebarDoubleClick::Minimize => w.miniaturize(None),
+        TitlebarDoubleClick::Nothing => {}
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn titlebar_double_click() {}
+
 /// How far (points) to lower the traffic lights from their macOS default position so their row
 /// centres on the taller tab strip. Dialed in by eye against a real window-mode window (the
 /// headless harness can't render OS buttons). Unflipped coords: down = subtract.
@@ -383,6 +421,21 @@ fn login_item_api_available() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn titlebar_double_click_follows_the_dock_setting() {
+        use super::{TitlebarDoubleClick as A, titlebar_double_click_action as action};
+        let cases = [
+            (None, A::Zoom),
+            (Some("Maximize"), A::Zoom),
+            (Some("Fill"), A::Zoom),
+            (Some("Minimize"), A::Minimize),
+            (Some("None"), A::Nothing),
+        ];
+        for (pref, want) in cases {
+            assert_eq!(action(pref), want, "pref {pref:?}");
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn traffic_light_baseline_captured_once_and_reapply_is_idempotent() {

@@ -822,6 +822,7 @@ mod tests {
         rects: Vec<egui::Rect>,
         clicked: Option<usize>,
         double: Option<usize>,
+        bg_double: bool,
         closed: Option<usize>,
         dragged: Option<usize>,
         keys: Vec<u8>,
@@ -864,6 +865,7 @@ mod tests {
             rects: Vec::new(),
             clicked: None,
             double: None,
+            bg_double: false,
             closed: None,
             dragged: None,
             keys: Vec::new(),
@@ -891,6 +893,10 @@ mod tests {
                 out.actions = matched.into_iter().map(|(a, _)| a).collect();
             }
             egui::Panel::top("tabbar").show(ui, |ui| {
+                // Mirrors `tab_bar`'s window-mode strip background, registered before the row.
+                let bg =
+                    ui.interact(ui.max_rect(), ui.id().with("titlebar_bg"), egui::Sense::click());
+                out.bg_double = bg.double_clicked();
                 ui.horizontal(|ui| {
                     for (i, cli) in clis.into_iter().enumerate() {
                         let (resp, close) = draw_tab(
@@ -958,6 +964,33 @@ mod tests {
         let ctx = egui::Context::default();
         let out = tab_frame(&ctx, vec![]);
         println!("tab rects: {:?}", out.rects);
+    }
+
+    fn double_click_at(ctx: &egui::Context, p: egui::Pos2) -> TabFrameOut {
+        tab_frame(ctx, vec![egui::Event::PointerMoved(p)]);
+        tab_frame(ctx, vec![press(p, true)]);
+        tab_frame(ctx, vec![press(p, false)]);
+        tab_frame(ctx, vec![press(p, true)]);
+        tab_frame(ctx, vec![press(p, false)])
+    }
+
+    #[test]
+    fn empty_strip_double_click_reaches_titlebar_background() {
+        let ctx = egui::Context::default();
+        let warm = tab_frame(&ctx, vec![]);
+        let last = warm.rects.last().expect("harness draws two tabs");
+        let up = double_click_at(&ctx, egui::pos2(last.right() + 200.0, last.center().y));
+        assert!(up.bg_double, "a double-click on empty strip space must zoom the window");
+        assert_eq!(up.double, None);
+    }
+
+    #[test]
+    fn tab_double_click_renames_instead_of_zooming() {
+        let ctx = egui::Context::default();
+        let warm = tab_frame(&ctx, vec![]);
+        let up = double_click_at(&ctx, warm.rects[1].center());
+        assert_eq!(up.double, Some(1), "a tab keeps its double-click-to-rename");
+        assert!(!up.bg_double, "the background must not also see a tab's double-click");
     }
 
     #[test]
