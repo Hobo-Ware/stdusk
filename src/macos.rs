@@ -80,6 +80,7 @@ pub(crate) fn set_unified_titlebar(enabled: bool) {
 pub(crate) fn set_unified_titlebar(_enabled: bool) {}
 
 /// What a title-bar double-click does, per System Settings > Desktop & Dock.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TitlebarDoubleClick {
     Zoom,
@@ -88,6 +89,7 @@ pub(crate) enum TitlebarDoubleClick {
 }
 
 /// Map `AppleActionOnDoubleClick` (absent = the OS default, zoom) to the action.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn titlebar_double_click_action(pref: Option<&str>) -> TitlebarDoubleClick {
     match pref {
         Some(p) if p.eq_ignore_ascii_case("minimize") => TitlebarDoubleClick::Minimize,
