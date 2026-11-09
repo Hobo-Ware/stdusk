@@ -2815,6 +2815,18 @@ these crates) over the existing live handoff, so the shells keep running there.
   fmt, clippy -D warnings, workspace tests green.
 - Verified by hand (window mode, `--state-dir`): an empty-strip double-click zooms the window.
 
+## Tab drag moved the window (branch fix/tab-drag-moves-window, 2026-11-09)
+- 1.10.3 was the first release built on `macos-latest`, linked against SDK 26.5 (1.10.2: 14.5). With a
+  26+ SDK AppKit moves a `FullSizeContentView` window from anywhere in the title-bar band; winit's view
+  never declines `mouseDownCanMoveWindow`, so holding a tab dragged the window and reorder never fired.
+  Local builds (SDK 27.2) had it too. Proof: 1.10.3 with only the LC_BUILD_VERSION sdk rewritten to
+  14.5 (`vtool -set-build-version`) reordered fine.
+- Fix: `set_unified_titlebar` sets `setMovable(!enabled)`; the strip's `titlebar_bg` now senses
+  click-and-drag and sends `ViewportCommand::StartDrag` (`performWindowDragWithEvent` still works on an
+  unmovable window), so empty strip space keeps moving the window.
+- Verified by hand (window mode, `--state-dir`, SDK 27.2 build): tab drag reorders without moving the
+  window, empty-strip drag moves it, double-click zooms, click activates. fmt, clippy, tests green.
+
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
   Keep the unsaved-changes dialog open and report the error when writing config fails.

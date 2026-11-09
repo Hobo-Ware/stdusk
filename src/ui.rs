@@ -894,8 +894,11 @@ mod tests {
             }
             egui::Panel::top("tabbar").show(ui, |ui| {
                 // Mirrors `tab_bar`'s window-mode strip background, registered before the row.
-                let bg =
-                    ui.interact(ui.max_rect(), ui.id().with("titlebar_bg"), egui::Sense::click());
+                let bg = ui.interact(
+                    ui.max_rect(),
+                    ui.id().with("titlebar_bg"),
+                    egui::Sense::click_and_drag(),
+                );
                 out.bg_double = bg.double_clicked();
                 ui.horizontal(|ui| {
                     for (i, cli) in clis.into_iter().enumerate() {

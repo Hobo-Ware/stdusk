@@ -1170,7 +1170,8 @@ impl Stdusk {
             )
             .show(ui, |ui| {
                 // Registered before the row so every tab/icon sits above it in egui's hit test:
-                // only the strip's empty space reaches it. Click-only, so it never swallows drags.
+                // only the strip's empty space reaches it. The window is unmovable in this mode
+                // (see `set_unified_titlebar`), so dragging that space moves it from here.
                 if window_mode {
                     let strip = ui.max_rect()
                         + egui::Margin {
@@ -1179,7 +1180,14 @@ impl Stdusk {
                             top: top_margin,
                             bottom: bottom_margin,
                         };
-                    let bg = ui.interact(strip, ui.id().with("titlebar_bg"), egui::Sense::click());
+                    let bg = ui.interact(
+                        strip,
+                        ui.id().with("titlebar_bg"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    if bg.drag_started_by(egui::PointerButton::Primary) {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
                     if bg.double_clicked() {
                         action = Some(TabAction::TitlebarDoubleClick);
                     }
