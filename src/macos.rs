@@ -52,10 +52,10 @@ pub(crate) fn set_space_behavior(_all_spaces: bool) {}
 /// buttons float over it. `enabled=false` restores the standard stacked title bar. No-op off
 /// macOS.
 ///
-/// NOTE: deliberately does NOT set `movableByWindowBackground`. winit 0.30 doesn't override
-/// `mouseDownCanMoveWindow`, so enabling it could let AppKit start a window-drag on mouse-down
-/// before egui sees the event - hijacking terminal text selection / tab clicks in window mode.
-/// Losing drag-by-tab-bar is the safer trade.
+/// Unified also makes the window unmovable by the mouse: linked against the macOS 26+ SDK, AppKit
+/// moves the window from anywhere in the title-bar band (winit's view never declines
+/// `mouseDownCanMoveWindow`), so a held tab dragged the window instead of reordering. The tab
+/// strip's empty space moves the window itself via `ViewportCommand::StartDrag`.
 #[cfg(target_os = "macos")]
 pub(crate) fn set_unified_titlebar(enabled: bool) {
     use objc2_app_kit::{NSApplication, NSWindowStyleMask, NSWindowTitleVisibility};
@@ -73,6 +73,7 @@ pub(crate) fn set_unified_titlebar(enabled: bool) {
             let mut mask = w.styleMask();
             mask.set(NSWindowStyleMask::FullSizeContentView, enabled);
             w.setStyleMask(mask);
+            w.setMovable(!enabled);
         }
     }
 }
