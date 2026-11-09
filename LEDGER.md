@@ -2827,6 +2827,15 @@ these crates) over the existing live handoff, so the shells keep running there.
 - Verified by hand (window mode, `--state-dir`, SDK 27.2 build): tab drag reorders without moving the
   window, empty-strip drag moves it, double-click zooms, click activates. fmt, clippy, tests green.
 
+## Tab drag animation (branch fix/tab-drag-moves-window, 2026-11-09)
+- The held tab follows the pointer on a Foreground layer (`tab_held`) with an opaque titlebar backing;
+  a displaced tab and the dropped tab glide into their slot (`slide_dx`, ease-out cubic, 0.15s).
+- Each tab draws in a child Ui with an explicit id `("tab_slot", tab.id)`, so its widget ids stay
+  stable however far it is shifted; the parent row reserves the unshifted slot. Swap targets still use
+  slot rects (`drag_swap_target`). State lives in egui temp data (`tab_drag_grab`, `tab_slide`).
+- Proof: table test for `slide_dx`; screenshot harness shows the strip unchanged at rest; verified by
+  hand in a live window. fmt, clippy, workspace tests (711) green.
+
 ## Next up
 - **Settings save failure**: [issue #12](https://github.com/Hobo-Ware/stdusk/issues/12).
   Keep the unsaved-changes dialog open and report the error when writing config fails.

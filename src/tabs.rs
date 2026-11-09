@@ -475,6 +475,29 @@ fn drag_swap_target(rects: &[egui::Rect], from: usize, pointer_x: f32) -> Option
     None
 }
 
+/// How long a displaced (or dropped) tab takes to glide into its slot.
+const TAB_SLIDE_SECS: f64 = 0.15;
+
+/// A tab's remaining offset from its slot, `elapsed` seconds into a slide that began
+/// `start_dx` away (ease-out cubic). `None` once it has settled.
+fn slide_dx(start_dx: f32, elapsed: f64) -> Option<f32> {
+    #[allow(clippy::cast_possible_truncation)] // a fraction in 0..1
+    let t = (elapsed / TAB_SLIDE_SECS) as f32;
+    if t >= 1.0 || start_dx.abs() < 0.5 {
+        return None;
+    }
+    Some(start_dx * (1.0 - t.max(0.0)).powi(3))
+}
+
+/// The tab held by a drag: where the pointer grabbed it (x from its left edge) and where it
+/// was last drawn, so a drop can glide from there into its slot.
+#[derive(Clone, Copy)]
+struct TabGrab {
+    tab_id: u64,
+    grab_x: f32,
+    drawn_left: f32,
+}
+
 /// One menu row per profile, each spawning a tab with it. Shared by the tab context menu's
 /// submenu and the "+" button's right-click menu.
 fn profile_menu_rows(ui: &mut egui::Ui, profiles: &[Profile], action: &mut Option<TabAction>) {
@@ -1234,7 +1257,27 @@ impl Stdusk {
                     // Drag-to-reorder state, derived per frame (nothing persists): the tab
                     // whose drag response is active + the pointer x, plus every tab's rect.
                     let mut rects: Vec<egui::Rect> = Vec::with_capacity(visible.len());
-                    let mut drag: Option<(usize, f32)> = None;
+                    let mut drawn_lefts: Vec<f32> = Vec::with_capacity(visible.len());
+                    let mut drag: Option<(usize, f32, egui::Rect)> = None;
+                    // Animation: the held tab follows the pointer on its own layer above the
+                    // row; a displaced or dropped tab glides from where it was drawn into its
+                    // slot. Each tab draws in a child Ui with an id from its stable tab id, so
+                    // its widgets keep their ids however far it is shifted.
+                    let now = ui.input(|i| i.time);
+                    let grab_key = egui::Id::new("tab_drag_grab");
+                    let prev_grab: Option<TabGrab> = ui.data(|d| d.get_temp(grab_key));
+                    let mut grab: Option<TabGrab> = None;
+                    let (deciding_drag, press_x, pointer_x) = ui.input(|i| {
+                        (
+                            i.pointer.is_decidedly_dragging(),
+                            i.pointer.press_origin().map(|p| p.x),
+                            i.pointer.interact_pos().map(|p| p.x),
+                        )
+                    });
+                    let dragged_id = ui.ctx().dragged_id();
+                    let row_left = ui.cursor().left();
+                    let held_layer =
+                        egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tab_held"));
                     // Color-menu hover preview: last frame's hovered swatch tints the tab now;
                     // this frame's hover is collected for the next (immediate-mode handoff).
                     let prev_preview = self.color_preview;
@@ -1258,8 +1301,48 @@ impl Stdusk {
                             tab.focused_term().cmd_state(),
                             leaves.iter().map(|t| t.cmd_state()),
                         );
+                        let slot_left = ui.cursor().left();
+                        let slot_id = egui::Id::new(("tab_slot", tab.id));
+                        let held = deciding_drag
+                            && dragged_id == Some(slot_id.with(("tab", tab.id)))
+                            && pointer_x.is_some();
+                        let slide_key = egui::Id::new(("tab_slide", tab.id));
+                        let dx = if held {
+                            let grab_x = match prev_grab {
+                                Some(g) if g.tab_id == tab.id => g.grab_x,
+                                _ => press_x.map_or(0.0, |x| x - slot_left),
+                            };
+                            let left = (pointer_x.unwrap_or(slot_left) - grab_x).max(row_left);
+                            grab = Some(TabGrab { tab_id: tab.id, grab_x, drawn_left: left });
+                            ui.data_mut(|d| d.remove::<(f32, f64)>(slide_key));
+                            left - slot_left
+                        } else if let Some((from_left, t0)) =
+                            ui.data(|d| d.get_temp::<(f32, f64)>(slide_key))
+                        {
+                            if let Some(dx) = slide_dx(from_left - slot_left, now - t0) {
+                                ui.ctx().request_repaint();
+                                dx
+                            } else {
+                                ui.data_mut(|d| d.remove::<(f32, f64)>(slide_key));
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+                        let mut builder = egui::UiBuilder::new()
+                            .id(slot_id)
+                            .max_rect(
+                                ui.available_rect_before_wrap().translate(egui::vec2(dx, 0.0)),
+                            )
+                            .layout(*ui.layout());
+                        if held {
+                            builder = builder.layer_id(held_layer);
+                        }
+                        let mut child = ui.new_child(builder);
+                        // An opaque backing under the held tab, sized once draw_tab has placed it.
+                        let backing = child.painter().add(egui::Shape::Noop);
                         let (resp, close) = draw_tab(
-                            ui,
+                            &mut child,
                             Some(pos + 1),
                             tab.id,
                             &tab.title,
@@ -1272,6 +1355,18 @@ impl Stdusk {
                             tab.cli,
                             tab_width,
                         );
+                        let slot = resp.rect.translate(egui::vec2(-dx, 0.0));
+                        ui.advance_cursor_after_rect(slot);
+                        if held {
+                            child.painter().set(
+                                backing,
+                                egui::Shape::rect_filled(
+                                    resp.rect,
+                                    egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+                                    colors::titlebar(),
+                                ),
+                            );
+                        }
                         if close {
                             action = Some(TabAction::Close(i));
                         } else if resp.double_clicked() {
@@ -1290,9 +1385,10 @@ impl Stdusk {
                             && ui.input(|inp| inp.pointer.is_decidedly_dragging())
                             && let Some(p) = resp.interact_pointer_pos()
                         {
-                            drag = Some((pos, p.x));
+                            drag = Some((pos, p.x, resp.rect));
                         }
-                        rects.push(resp.rect);
+                        rects.push(slot);
+                        drawn_lefts.push(resp.rect.left());
                         resp.context_menu(|ui| {
                             tab_menu(
                                 ui,
@@ -1311,26 +1407,39 @@ impl Stdusk {
                     // Apply the drag AFTER the loop (deferred, like every other TabAction):
                     // crossing a neighbor's midpoint emits one move; re-derived every frame,
                     // so dragging across several tabs reorders repeatedly.
-                    if let Some((from, px)) = drag {
+                    if let Some((from, px, drawn)) = drag {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-                        // Overlay on the deco layer - the row clip would cut ui.painter().
-                        let dp = ui.ctx().layer_painter(egui::LayerId::new(
-                            egui::Order::Middle,
-                            egui::Id::new("tab_drag_overlay"),
-                        ));
-                        dp.rect_filled(
-                            rects[from],
+                        ui.ctx().layer_painter(held_layer).rect_filled(
+                            drawn,
                             egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
                             colors::selection(),
                         );
                         if action.is_none()
                             && let Some(to) = drag_swap_target(&rects, from, px)
                         {
+                            let displaced = egui::Id::new(("tab_slide", self.tabs[visible[to]].id));
+                            let from_left = drawn_lefts[to];
+                            ui.data_mut(|d| d.insert_temp(displaced, (from_left, now)));
                             action = Some(if to < from {
                                 TabAction::MoveLeft(visible[from])
                             } else {
                                 TabAction::MoveRight(visible[from])
                             });
+                        }
+                    }
+                    match grab {
+                        Some(g) => {
+                            ui.data_mut(|d| d.insert_temp(grab_key, g));
+                        }
+                        None => {
+                            if let Some(g) = prev_grab {
+                                let dropped = egui::Id::new(("tab_slide", g.tab_id));
+                                ui.data_mut(|d| {
+                                    d.remove::<TabGrab>(grab_key);
+                                    d.insert_temp(dropped, (g.drawn_left, now));
+                                });
+                                ui.ctx().request_repaint();
+                            }
                         }
                     }
                     ui.add_space(6.0);
@@ -1948,6 +2057,21 @@ mod tests {
         ];
         for (focused, all, want) in cases {
             assert_eq!(aggregate_cmd(focused, all.iter().copied()), want, "{focused:?} {all:?}");
+        }
+    }
+
+    #[test]
+    fn slide_eases_out_and_settles() {
+        let cases = [
+            (100.0, 0.0, Some(100.0)),
+            (100.0, TAB_SLIDE_SECS / 2.0, Some(12.5)),
+            (-100.0, TAB_SLIDE_SECS / 2.0, Some(-12.5)),
+            (100.0, TAB_SLIDE_SECS, None),
+            (100.0, 1.0, None),
+            (0.2, 0.0, None),
+        ];
+        for (start, elapsed, want) in cases {
+            assert_eq!(slide_dx(start, elapsed), want, "start {start} at {elapsed}s");
         }
     }
 
